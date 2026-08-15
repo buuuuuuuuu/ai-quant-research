@@ -66,6 +66,15 @@ class AkShareProvider:
             refresh=self.refresh,
         )
 
+    @staticmethod
+    def _exchange_symbol(symbol: str) -> str:
+        if len(symbol) == 8 and symbol[:2] in {"sh", "sz", "bj"} and symbol[2:].isdigit():
+            return symbol
+        if len(symbol) != 6 or not symbol.isdigit():
+            raise ProviderError(f"unsupported A-share symbol for fallback: {symbol}")
+        prefix = "sh" if symbol.startswith("6") else "bj" if symbol.startswith(("4", "8")) else "sz"
+        return f"{prefix}{symbol}"
+
     def get_stock_prices(
         self, symbol: str, start_date: date, end_date: date, adjustment: str
     ) -> pd.DataFrame:
@@ -75,12 +84,32 @@ class AkShareProvider:
             "start_date": self._compact(start_date),
             "end_date": self._compact(end_date),
             "adjust": adjustment,
+            "fallback": "stock_zh_a_daily",
         }
 
         def fetch() -> pd.DataFrame:
             ak = self._akshare()
-            raw = ak.stock_zh_a_hist(timeout=self.timeout_seconds, **params)
-            return normalize_prices(raw, symbol, f"akshare:stock_zh_a_hist:{adjustment}")
+            primary_params = {
+                key: params[key] for key in ("symbol", "period", "start_date", "end_date", "adjust")
+            }
+            try:
+                raw = ak.stock_zh_a_hist(timeout=self.timeout_seconds, **primary_params)
+                normalized = normalize_prices(
+                    raw, symbol, f"akshare:stock_zh_a_hist:{adjustment}"
+                )
+                if normalized.empty:
+                    raise ProviderError("primary stock endpoint returned no rows")
+                return normalized
+            except Exception:  # noqa: BLE001 - fallback crosses an external provider boundary
+                raw = ak.stock_zh_a_daily(
+                    symbol=self._exchange_symbol(symbol), adjust=adjustment
+                )
+                normalized = normalize_prices(
+                    raw, symbol, f"akshare:stock_zh_a_daily:{adjustment}"
+                )
+                if normalized.empty:
+                    raise ProviderError("fallback stock endpoint returned no rows") from None
+                return clip_dates(normalized, start_date, end_date)
 
         return load_or_fetch(
             cache=self.cache,

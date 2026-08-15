@@ -37,6 +37,9 @@ def test_event_study_uses_first_common_trading_day_strictly_after_announcement()
     two_day = result.events.loc[result.events["window"] == 2].iloc[0]
     assert two_day["entry_date"] == pd.Timestamp("2024-01-04")
     assert two_day["exit_date"] == pd.Timestamp("2024-01-08")
+    assert two_day["stock_announcement_close"] == pytest.approx(102.0)
+    assert two_day["stock_entry_close"] == pytest.approx(104.0)
+    assert two_day["stock_exit_close"] == pytest.approx(108.0)
     expected_stock = 108 / 104 - 1
     expected_benchmark = 104 / 102 - 1
     assert two_day["stock_net_return"] == pytest.approx(expected_stock)

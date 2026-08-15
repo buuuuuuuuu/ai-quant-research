@@ -79,6 +79,13 @@ class EventStudyEngine:
 
         calendar = self._calendar(stock_prices, benchmark_prices)
         calendar_dates = calendar["date"].to_numpy(dtype="datetime64[ns]")
+        stock_closes = stock_prices[["date", "close"]].copy()
+        stock_closes["date"] = pd.to_datetime(stock_closes["date"]).dt.normalize()
+        stock_closes["close"] = pd.to_numeric(stock_closes["close"], errors="coerce")
+        stock_closes = stock_closes.dropna(subset=["date", "close"])
+        stock_closes = stock_closes.drop_duplicates("date", keep="last").set_index("date")[
+            "close"
+        ]
         rows: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
         cost = spec.round_trip_cost_bps / 10_000.0
@@ -91,6 +98,7 @@ class EventStudyEngine:
 
         for announcement in normalized_announcements.to_dict(orient="records"):
             announcement_date = pd.Timestamp(announcement["announcement_date"])
+            announcement_close = stock_closes.get(announcement_date, float("nan"))
             entry_pos = int(
                 np.searchsorted(calendar_dates, announcement_date.to_datetime64(), side="right")
             )
@@ -132,6 +140,7 @@ class EventStudyEngine:
                         "entry_date": pd.Timestamp(entry["date"]),
                         "exit_date": pd.Timestamp(exit_row["date"]),
                         "window": window,
+                        "stock_announcement_close": float(announcement_close),
                         "stock_entry_close": float(entry["stock_close"]),
                         "stock_exit_close": float(exit_row["stock_close"]),
                         "benchmark_entry_close": float(entry["benchmark_close"]),

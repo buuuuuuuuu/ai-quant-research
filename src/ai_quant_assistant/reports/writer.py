@@ -20,6 +20,7 @@ class ReportWriter:
         )
         self.environment.filters["pct"] = self._pct
         self.environment.filters["date"] = self._date
+        self.environment.filters["price"] = self._price
 
     @staticmethod
     def _pct(value: Any) -> str:
@@ -32,6 +33,12 @@ class ReportWriter:
         if value is None or pd.isna(value):
             return "-"
         return pd.Timestamp(value).date().isoformat()
+
+    @staticmethod
+    def _price(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return "-"
+        return f"{float(value):.2f}"
 
     @staticmethod
     def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:

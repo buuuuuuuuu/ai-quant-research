@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ spec.symbol }} 半年报公告后超额收益研究</title>
+  <style>
+    :root { --navy:#173b5e; --blue:#2e74b5; --ink:#17212b; --muted:#66727d; --line:#d5dee7; --soft:#f3f6f9; --green:#26734d; --red:#a13b35; }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); font-family:"Noto Sans SC","Microsoft YaHei",Arial,sans-serif; background:#eef2f5; }
+    main { max-width:1120px; margin:28px auto; background:white; padding:42px 48px 56px; box-shadow:0 8px 30px rgba(24,43,61,.08); }
+    h1 { margin:0 0 8px; color:var(--navy); font-size:30px; }
+    h2 { margin:32px 0 12px; color:var(--navy); font-size:20px; }
+    .subtitle,.muted { color:var(--muted); }
+    .notice { margin:20px 0; padding:14px 16px; background:#e9f2f8; border-left:4px solid var(--blue); }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:18px 0; }
+    .metric { background:var(--soft); padding:14px; border:1px solid var(--line); }
+    .metric b { display:block; font-size:20px; color:var(--navy); margin-top:6px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { background:var(--navy); color:white; text-align:left; padding:9px 10px; }
+    td { border:1px solid var(--line); padding:8px 10px; vertical-align:top; }
+    tr:nth-child(even) td { background:var(--soft); }
+    .chart-row { display:grid; grid-template-columns:72px 1fr 92px; align-items:center; gap:10px; margin:10px 0; }
+    .track { height:18px; background:#edf1f4; border-radius:3px; overflow:hidden; }
+    .bar { height:100%; min-width:2px; }
+    .positive { background:var(--green); } .negative { background:var(--red); }
+    code { background:var(--soft); padding:2px 5px; }
+    footer { margin-top:34px; color:var(--muted); font-size:12px; border-top:1px solid var(--line); padding-top:14px; }
+    @media (max-width:760px) { main{margin:0;padding:24px 18px}.grid{grid-template-columns:1fr 1fr}table{font-size:11px} }
+  </style>
+</head>
+<body>
+<main>
+  <div class="muted">AI 量化研究助手 V1 · 黄金路径报告</div>
+  <h1>{{ spec.symbol }} 半年报公告后超额收益</h1>
+  <div class="subtitle">{{ spec.start_date }} 至 {{ spec.end_date }} · 基准 {{ spec.benchmark_symbol }} · 后复权 {{ spec.adjustment }}</div>
+  <div class="notice"><b>固定口径：</b>公告日之后第一个共同交易日收盘入场；往返成本 {{ spec.round_trip_cost_bps }} bps；超额收益 = 股票净收益 - 基准收益。</div>
+
+  {% set first = summary[0] %}
+  <div class="grid">
+    <div class="metric">有效公告年份<b>{{ diagnostics.usable_event_years }}</b></div>
+    <div class="metric">共同交易日<b>{{ diagnostics.common_trading_days }}</b></div>
+    <div class="metric">最短窗口胜率<b>{{ first.win_rate|pct }}</b></div>
+    <div class="metric">最短窗口平均超额<b>{{ first.mean_excess_return|pct }}</b></div>
+  </div>
+
+  <h2>窗口汇总</h2>
+  <table>
+    <thead><tr><th>窗口</th><th>样本</th><th>平均净收益</th><th>平均基准</th><th>平均超额</th><th>中位数</th><th>胜率</th><th>95% CI</th></tr></thead>
+    <tbody>
+    {% for row in summary %}
+      <tr>
+        <td>{{ row.window }} 日</td><td>{{ row.sample_size }}</td><td>{{ row.mean_stock_net_return|pct }}</td><td>{{ row.mean_benchmark_return|pct }}</td>
+        <td>{{ row.mean_excess_return|pct }}</td><td>{{ row.median_excess_return|pct }}</td><td>{{ row.win_rate|pct }}</td>
+        <td>[{{ row.ci95_lower|pct }}, {{ row.ci95_upper|pct }}]</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>平均超额收益对比</h2>
+  {% for row in chart_rows %}
+  <div class="chart-row"><b>{{ row.window }} 日</b><div class="track"><div class="bar {{ row.direction }}" style="width:{{ '%.1f'|format(row.width) }}%"></div></div><span>{{ row.mean|pct }}</span></div>
+  {% endfor %}
+
+  <h2>事件明细</h2>
+  <table>
+    <thead><tr><th>报告年度</th><th>公告日</th><th>入场日</th><th>退出日</th><th>窗口</th><th>股票净收益</th><th>基准收益</th><th>超额收益</th></tr></thead>
+    <tbody>
+    {% for row in events %}
+      <tr><td>{{ row.report_year }}</td><td>{{ row.announcement_date|date }}</td><td>{{ row.entry_date|date }}</td><td>{{ row.exit_date|date }}</td><td>{{ row.window }}</td><td>{{ row.stock_net_return|pct }}</td><td>{{ row.benchmark_return|pct }}</td><td>{{ row.excess_return|pct }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>限制与解释</h2>
+  <p>置信区间采用正态近似；样本较少时仅用于描述不确定性。研究使用数据快照和运行清单保证复现，但免费数据源可能发生历史修订。报告仅供量化研究，不构成投资建议。</p>
+  <footer>共同日历：{{ diagnostics.common_calendar_start }} 至 {{ diagnostics.common_calendar_end }} · 入场规则：<code>{{ diagnostics.entry_rule }}</code></footer>
+</main>
+</body>
+</html>
+

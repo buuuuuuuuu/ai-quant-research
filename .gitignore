@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+artifacts/runs/*
+!artifacts/runs/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+data/*.duckdb
+dist/
+build/
+*.egg-info/
+

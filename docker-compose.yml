@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      AI_QUANT_ARTIFACT_DIR: /app/artifacts
+      AI_QUANT_CACHE_DIR: /app/data/cache
+      AI_QUANT_DUCKDB_PATH: /app/data/catalog.duckdb
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data:/app/data
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["infra"]
+    environment:
+      POSTGRES_DB: ai_quant
+      POSTGRES_USER: ai_quant
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["infra"]
+
+volumes:
+  postgres-data:
+

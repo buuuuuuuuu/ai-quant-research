@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-quant-research"
+version = "0.1.0"
+description = "A-share AI quant research assistant V1 skeleton and interim-report event-study golden path"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "akshare>=1.18.91,<2",
+  "duckdb>=1.2,<2",
+  "fastapi>=0.116,<1",
+  "jinja2>=3.1,<4",
+  "numpy>=2.0,<3",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<3",
+  "pyarrow>=18,<25",
+  "pydantic>=2.10,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+ai-quant = "ai_quant_assistant.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_quant_assistant"]
+
+[tool.hatch.build]
+include = [
+  "src/ai_quant_assistant/**/*.py",
+  "src/ai_quant_assistant/reports/templates/*.j2",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+

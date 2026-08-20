@@ -36,11 +36,11 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1-A）
+## A 股本地数据库（M0 + M1）
 
-第一阶段已经提供 DuckDB Schema v1、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
-目录初始化、数据库状态查询，以及完全离线的沪深京 Fixture 数据。该阶段先冻结主键、
-交易日、复权和发布状态口径；AkShare 全市场增量同步放在 M1-B。
+数据平台提供 DuckDB Schema v2、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历和日线增量同步。日线按
+证券、年份和复权口径分区，失败分区可以断点续跑，阻断级质量检查失败的数据不会发布。
 
 初始化空数据库：
 
@@ -55,11 +55,41 @@ uv run ai-quant data init --with-fixture
 uv run ai-quant data status
 ```
 
+建议先同步单只股票验证网络与数据口径：
+
+```bash
+uv run ai-quant data sync \
+  --start-date 2024-01-01 \
+  --symbols 600519 \
+  --adjustments none qfq hfq
+```
+
+省略 `--symbols` 时同步当前沪深京 A 股列表；全市场任务耗时较长，可以先使用
+`--limit 10` 冒烟验证。完全相同的请求会复用批次，只重试失败或中断的分区；需要强制
+重新抓取时同时使用 `--no-resume --refresh`。
+
+同步完成后，事件研究可以优先读取本地已发布数据，覆盖不足时自动回退 AkShare：
+
+```bash
+uv run ai-quant event-study \
+  --source local \
+  --symbol 600519 \
+  --start-date 2024-01-01 \
+  --adjustment qfq
+```
+
+如果当前 `catalog.duckdb` 曾使用 `--with-fixture` 写入测试数据，正式同步前建议先归档：
+
+```bash
+mv data/catalog.duckdb data/catalog.fixture.duckdb
+uv run ai-quant data init
+```
+
 默认创建 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
 `data/catalog.duckdb`。可使用 `--data-dir`、`--duckdb-path` 或环境变量
 `AI_QUANT_DATA_DIR`、`AI_QUANT_DUCKDB_PATH` 调整位置。
 
-数据平台架构和字段说明见：
+数据平台架构、同步语义和字段说明见：
 
 - `docs/data-platform-architecture.md`
 - `docs/data-dictionary.md`

@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
 from ai_quant_assistant.config import Settings
-from ai_quant_assistant.domain.models import EventStudySpec
+from ai_quant_assistant.domain.models import DataSyncSpec, EventStudySpec
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
+from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 
 
 def _date(value: str) -> date:
@@ -22,7 +25,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ai-quant", description="AI 量化研究助手 V1")
     subcommands = parser.add_subparsers(dest="command", required=True)
     study = subcommands.add_parser("event-study", help="运行半年报公告后超额收益研究")
-    study.add_argument("--source", choices=["fixture", "akshare"], default="fixture")
+    study.add_argument(
+        "--source", choices=["fixture", "akshare", "local"], default="fixture"
+    )
     study.add_argument("--symbol", default="600519")
     study.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
     study.add_argument("--end-date", type=_date, default=date.today())
@@ -46,6 +51,22 @@ def build_parser() -> argparse.ArgumentParser:
     data_status = data_commands.add_parser("status", help="显示数据库版本和核心表行数")
     data_status.add_argument("--data-dir", type=Path)
     data_status.add_argument("--duckdb-path", type=Path)
+    data_sync = data_commands.add_parser("sync", help="从 AkShare 增量同步并发布日线")
+    data_sync.add_argument("--start-date", type=_date, required=True)
+    data_sync.add_argument("--end-date", type=_date, default=date.today())
+    data_sync.add_argument("--symbols", nargs="+", default=[])
+    data_sync.add_argument(
+        "--adjustments",
+        nargs="+",
+        choices=["none", "qfq", "hfq"],
+        default=["none", "qfq", "hfq"],
+    )
+    data_sync.add_argument("--limit", type=int, help="仅同步证券列表前 N 个，用于冒烟验证")
+    data_sync.add_argument("--rate-limit-seconds", type=float)
+    data_sync.add_argument("--no-resume", action="store_true")
+    data_sync.add_argument("--refresh", action="store_true")
+    data_sync.add_argument("--data-dir", type=Path)
+    data_sync.add_argument("--duckdb-path", type=Path)
     return parser
 
 
@@ -60,6 +81,10 @@ def _local_database(args: argparse.Namespace, settings: Settings) -> LocalDataba
 def main() -> None:
     args = build_parser().parse_args()
     settings = Settings.from_env()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     if args.command == "data":
         database = _local_database(args, settings)
         if args.data_command == "init":
@@ -67,20 +92,65 @@ def main() -> None:
             if args.with_fixture:
                 payload["fixture"] = database.load_fixture()
                 payload["database_status"] = database.status()
-        else:
+        elif args.data_command == "status":
             payload = database.status()
+        else:
+            provider = AkShareProvider(
+                cache_dir=(
+                    settings.cache_dir
+                    if args.data_dir is None
+                    else database.layout.root / "cache"
+                ),
+                retries=settings.akshare_retries,
+                timeout_seconds=settings.akshare_timeout_seconds,
+                refresh=args.refresh,
+            )
+            rate_limit = (
+                args.rate_limit_seconds
+                if args.rate_limit_seconds is not None
+                else settings.data_sync_rate_limit_seconds
+            )
+            service = MarketDataSyncService(
+                database=database,
+                layout=database.layout,
+                provider=provider,
+                rate_limit_seconds=rate_limit,
+            )
+            payload = service.run(
+                DataSyncSpec(
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    symbols=tuple(args.symbols),
+                    adjustments=tuple(args.adjustments),
+                    symbol_limit=args.limit,
+                    resume=not args.no_resume,
+                )
+            )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if args.data_command == "sync" and payload["status"] == "failed":
+            raise SystemExit(1)
         return
 
     artifact_dir = args.artifact_dir or settings.artifact_dir
     if args.source == "fixture":
         provider = FixtureProvider()
     else:
-        provider = AkShareProvider(
+        akshare_provider = AkShareProvider(
             cache_dir=settings.cache_dir,
             retries=settings.akshare_retries,
             timeout_seconds=settings.akshare_timeout_seconds,
             refresh=args.refresh,
+        )
+        provider = (
+            LocalFirstProvider(
+                database=LocalDatabase(
+                    path=settings.duckdb_path,
+                    layout=DataLayout.from_root(settings.data_dir),
+                ),
+                fallback=akshare_provider,
+            )
+            if args.source == "local"
+            else akshare_provider
         )
     spec = EventStudySpec(
         symbol=args.symbol,

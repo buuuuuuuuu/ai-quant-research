@@ -15,6 +15,18 @@ INTERIM_EXCLUDE_RE = re.compile(
 REPORT_YEAR_RE = re.compile(r"(20\d{2})\s*年?.{0,4}(半年度|中期)")
 
 
+def exchange_for_symbol(symbol: str) -> str:
+    if symbol.startswith(("4", "8", "92")):
+        return "BSE"
+    if symbol.startswith(("5", "6")):
+        return "SSE"
+    return "SZSE"
+
+
+def security_id_for_symbol(symbol: str) -> str:
+    return f"{exchange_for_symbol(symbol)}.{symbol}"
+
+
 def _find_column(frame: pd.DataFrame, candidates: Iterable[str], label: str) -> str:
     for candidate in candidates:
         if candidate in frame.columns:
@@ -86,6 +98,108 @@ def normalize_prices(frame: pd.DataFrame, symbol: str, source: str) -> pd.DataFr
     if normalized.empty:
         raise DataValidationError(f"{source} returned no positive close prices for {symbol}")
     return normalized[columns].reset_index(drop=True)
+
+
+def normalize_security_master(frame: pd.DataFrame, source: str) -> pd.DataFrame:
+    columns = ["security_id", "symbol", "exchange", "name", "source"]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    working = frame.reset_index(drop=True)
+    code_col = _find_column(working, ["code", "代码", "symbol", "股票代码"], "security code")
+    name_col = _find_column(working, ["name", "名称", "简称", "股票简称"], "security name")
+    symbols = working[code_col].astype(str).str.extract(r"(\d{6})", expand=False)
+    normalized = pd.DataFrame(
+        {
+            "symbol": symbols,
+            "name": working[name_col].fillna("").astype(str).str.strip(),
+        }
+    ).dropna(subset=["symbol"])
+    normalized["exchange"] = normalized["symbol"].map(exchange_for_symbol)
+    normalized["security_id"] = normalized["symbol"].map(security_id_for_symbol)
+    normalized["source"] = source
+    return normalized.drop_duplicates("security_id", keep="last")[columns].reset_index(drop=True)
+
+
+def normalize_trading_calendar(frame: pd.DataFrame, source: str) -> pd.DataFrame:
+    columns = [
+        "exchange",
+        "trade_date",
+        "is_open",
+        "previous_open_date",
+        "next_open_date",
+        "session_no",
+        "source",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    date_col = _find_column(frame, ["trade_date", "日期", "date"], "trade date")
+    dates = pd.to_datetime(frame[date_col], errors="coerce").dropna().dt.normalize()
+    dates = dates.drop_duplicates().sort_values().reset_index(drop=True)
+    rows: list[dict[str, object]] = []
+    for exchange in ("SSE", "SZSE", "BSE"):
+        for index, trade_date in enumerate(dates):
+            rows.append(
+                {
+                    "exchange": exchange,
+                    "trade_date": trade_date,
+                    "is_open": True,
+                    "previous_open_date": dates.iloc[index - 1] if index else None,
+                    "next_open_date": dates.iloc[index + 1] if index + 1 < len(dates) else None,
+                    "session_no": index + 1,
+                    "source": source,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def normalize_daily_bars(
+    frame: pd.DataFrame, symbol: str, source: str
+) -> pd.DataFrame:
+    columns = [
+        "trade_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "amount_missing",
+        "symbol",
+        "source",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    working = frame.reset_index(drop=True)
+    mappings = {
+        "trade_date": ["日期", "date"],
+        "open": ["开盘", "open"],
+        "high": ["最高", "high"],
+        "low": ["最低", "low"],
+        "close": ["收盘", "收盘价", "close"],
+        "volume": ["成交量", "volume"],
+    }
+    resolved = {
+        target: _find_column(working, candidates, target)
+        for target, candidates in mappings.items()
+    }
+    amount_col = next((name for name in ["成交额", "amount"] if name in working.columns), None)
+    normalized = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(working[resolved["trade_date"]], errors="coerce").dt.normalize(),
+            **{
+                field: pd.to_numeric(working[column], errors="coerce")
+                for field, column in resolved.items()
+                if field != "trade_date"
+            },
+        }
+    )
+    normalized["amount"] = (
+        pd.to_numeric(working[amount_col], errors="coerce") if amount_col else 0.0
+    )
+    normalized["amount_missing"] = amount_col is None
+    normalized["symbol"] = symbol
+    normalized["source"] = source
+    return normalized.sort_values("trade_date", na_position="last")[columns].reset_index(drop=True)
 
 
 def clip_dates(frame: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:

@@ -10,6 +10,8 @@ from ai_quant_assistant.domain.models import EventStudySpec
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.research.service import InterimReportResearchService
+from ai_quant_assistant.storage.database import LocalDatabase
+from ai_quant_assistant.storage.layout import DataLayout
 
 
 def _date(value: str) -> date:
@@ -30,12 +32,46 @@ def build_parser() -> argparse.ArgumentParser:
     study.add_argument("--cost-bps", type=float, default=20.0)
     study.add_argument("--artifact-dir", type=Path)
     study.add_argument("--refresh", action="store_true")
+
+    data = subcommands.add_parser("data", help="初始化和检查 A 股本地数据库")
+    data_commands = data.add_subparsers(dest="data_command", required=True)
+    data_init = data_commands.add_parser("init", help="创建数据目录并执行数据库迁移")
+    data_init.add_argument("--data-dir", type=Path)
+    data_init.add_argument("--duckdb-path", type=Path)
+    data_init.add_argument(
+        "--with-fixture",
+        action="store_true",
+        help="写入可离线验证的沪深京样例主数据、交易日历和日线",
+    )
+    data_status = data_commands.add_parser("status", help="显示数据库版本和核心表行数")
+    data_status.add_argument("--data-dir", type=Path)
+    data_status.add_argument("--duckdb-path", type=Path)
     return parser
+
+
+def _local_database(args: argparse.Namespace, settings: Settings) -> LocalDatabase:
+    data_dir = args.data_dir or settings.data_dir
+    duckdb_path = args.duckdb_path or (
+        settings.duckdb_path if args.data_dir is None else data_dir / "catalog.duckdb"
+    )
+    return LocalDatabase(path=duckdb_path, layout=DataLayout.from_root(data_dir))
 
 
 def main() -> None:
     args = build_parser().parse_args()
     settings = Settings.from_env()
+    if args.command == "data":
+        database = _local_database(args, settings)
+        if args.data_command == "init":
+            payload = database.initialize()
+            if args.with_fixture:
+                payload["fixture"] = database.load_fixture()
+                payload["database_status"] = database.status()
+        else:
+            payload = database.status()
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+
     artifact_dir = args.artifact_dir or settings.artifact_dir
     if args.source == "fixture":
         provider = FixtureProvider()
@@ -66,4 +102,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

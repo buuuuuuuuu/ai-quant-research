@@ -36,6 +36,34 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
+## A 股本地数据库（M0 + M1-A）
+
+第一阶段已经提供 DuckDB Schema v1、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+目录初始化、数据库状态查询，以及完全离线的沪深京 Fixture 数据。该阶段先冻结主键、
+交易日、复权和发布状态口径；AkShare 全市场增量同步放在 M1-B。
+
+初始化空数据库：
+
+```bash
+uv run ai-quant data init
+```
+
+初始化并写入离线样例：
+
+```bash
+uv run ai-quant data init --with-fixture
+uv run ai-quant data status
+```
+
+默认创建 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
+`data/catalog.duckdb`。可使用 `--data-dir`、`--duckdb-path` 或环境变量
+`AI_QUANT_DATA_DIR`、`AI_QUANT_DUCKDB_PATH` 调整位置。
+
+数据平台架构和字段说明见：
+
+- `docs/data-platform-architecture.md`
+- `docs/data-dictionary.md`
+
 ## Ubuntu 快速启动
 
 推荐在 Windows VS Code 中通过 Remote-SSH 连接 Ubuntu，然后在服务器执行：

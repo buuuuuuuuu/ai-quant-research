@@ -10,8 +10,11 @@ artifacts/runs/*
 !artifacts/runs/.gitkeep
 data/cache/*
 !data/cache/.gitkeep
+data/raw/
+data/silver/
+data/gold/
+data/snapshots/
 data/*.duckdb
 dist/
 build/
 *.egg-info/
-

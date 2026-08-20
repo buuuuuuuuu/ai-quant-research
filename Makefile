@@ -1,4 +1,4 @@
-.PHONY: install test lint demo api
+.PHONY: install test lint demo api data-init data-status
 
 install:
 	uv sync --extra dev
@@ -15,3 +15,8 @@ demo:
 api:
 	uv run uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
 
+data-init:
+	uv run ai-quant data init --with-fixture
+
+data-status:
+	uv run ai-quant data status

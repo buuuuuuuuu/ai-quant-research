@@ -103,19 +103,18 @@ class MarketDataSyncService:
             }
 
         try:
-            master = self.provider.get_security_master()
+            if spec.symbols:
+                # An explicit-symbol sync only needs stable IDs and exchange mapping.
+                # Avoid making it depend on AkShare's composite full-market listing,
+                # where an outage in one exchange can otherwise block every symbol.
+                master = self._missing_security_rows(spec.symbols, pd.DataFrame())
+            else:
+                master = self.provider.get_security_master()
             calendar = self.provider.get_trading_calendar()
-            if master.empty and not spec.symbols:
+            if master.empty:
                 raise ValueError("security master returned no rows")
             if calendar.empty:
                 raise ValueError("trading calendar returned no rows")
-
-            if spec.symbols:
-                missing = self._missing_security_rows(spec.symbols, master)
-                master = pd.concat(
-                    [master.loc[master["symbol"].isin(spec.symbols)], missing],
-                    ignore_index=True,
-                )
             master = master.sort_values("symbol").drop_duplicates("security_id")
             if spec.symbol_limit is not None:
                 master = master.head(spec.symbol_limit)

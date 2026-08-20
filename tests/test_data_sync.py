@@ -18,12 +18,23 @@ from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 class FakeSyncProvider:
     name = "fake-sync"
 
-    def __init__(self, *, fail_qfq_once: bool = False, invalid_hfq: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_qfq_once: bool = False,
+        invalid_hfq: bool = False,
+        fail_master: bool = False,
+    ) -> None:
         self.fail_qfq_once = fail_qfq_once
         self.invalid_hfq = invalid_hfq
+        self.fail_master = fail_master
+        self.master_calls = 0
         self.calls: list[tuple[str, str]] = []
 
     def get_security_master(self) -> pd.DataFrame:
+        self.master_calls += 1
+        if self.fail_master:
+            raise ConnectionError("security master endpoint unavailable")
         return pd.DataFrame(
             [
                 {
@@ -161,6 +172,22 @@ def test_sync_publishes_raw_adjusted_ratios_and_reuses_completed_batch(tmp_path)
         ).fetchall()
     assert all(len(item[1]) == 64 for item in raw_artifacts)
     assert all(Path(item[0]).is_file() for item in raw_artifacts)
+
+
+def test_explicit_symbol_sync_does_not_require_full_security_master(tmp_path) -> None:
+    provider = FakeSyncProvider(fail_master=True)
+    service, database = _service(tmp_path, provider)
+
+    result = service.run(_spec("none"))
+
+    assert result["status"] == "published"
+    assert result["securities"] == 1
+    assert provider.master_calls == 0
+    with database.connect(read_only=True) as connection:
+        security = connection.execute(
+            "SELECT security_id, symbol, exchange, source FROM security_master"
+        ).fetchone()
+    assert security == ("SSE.600519", "600519", "SSE", "requested-symbol-fallback")
 
 
 def test_failed_partition_resumes_without_refetching_published_partition(tmp_path) -> None:

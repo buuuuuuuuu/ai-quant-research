@@ -64,6 +64,21 @@ class FakeSyncAkShare:
         )
 
 
+class FakeFallbackMasterAkShare:
+    @staticmethod
+    def stock_info_a_code_name() -> pd.DataFrame:
+        raise ValueError("BSE response was not valid JSON")
+
+    @staticmethod
+    def stock_zh_a_spot_em() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "代码": ["600519", "000001", "430047"],
+                "名称": ["贵州茅台", "平安银行", "诺思兰德"],
+            }
+        )
+
+
 def test_benchmark_provider_falls_back_and_clips_dates(tmp_path, monkeypatch) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeAkShare())
@@ -124,3 +139,20 @@ def test_sync_provider_normalizes_master_calendar_and_full_daily_bars(
         "source",
     ]
     assert bars["amount_missing"].tolist() == [False, False]
+
+
+def test_security_master_falls_back_when_composite_listing_fails(
+    tmp_path, monkeypatch
+) -> None:
+    provider = AkShareProvider(cache_dir=tmp_path, retries=1)
+    monkeypatch.setattr(provider, "_akshare", lambda: FakeFallbackMasterAkShare())
+
+    master = provider.get_security_master()
+
+    assert master["security_id"].tolist() == [
+        "SSE.600519",
+        "SZSE.000001",
+        "BSE.430047",
+    ]
+    assert master["symbol"].tolist() == ["600519", "000001", "430047"]
+    assert master["source"].unique().tolist() == ["akshare:stock_zh_a_spot_em"]

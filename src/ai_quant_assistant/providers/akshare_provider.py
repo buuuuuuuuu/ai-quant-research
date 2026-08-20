@@ -86,13 +86,31 @@ class AkShareProvider:
 
     def get_security_master(self) -> pd.DataFrame:
         def fetch() -> pd.DataFrame:
-            raw = self._akshare().stock_info_a_code_name()
-            return normalize_security_master(raw, "akshare:stock_info_a_code_name")
+            ak = self._akshare()
+            try:
+                primary = normalize_security_master(
+                    ak.stock_info_a_code_name(),
+                    "akshare:stock_info_a_code_name",
+                )
+                if not primary.empty:
+                    return primary
+            except Exception:
+                # stock_info_a_code_name combines three exchanges. A malformed
+                # response from any one of them (notably BSE) breaks the whole call.
+                pass
+
+            fallback = normalize_security_master(
+                ak.stock_zh_a_spot_em(),
+                "akshare:stock_zh_a_spot_em",
+            )
+            if fallback.empty:
+                raise ProviderError("AkShare security master endpoints returned no rows")
+            return fallback
 
         return load_or_fetch(
             cache=self.cache,
             namespace="security_master",
-            params={"market": "沪深京"},
+            params={"market": "沪深京", "fallback": "stock_zh_a_spot_em"},
             fetcher=fetch,
             retries=self.retries,
             refresh=self.refresh,

@@ -116,6 +116,53 @@ class LocalDatabase:
             "relations": relations,
         }
 
+    def research_overview(self) -> dict[str, Any]:
+        status = self.status()
+        overview: dict[str, Any] = {"database": status, "securities": [], "coverage": {}}
+        if not status.get("initialized") or status.get("schema_version", 0) < 4:
+            return overview
+        with self.connect(read_only=True) as connection:
+            securities = connection.execute(
+                """
+                SELECT security.symbol, security.name, security.exchange,
+                       security.list_date, MIN(bar.trade_date) AS start_date,
+                       MAX(bar.trade_date) AS end_date,
+                       COUNT(DISTINCT bar.trade_date) AS price_rows,
+                       COUNT(DISTINCT report.report_id) AS report_count
+                FROM security_master AS security
+                LEFT JOIN published_daily_bar AS bar
+                  ON bar.security_id = security.security_id AND bar.adjustment = 'qfq'
+                LEFT JOIN published_financial_report AS report
+                  ON report.security_id = security.security_id
+                GROUP BY security.symbol, security.name, security.exchange, security.list_date
+                HAVING COUNT(bar.trade_date) > 0 OR COUNT(report.report_id) > 0
+                ORDER BY security.symbol
+                """
+            ).fetchdf()
+            coverage_rows = connection.execute(
+                """
+                SELECT 'stock', MIN(trade_date), MAX(trade_date), COUNT(*)
+                FROM published_daily_bar
+                UNION ALL
+                SELECT 'benchmark', MIN(trade_date), MAX(trade_date), COUNT(*)
+                FROM published_benchmark_daily_bar
+                UNION ALL
+                SELECT 'announcement', MIN(announcement_date), MAX(announcement_date), COUNT(*)
+                FROM published_announcement
+                UNION ALL
+                SELECT 'financial', MIN(report_period_end), MAX(report_period_end), COUNT(*)
+                FROM published_financial_report
+                """
+            ).fetchall()
+        overview["securities"] = securities.where(pd.notna(securities), None).to_dict(
+            orient="records"
+        )
+        overview["coverage"] = {
+            str(dataset): {"start_date": start, "end_date": end, "rows": int(rows)}
+            for dataset, start, end, rows in coverage_rows
+        }
+        return overview
+
     def read_published_prices(
         self, symbol: str, start_date: Any, end_date: Any, adjustment: str
     ) -> pd.DataFrame:

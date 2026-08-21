@@ -15,6 +15,5 @@ COPY docs ./docs
 COPY scripts ./scripts
 RUN mkdir -p /app/artifacts /app/data/cache
 
-EXPOSE 8000
-CMD ["uvicorn", "ai_quant_assistant.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
-
+EXPOSE 8080
+CMD ["uvicorn", "ai_quant_assistant.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

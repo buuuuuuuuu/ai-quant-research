@@ -204,6 +204,7 @@ uv run ai-quant data status
 - `docs/data-platform-architecture.md`
 - `docs/data-dictionary.md`
 - `docs/factor-backtest.md`
+- `docs/web-workbench.md`
 
 ## Ubuntu 快速启动
 
@@ -248,21 +249,33 @@ AkShare 当前官方接口口径：
 
 仓库内置一份完全离线生成的示例产物，位于 `examples/golden-path-output/runs/`。
 
-## 启动 API
+## 启动 Web 研究工作台与 API
 
 ```bash
-uv run uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8000
+uv run uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8080
 ```
 
 打开：
 
-- API 文档：`http://<ubuntu-ip>:8000/docs`
-- 健康检查：`http://<ubuntu-ip>:8000/health`
+- Web 研究工作台：`http://<ubuntu-ip>:8080/`
+- API 文档：`http://<ubuntu-ip>:8080/docs`
+- 健康检查：`http://<ubuntu-ip>:8080/health`
+
+工作台首页显示当前自动识别的 DuckDB 路径、Schema 版本、股票/行情/公告/财务记录数
+和数据覆盖区间。浏览器可以配置股票池、日期、财务因子、Top-N、调仓频率、复权和
+交易成本，提交后由后台线程执行，页面持续显示排队、运行进度、成功或失败原因。
+
+回测完成后，页面直接展示策略/沪深 300 净值曲线、收益风险指标、交易、逐日持仓和
+因子排名；历史研究在服务重启后仍从 `artifacts/backtests/` 恢复。完整 HTML 报告可在
+浏览器打开，Excel、CSV 和 JSON 通过白名单下载接口获取，不允许读取其他服务器文件。
+
+当前工作台适合在可信内网或受防火墙保护的个人服务器使用；直接暴露公网前应增加反向
+代理 HTTPS 和访问认证。
 
 离线请求示例：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/research/interim-report-event-study \
+curl -X POST http://127.0.0.1:8080/api/v1/research/interim-report-event-study \
   -H 'Content-Type: application/json' \
   -d '{
     "source": "fixture",

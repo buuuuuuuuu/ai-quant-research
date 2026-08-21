@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +174,87 @@ MIGRATIONS = (
                 CHECK (start_date <= end_date),
                 PRIMARY KEY (dataset, security_id, adjustment, start_date, end_date)
             )
+            """,
+        ),
+    ),
+    Migration(
+        version=3,
+        name="local_benchmarks_and_point_in_time_announcements",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_master (
+                benchmark_id VARCHAR PRIMARY KEY,
+                symbol VARCHAR NOT NULL UNIQUE,
+                name VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_daily_bar (
+                benchmark_id VARCHAR NOT NULL,
+                trade_date DATE NOT NULL,
+                close DOUBLE NOT NULL CHECK (close > 0),
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                quality_status VARCHAR NOT NULL DEFAULT 'published'
+                    CHECK (quality_status IN ('pending', 'warning', 'published', 'rejected')),
+                published_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (benchmark_id, trade_date)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS announcement (
+                announcement_id VARCHAR PRIMARY KEY,
+                security_id VARCHAR NOT NULL,
+                company_name VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                report_type VARCHAR NOT NULL CHECK (report_type IN ('interim', 'annual')),
+                report_year INTEGER NOT NULL,
+                report_period_end DATE NOT NULL,
+                announcement_date DATE NOT NULL,
+                published_at TIMESTAMP NOT NULL,
+                url VARCHAR NOT NULL DEFAULT '',
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                content_sha256 VARCHAR NOT NULL,
+                quality_status VARCHAR NOT NULL DEFAULT 'published'
+                    CHECK (quality_status IN ('pending', 'warning', 'published', 'rejected')),
+                ingested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (announcement_date >= report_period_end)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS research_sync_partition (
+                batch_id VARCHAR NOT NULL,
+                dataset VARCHAR NOT NULL
+                    CHECK (dataset IN ('benchmark_daily_bar', 'announcement')),
+                partition_key VARCHAR NOT NULL,
+                object_id VARCHAR NOT NULL,
+                variant VARCHAR NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'planned'
+                    CHECK (status IN ('planned', 'fetching', 'published', 'failed')),
+                attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                row_count BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                error VARCHAR,
+                raw_path VARCHAR,
+                raw_sha256 VARCHAR,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (start_date <= end_date),
+                PRIMARY KEY (batch_id, partition_key)
+            )
+            """,
+            """
+            CREATE OR REPLACE VIEW published_benchmark_daily_bar AS
+            SELECT * FROM benchmark_daily_bar WHERE quality_status = 'published'
+            """,
+            """
+            CREATE OR REPLACE VIEW published_announcement AS
+            SELECT * FROM announcement WHERE quality_status = 'published'
             """,
         ),
     ),

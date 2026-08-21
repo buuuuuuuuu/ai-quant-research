@@ -1,10 +1,11 @@
-# A 股本地数据库架构（M0 + M1）
+# A 股本地数据库架构（M0 + M1 + M2-A）
 
 ## 目标与边界
 
 本阶段把现有“每次研究临时抓取并保存快照”的能力扩展为可初始化、可迁移、可检查、
-可增量同步和可断点续跑的本地数据底座。它覆盖 AkShare 沪深京证券主数据、交易日历和
-日线，不在本阶段实现定时任务、Web 界面或自动实盘交易。
+可增量同步和可断点续跑的本地数据底座。它覆盖 AkShare 沪深京证券主数据、交易日历、
+股票日线、指数基准以及半年报/年报公告，不在本阶段实现定时任务、Web 界面或自动实盘
+交易。
 
 现有事件研究继续通过 `MarketDataProvider` 运行，输出与计算口径保持不变。
 `LocalFirstProvider` 只在 `data_coverage` 完整覆盖请求区间时读取本地 published 数据，
@@ -14,9 +15,9 @@
 
 | 层 | 目录/组件 | 约束 |
 |---|---|---|
-| Bronze | `data/raw/`、`daily_bar_raw` | 保留来源和批次，不静默改写原始值 |
-| Silver | `data/silver/`、`daily_bar` | 标准代码、字段类型、主键和质量状态 |
-| Gold | `data/gold/`、`published_daily_bar` | 只暴露通过质量门禁的数据 |
+| Bronze | `data/raw/`、`daily_bar_raw` | 保存股票、指数、公告分区原始 Parquet 与 SHA-256 |
+| Silver | `data/silver/`、股票/指数/公告表 | 标准代码、字段类型、主键、双时间轴和质量状态 |
+| Gold | `data/gold/`、三个 `published_*` 视图 | 只暴露通过质量门禁的数据 |
 | Snapshots | `data/snapshots/`、现有运行快照 | 绑定文件、行数、SHA-256 与代码版本 |
 | Catalog | `data/catalog.duckdb` | Schema 版本、主数据、交易日历、批次和 DQ 结果 |
 
@@ -45,6 +46,15 @@ Schema v2 增加：
 - `sync_partition`：证券×年份×复权口径的断点状态；
 - `adjustment_ratio`：复权收盘价与不复权收盘价的可审计比率；
 - `data_coverage`：本地优先读取的显式覆盖区间。
+
+Schema v3 增加：
+
+- `benchmark_master`、`benchmark_daily_bar`、`published_benchmark_daily_bar`：指数
+  标识与通过质量门禁的日线；
+- `announcement`、`published_announcement`：半年报/年报公告、报告所属期间、实际
+  公告时间与内容摘要；
+- `research_sync_partition`：指数与公告按对象、年份和类型拆分的可恢复分区；
+- 复用已有 `sync_batch`、`data_coverage` 和 `dq_result`，保证历史股票数据无需重建。
 
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
@@ -77,9 +87,14 @@ DQ 并事务化发布。
 AkShare 访问仍使用现有缓存、指数退避重试与新浪备用接口。CLI 通过标准错误输出分区
 进度；`AI_QUANT_DATA_SYNC_RATE_LIMIT_SECONDS` 控制请求间隔。
 
+`ai-quant data sync-index` 按指数和自然年同步基准日线。`ai-quant data
+sync-announcements` 按证券、自然年、`interim/annual` 报告类型同步公告。二者同样复用
+参数一致的批次，保留 Raw Parquet 路径与摘要，并只重试未发布分区。成功处理但没有公告
+的区间也写入完整覆盖，避免本地查询因合法的零记录重复访问外部接口。
+
 ## 研究数据源诊断与血缘
 
-`event-study` 在 `diagnostics.data_sources` 和 HTML 报告中分别记录股票与基准的：
+`event-study` 在 `diagnostics.data_sources` 和 HTML 报告中分别记录股票、基准与公告的：
 
 - `serving_sources`：研究实际读取的服务层来源；
 - `provider_sources`：本地数据对应的原始 AkShare/Fixture 接口来源；
@@ -87,14 +102,18 @@ AkShare 访问仍使用现有缓存、指数退避重试与新浪备用接口。
 - `provider_fallback_used`：AkShare 是否使用备用接口；
 - `source_batch_ids/raw_paths`：本地发布数据对应的同步批次和 Raw Parquet。
 
-血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建，并读取 Raw Parquet
-中的逐日 `source`。因此不需要增加 Schema 版本，已有 Schema v2 数据也能直接显示来源。
-股票快照保留上述逐行血缘字段；基准在 M1-B 尚未本地化，正常显示为外部 Provider。
+股票血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建；指数和公告
+通过各自记录的实际 Provider 来源、同步批次与 `research_sync_partition.raw_path` 重建。
+研究快照保留上述逐行字段，`source=local` 的 CLI 和 API 均可实现三个研究输入全部本地命中。
 
 ## 数据质量门禁
 
 阻断级规则包括日期可解析、主键唯一、数值完整、分区范围、正价格、非负成交活动与
 OHLC 一致性。任何阻断级失败都会保留 raw 文件和 DQ 结果，但不会进入 published 视图。
+
+指数额外检查交易日可解析、日期范围、日期唯一性和收盘价为正；公告检查标识唯一、报告
+期有效、公告日期/实际公开时间有效，以及实际披露不得早于报告期结束。违反报告期顺序的
+记录将被阻断，防止未来信息污染历史研究。
 
 交易日连续性和备用接口缺少成交额属于警告级：停牌可能产生合法交易日缺口；新浪备用
 接口没有成交额时写入零并显式记录警告。空分区也记录警告，兼容上市前和退市后区间。
@@ -106,8 +125,11 @@ OHLC 一致性。任何阻断级失败都会保留 raw 文件和 DQ 结果，但
 - Schema v1 显式保存 `adjustment=none/qfq/hfq`，调用方必须选择复权口径。
 - M1-B 保存 Provider 返回的 none/qfq/hfq 日线；`adjustment_ratio` 保存调整后收盘价与
   不复权收盘价的逐日比率，`method=derived_close_ratio` 明确它不是供应商原生因子。
-- 公告和财务的双时间轴将在 M1-B/M2 增加，现有事件研究仍严格使用公告日后的第一个
-  股票与基准共同交易日收盘价入场。
+- 公告以 `report_period_end` 保存信息所属期间，以 `published_at` 保存市场可知时间；
+  本地查询只读取研究截止日结束前已实际公开的记录。
+- 半年报报告期结束日为当年 6 月 30 日，年报为当年 12 月 31 日；数据库约束和 DQ 均
+  拒绝 `announcement_date < report_period_end` 的公告。
+- 事件研究继续严格使用公告日后的第一个股票与基准共同交易日收盘价入场。
 
 ## 离线验收
 
@@ -115,6 +137,8 @@ OHLC 一致性。任何阻断级失败都会保留 raw 文件和 DQ 结果，但
 uv run ai-quant data init --with-fixture
 uv run ai-quant data status
 uv run ai-quant data sync --start-date 2024-01-01 --symbols 600519
+uv run ai-quant data sync-index --start-date 2024-01-01 --symbols csi000300
+uv run ai-quant data sync-announcements --start-date 2024-01-01 --symbols 600519
 uv run pytest
 uv run ruff check .
 ```
@@ -124,5 +148,6 @@ Fixture 覆盖上交所、深交所和北交所证券主数据，包含 5 个交
 
 ## 后续入口
 
-M2 增加公告与财务双时间轴、AI 研究规划和更多模板分析。V1 继续不接券商、不自动下单、
-不提供投资建议，也不扩展分钟级高频数据。
+M2-B 可继续增加财务指标 Point-in-Time 快照、因子数据与更多研究模板；后续再考虑 AI
+研究规划和调度自动化。V1 继续不接券商、不自动下单、不提供投资建议，也不扩展分钟级
+高频数据。

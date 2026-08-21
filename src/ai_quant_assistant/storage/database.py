@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from ai_quant_assistant.domain.models import normalize_benchmark_symbol
+from ai_quant_assistant.providers.normalization import security_id_for_symbol
 from ai_quant_assistant.storage.fixture_data import load_fixture_data
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.schema import SCHEMA_VERSION, apply_migrations
@@ -22,6 +24,12 @@ CORE_RELATIONS = (
     "adjustment_ratio",
     "data_coverage",
     "published_daily_bar",
+    "benchmark_master",
+    "benchmark_daily_bar",
+    "announcement",
+    "research_sync_partition",
+    "published_benchmark_daily_bar",
+    "published_announcement",
 )
 
 
@@ -205,3 +213,146 @@ class LocalDatabase:
             if cursor > requested_end:
                 return True
         return cursor > requested_end
+
+    def _has_dataset_coverage(
+        self,
+        dataset: str,
+        object_id: str,
+        variant: str,
+        start_date: Any,
+        end_date: Any,
+    ) -> bool:
+        if not self.path.is_file():
+            return False
+        with self.connect(read_only=True) as connection:
+            rows = connection.execute(
+                """
+                SELECT start_date, end_date
+                FROM data_coverage
+                WHERE dataset = ? AND security_id = ? AND adjustment = ?
+                  AND end_date >= ? AND start_date <= ?
+                ORDER BY start_date, end_date
+                """,
+                [dataset, object_id, variant, start_date, end_date],
+            ).fetchall()
+        cursor = pd.Timestamp(start_date).date()
+        requested_end = pd.Timestamp(end_date).date()
+        for interval_start, interval_end in rows:
+            if interval_start > cursor:
+                return False
+            if interval_end >= cursor:
+                cursor = interval_end + timedelta(days=1)
+            if cursor > requested_end:
+                return True
+        return cursor > requested_end
+
+    def has_benchmark_coverage(self, symbol: str, start_date: Any, end_date: Any) -> bool:
+        normalized = normalize_benchmark_symbol(symbol)
+        return self._has_dataset_coverage(
+            "benchmark_daily_bar", f"INDEX.{normalized}", "none", start_date, end_date
+        )
+
+    def has_announcement_coverage(
+        self,
+        symbol: str,
+        start_date: Any,
+        end_date: Any,
+        report_type: str = "interim",
+    ) -> bool:
+        return self._has_dataset_coverage(
+            "announcement", security_id_for_symbol(symbol), report_type, start_date, end_date
+        )
+
+    def read_benchmark_prices(
+        self, symbol: str, start_date: Any, end_date: Any
+    ) -> pd.DataFrame:
+        columns = [
+            "date",
+            "close",
+            "symbol",
+            "source",
+            "provider_source",
+            "source_batch_id",
+            "raw_path",
+        ]
+        if not self.path.is_file():
+            return pd.DataFrame(columns=columns)
+        normalized = normalize_benchmark_symbol(symbol)
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                SELECT bar.trade_date AS date, bar.close, benchmark.symbol,
+                       'local:published_benchmark_daily_bar' AS source,
+                       bar.source AS provider_source, bar.source_batch_id,
+                       COALESCE(partition.raw_path, '') AS raw_path
+                FROM published_benchmark_daily_bar AS bar
+                JOIN benchmark_master AS benchmark USING (benchmark_id)
+                LEFT JOIN research_sync_partition AS partition
+                  ON partition.batch_id = bar.source_batch_id
+                 AND partition.object_id = bar.benchmark_id
+                 AND partition.dataset = 'benchmark_daily_bar'
+                 AND bar.trade_date BETWEEN partition.start_date AND partition.end_date
+                WHERE benchmark.symbol = ?
+                  AND bar.trade_date BETWEEN ? AND ?
+                ORDER BY bar.trade_date
+                """,
+                [normalized, start_date, end_date],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        return frame[columns]
+
+    def read_published_announcements(
+        self,
+        symbol: str,
+        start_date: Any,
+        end_date: Any,
+        report_type: str = "interim",
+    ) -> pd.DataFrame:
+        columns = [
+            "symbol",
+            "company_name",
+            "title",
+            "announcement_date",
+            "url",
+            "report_year",
+            "report_type",
+            "report_period_end",
+            "published_at",
+            "source",
+            "provider_source",
+            "source_batch_id",
+            "raw_path",
+        ]
+        if not self.path.is_file():
+            return pd.DataFrame(columns=columns)
+        as_of_exclusive = pd.Timestamp(end_date).normalize().to_pydatetime() + timedelta(days=1)
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                SELECT security.symbol, item.company_name, item.title,
+                       item.announcement_date, item.url, item.report_year,
+                       item.report_type, item.report_period_end, item.published_at,
+                       'local:published_announcement' AS source,
+                       item.source AS provider_source, item.source_batch_id,
+                       COALESCE(partition.raw_path, '') AS raw_path
+                FROM published_announcement AS item
+                JOIN security_master AS security USING (security_id)
+                LEFT JOIN research_sync_partition AS partition
+                  ON partition.batch_id = item.source_batch_id
+                 AND partition.object_id = item.security_id
+                 AND partition.dataset = 'announcement'
+                 AND partition.variant = item.report_type
+                 AND item.announcement_date BETWEEN partition.start_date AND partition.end_date
+                WHERE security.symbol = ? AND item.report_type = ?
+                  AND item.announcement_date BETWEEN ? AND ?
+                  AND item.published_at < ?
+                ORDER BY item.announcement_date, item.report_year
+                """,
+                [symbol, report_type, start_date, end_date, as_of_exclusive],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["announcement_date"] = pd.to_datetime(frame["announcement_date"]).dt.normalize()
+        return frame[columns]

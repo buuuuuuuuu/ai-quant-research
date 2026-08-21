@@ -13,6 +13,7 @@ INTERIM_EXCLUDE_RE = re.compile(
     r"(?:摘要|英文版|更正|修订|补充|问询|回复|意见|审阅报告|取消|延期)"
 )
 REPORT_YEAR_RE = re.compile(r"(20\d{2})\s*年?.{0,4}(半年度|中期)")
+ANNUAL_REPORT_YEAR_RE = re.compile(r"(20\d{2})\s*年?.{0,6}(?:年度报告|年报)")
 
 
 def exchange_for_symbol(symbol: str) -> str:
@@ -75,6 +76,102 @@ def normalize_interim_announcements(frame: pd.DataFrame, symbol: str) -> pd.Data
     normalized = normalized.drop_duplicates(subset=["title", "announcement_date", "url"])
     normalized = normalized.sort_values(["report_year", "announcement_date", "title"])
     normalized = normalized.drop_duplicates(subset=["report_year"], keep="first")
+    return normalized[columns].reset_index(drop=True)
+
+
+def normalize_report_announcements(
+    frame: pd.DataFrame,
+    symbol: str,
+    report_type: str,
+    source: str,
+) -> pd.DataFrame:
+    columns = [
+        "symbol",
+        "company_name",
+        "title",
+        "announcement_date",
+        "url",
+        "report_year",
+        "report_type",
+        "report_period_end",
+        "published_at",
+        "source",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    date_col = _find_column(
+        frame, ["公告时间", "announcement_date", "date"], "announcement date"
+    )
+    title_col = _find_column(frame, ["公告标题", "title"], "announcement title")
+    url_col = next((name for name in ["公告链接", "url"] if name in frame.columns), None)
+    publication_times = pd.to_datetime(frame[date_col], errors="coerce")
+    publications = (
+        pd.DataFrame(
+            {
+                "title": frame[title_col].astype(str).str.strip(),
+                "announcement_date": publication_times.dt.normalize(),
+                "url": frame[url_col].fillna("").astype(str) if url_col else "",
+                "published_at": publication_times,
+            }
+        )
+        .dropna(subset=["announcement_date", "published_at"])
+        .drop_duplicates(subset=["title", "announcement_date", "url"], keep="first")
+    )
+    if report_type == "interim":
+        normalized = normalize_interim_announcements(frame, symbol)
+    elif report_type == "annual":
+        code_col = next(
+            (name for name in ["代码", "股票代码", "symbol"] if name in frame.columns), None
+        )
+        name_col = next(
+            (name for name in ["简称", "股票简称", "company_name"] if name in frame.columns),
+            None,
+        )
+        normalized = pd.DataFrame(
+            {
+                "symbol": (
+                    frame[code_col].astype(str).str.extract(r"(\d{6})", expand=False)
+                    if code_col
+                    else symbol
+                ),
+                "company_name": frame[name_col].astype(str).str.strip() if name_col else "",
+                "title": frame[title_col].astype(str).str.strip(),
+                "announcement_date": pd.to_datetime(frame[date_col], errors="coerce").dt.normalize(),
+                "url": frame[url_col].fillna("").astype(str) if url_col else "",
+            }
+        ).dropna(subset=["announcement_date"])
+        normalized["symbol"] = normalized["symbol"].fillna(symbol)
+        normalized = normalized[normalized["title"].str.contains(r"(?:年度报告|年报)", na=False)]
+        normalized = normalized[~normalized["title"].str.contains(INTERIM_INCLUDE_RE, na=False)]
+        normalized = normalized[~normalized["title"].str.contains(INTERIM_EXCLUDE_RE, na=False)]
+        normalized["report_year"] = normalized.apply(
+            lambda row: int(match.group(1))
+            if (match := ANNUAL_REPORT_YEAR_RE.search(str(row["title"])))
+            else int(pd.Timestamp(row["announcement_date"]).year - 1),
+            axis=1,
+        )
+        normalized = normalized.sort_values(["report_year", "announcement_date", "title"])
+        normalized = normalized.drop_duplicates(subset=["report_year"], keep="first")
+    else:
+        raise DataValidationError(f"unsupported report type: {report_type}")
+
+    if normalized.empty:
+        return pd.DataFrame(columns=columns)
+    normalized = normalized.merge(
+        publications,
+        on=["title", "announcement_date", "url"],
+        how="left",
+        validate="one_to_one",
+    )
+    normalized["report_type"] = report_type
+    month, day = (6, 30) if report_type == "interim" else (12, 31)
+    normalized["report_period_end"] = normalized["report_year"].map(
+        lambda year: pd.Timestamp(year=int(year), month=month, day=day)
+    )
+    normalized["published_at"] = normalized["published_at"].fillna(
+        normalized["announcement_date"]
+    )
+    normalized["source"] = source
     return normalized[columns].reset_index(drop=True)
 
 

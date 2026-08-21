@@ -32,3 +32,15 @@ class SyncDataProvider(Protocol):
     def get_daily_bars(
         self, symbol: str, start_date: date, end_date: date, adjustment: str
     ) -> pd.DataFrame: ...
+
+
+class ResearchDataProvider(Protocol):
+    name: str
+
+    def get_benchmark_prices(
+        self, symbol: str, start_date: date, end_date: date
+    ) -> pd.DataFrame: ...
+
+    def get_report_announcements(
+        self, symbol: str, start_date: date, end_date: date, report_type: str
+    ) -> pd.DataFrame: ...

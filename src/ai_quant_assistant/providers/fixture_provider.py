@@ -72,6 +72,7 @@ class FixtureProvider:
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
         normalized = normalize_interim_announcements(self._announcement_frame, symbol)
+        normalized["source"] = f"{self.name}:interim"
         dates = normalized["announcement_date"].dt.date
         return normalized.loc[(dates >= start_date) & (dates <= end_date)].reset_index(drop=True)
 
@@ -86,4 +87,3 @@ class FixtureProvider:
     ) -> pd.DataFrame:
         normalized = normalize_prices(self._benchmark_frame, symbol, self.name)
         return clip_dates(normalized, start_date, end_date)
-

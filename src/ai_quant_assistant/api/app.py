@@ -16,18 +16,30 @@ from ai_quant_assistant.errors import QuantResearchError
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.base import MarketDataProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
+from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.research.service import InterimReportResearchService
+from ai_quant_assistant.storage.database import LocalDatabase
+from ai_quant_assistant.storage.layout import DataLayout
 
 
 def _provider(source: str, settings: Settings) -> MarketDataProvider:
     if source == "fixture":
         return FixtureProvider()
-    if source == "akshare":
-        return AkShareProvider(
+    if source in {"akshare", "local"}:
+        fallback = AkShareProvider(
             cache_dir=settings.cache_dir,
             retries=settings.akshare_retries,
             timeout_seconds=settings.akshare_timeout_seconds,
         )
+        if source == "local":
+            return LocalFirstProvider(
+                database=LocalDatabase(
+                    path=settings.duckdb_path,
+                    layout=DataLayout.from_root(settings.data_dir),
+                ),
+                fallback=fallback,
+            )
+        return fallback
     raise ValueError(f"unsupported source: {source}")
 
 
@@ -77,4 +89,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=f"research run failed: {exc}") from exc
 
     return app
-

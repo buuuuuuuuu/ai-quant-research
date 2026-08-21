@@ -12,6 +12,7 @@ from ai_quant_assistant.providers.normalization import (
     normalize_daily_bars,
     normalize_interim_announcements,
     normalize_prices,
+    normalize_report_announcements,
     normalize_security_master,
     normalize_trading_calendar,
 )
@@ -73,11 +74,49 @@ class AkShareProvider:
         def fetch() -> pd.DataFrame:
             ak = self._akshare()
             raw = ak.stock_zh_a_disclosure_report_cninfo(keyword="", **params)
-            return normalize_interim_announcements(raw, symbol)
+            normalized = normalize_interim_announcements(raw, symbol)
+            normalized["source"] = "akshare:stock_zh_a_disclosure_report_cninfo:interim"
+            return normalized
 
         return load_or_fetch(
             cache=self.cache,
             namespace="interim_announcements",
+            params=params,
+            fetcher=fetch,
+            retries=self.retries,
+            refresh=self.refresh,
+        )
+
+    def get_report_announcements(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        report_type: str,
+    ) -> pd.DataFrame:
+        categories = {"interim": "半年报", "annual": "年报"}
+        if report_type not in categories:
+            raise ProviderError(f"unsupported announcement report type: {report_type}")
+        params = {
+            "symbol": symbol,
+            "market": "沪深京",
+            "category": categories[report_type],
+            "start_date": self._compact(start_date),
+            "end_date": self._compact(end_date),
+        }
+
+        def fetch() -> pd.DataFrame:
+            raw = self._akshare().stock_zh_a_disclosure_report_cninfo(keyword="", **params)
+            return normalize_report_announcements(
+                raw,
+                symbol,
+                report_type,
+                f"akshare:stock_zh_a_disclosure_report_cninfo:{report_type}",
+            )
+
+        return load_or_fetch(
+            cache=self.cache,
+            namespace="report_announcements",
             params=params,
             fetcher=fetch,
             retries=self.retries,

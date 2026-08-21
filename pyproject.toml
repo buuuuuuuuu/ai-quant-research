@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-quant-research"
-version = "0.1.0"
+version = "0.2.0"
 description = "A-share AI quant research assistant V1 skeleton and interim-report event-study golden path"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

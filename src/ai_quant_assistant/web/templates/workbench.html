@@ -58,6 +58,7 @@
         <div><p class="eyebrow">PLATFORM OPERATIONS</p><h2 id="operations-title">数据同步与备份</h2></div>
         <div class="operations-actions">
           <button id="refresh-operations" class="icon-button" type="button" aria-label="刷新运维状态">↻</button>
+          <button id="run-health-check" class="secondary-button" type="button">检查运行风险</button>
           <button id="run-sync" class="secondary-button" type="button">立即增量同步</button>
           <button id="run-backup" class="secondary-button" type="button">创建数据库备份</button>
         </div>
@@ -67,6 +68,9 @@
         <article class="panel operations-panel"><h3>最近同步</h3><div id="sync-status-list"><p class="empty-state">正在读取同步状态…</p></div></article>
         <article class="panel operations-panel"><h3>后台任务</h3><div id="operations-task-list"><p class="empty-state">正在读取后台任务…</p></div></article>
         <article class="panel operations-panel"><h3>数据库备份</h3><div id="backup-status-list"><p class="empty-state">正在读取备份状态…</p></div></article>
+        <article class="panel operations-panel"><h3>运行告警</h3><div id="alert-status-list"><p class="empty-state">正在读取告警状态…</p></div></article>
+        <article class="panel operations-panel"><h3>数据质量</h3><div id="quality-status-list"><p class="empty-state">正在读取数据质量…</p></div></article>
+        <article class="panel operations-panel"><h3>运维审计</h3><div id="audit-status-list"><p class="empty-state">正在读取审计记录…</p></div></article>
       </div>
     </section>
 

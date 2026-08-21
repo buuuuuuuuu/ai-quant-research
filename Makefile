@@ -1,4 +1,4 @@
-.PHONY: install test lint demo api data-init data-status data-sync data-sync-index data-sync-announcements data-sync-financial data-financial-status data-backfill batch-demo ops-status ops-sync ops-backup
+.PHONY: install test lint demo api data-init data-status data-sync data-sync-index data-sync-announcements data-sync-financial data-financial-status data-backfill batch-demo ops-status ops-sync ops-backup ops-check ops-quality ops-alerts
 
 install:
 	uv sync --extra dev
@@ -50,3 +50,12 @@ ops-sync:
 
 ops-backup:
 	uv run ai-quant ops backup
+
+ops-check:
+	uv run ai-quant ops check
+
+ops-quality:
+	uv run ai-quant ops quality
+
+ops-alerts:
+	uv run ai-quant ops alerts --active-only

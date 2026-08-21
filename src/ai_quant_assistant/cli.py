@@ -31,6 +31,11 @@ from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.financial_sync_service import FinancialDataSyncService
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.monitoring import (
+    OperationAlertRepository,
+    OperationAuditRepository,
+    PlatformMonitor,
+)
 from ai_quant_assistant.storage.operations import (
     DatabaseBackupService,
     ExclusiveOperationLock,
@@ -193,10 +198,59 @@ def build_parser() -> argparse.ArgumentParser:
     operation_sync.add_argument("--symbols", nargs="+")
     operation_backup = operation_commands.add_parser("backup", help="创建一致性 DuckDB 备份")
     operation_backup.add_argument("--backup-dir", type=Path)
+    operation_backup.add_argument(
+        "--apply-retention", action="store_true", help="备份成功后按保留策略清理旧备份"
+    )
+    operation_backup_list = operation_commands.add_parser("backup-list", help="查看数据库备份")
+    operation_backup_list.add_argument("--include-deleted", action="store_true")
+    operation_backup_list.add_argument("--limit", type=int, default=50)
+    operation_backup_verify = operation_commands.add_parser(
+        "backup-verify", help="验证备份 SHA-256、大小和数据库结构"
+    )
+    operation_backup_verify.add_argument("--backup-id", required=True)
+    operation_backup_prune = operation_commands.add_parser(
+        "backup-prune", help="预演或执行数据库备份保留策略"
+    )
+    operation_backup_prune.add_argument(
+        "--apply", action="store_true", help="明确允许删除符合保留策略的过期备份"
+    )
+    operation_backup_relocate = operation_commands.add_parser(
+        "backup-relocate", help="生产迁移后重新绑定已复制的备份文件路径"
+    )
+    operation_backup_relocate.add_argument("--old-data-dir", type=Path, required=True)
+    operation_restore = operation_commands.add_parser(
+        "restore", help="验证备份并在自动创建恢复前备份后安全恢复"
+    )
+    operation_restore.add_argument("--backup-id", required=True)
+    operation_restore.add_argument(
+        "--confirm-backup-id", required=True, help="必须再次输入完全相同的备份 ID"
+    )
     operation_status = operation_commands.add_parser("status", help="查看同步、任务和备份状态")
     operation_tasks = operation_commands.add_parser("tasks", help="查看持久化后台任务")
     operation_tasks.add_argument("--limit", type=int, default=20)
-    for command in (operation_sync, operation_backup, operation_status, operation_tasks):
+    operation_alerts = operation_commands.add_parser("alerts", help="查看运行告警")
+    operation_alerts.add_argument("--active-only", action="store_true")
+    operation_alerts.add_argument("--limit", type=int, default=50)
+    operation_audit = operation_commands.add_parser("audit", help="查看运维安全审计记录")
+    operation_audit.add_argument("--limit", type=int, default=50)
+    operation_check = operation_commands.add_parser("check", help="检查同步、备份、磁盘和登录异常")
+    operation_check.add_argument("--fail-on-alert", action="store_true")
+    operation_quality = operation_commands.add_parser("quality", help="查看数据质量与股票覆盖情况")
+    for command in (
+        operation_sync,
+        operation_backup,
+        operation_backup_list,
+        operation_backup_verify,
+        operation_backup_prune,
+        operation_backup_relocate,
+        operation_restore,
+        operation_status,
+        operation_tasks,
+        operation_alerts,
+        operation_audit,
+        operation_check,
+        operation_quality,
+    ):
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--duckdb-path", type=Path)
     return parser
@@ -351,19 +405,51 @@ def main() -> None:
             settings = replace(settings, backup_dir=args.backup_dir)
         database = _local_database(args, settings)
         tasks = OperationTaskRepository(database)
+        audit = OperationAuditRepository(database)
+        alerts = OperationAlertRepository(database)
+        monitor = PlatformMonitor(database, settings, alerts, audit)
         operation_lock = ExclusiveOperationLock(database.layout.root / ".operations.lock")
         backup_service = DatabaseBackupService(
             database=database,
             backup_dir=settings.resolved_backup_dir,
             tasks=tasks,
             operation_lock=operation_lock,
+            audit=audit,
+            retention_days=settings.backup_retention_days,
+            minimum_count=settings.backup_minimum_count,
         )
         if args.ops_command == "status":
-            payload = OperationsDashboard(database, tasks, backup_service).status()
+            payload = OperationsDashboard(
+                database, tasks, backup_service, alerts, audit, monitor
+            ).status()
         elif args.ops_command == "tasks":
             payload = {"tasks": tasks.list(limit=args.limit)}
         elif args.ops_command == "backup":
-            payload = backup_service.run()
+            payload = backup_service.run(apply_retention=args.apply_retention)
+        elif args.ops_command == "backup-list":
+            payload = {
+                "backups": backup_service.list(
+                    limit=args.limit, include_deleted=args.include_deleted
+                )
+            }
+        elif args.ops_command == "backup-verify":
+            payload = backup_service.verify(args.backup_id)
+        elif args.ops_command == "backup-prune":
+            payload = backup_service.prune(dry_run=not args.apply)
+        elif args.ops_command == "backup-relocate":
+            payload = backup_service.relocate(args.old_data_dir)
+        elif args.ops_command == "restore":
+            payload = backup_service.restore(
+                args.backup_id, confirm_backup_id=args.confirm_backup_id
+            )
+        elif args.ops_command == "alerts":
+            payload = {"alerts": alerts.list(active_only=args.active_only, limit=args.limit)}
+        elif args.ops_command == "audit":
+            payload = {"events": audit.list(limit=args.limit)}
+        elif args.ops_command == "check":
+            payload = monitor.check()
+        elif args.ops_command == "quality":
+            payload = monitor.quality()
         else:
             provider = AkShareProvider(
                 cache_dir=settings.cache_dir,
@@ -376,9 +462,12 @@ def main() -> None:
                 provider=provider,
                 tasks=tasks,
                 operation_lock=operation_lock,
+                audit=audit,
             )
             payload = service.run(as_of=args.as_of)
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if args.ops_command == "check" and args.fail_on_alert and payload["active_count"]:
+            raise SystemExit(1)
         return
 
     if args.command == "backtest":

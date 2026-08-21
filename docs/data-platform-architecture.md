@@ -1,4 +1,4 @@
-# A 股本地数据库架构（M0 + M1 + M2 + M3 + M4-A）
+# A 股本地数据库架构（M0 + M1 + M2 + M3 + M4）
 
 ## 目标与边界
 
@@ -74,6 +74,13 @@ Schema v5 增加：
 - `operation_task`：回测、增量同步和备份的持久化任务、进度、参数与失败原因；
 - `database_backup`：一致性备份文件位置、字节数、SHA-256 与创建时间；
 - 任务和备份生命周期采用 `TIMESTAMPTZ`，现有 v1–v4 行情、公告和财务数据保持不变。
+
+Schema v6 增加：
+
+- `operation_audit`：管理员登录、回测、同步、备份、恢复和告警处理的安全审计；
+- `operation_alert`：同步、备份、磁盘、登录及阻断级数据质量异常的持久化告警；
+- `database_backup.deleted_at/deletion_reason`：明确执行备份保留策略后的生命周期记录；
+- 继续保留 v1–v5 的历史行情、Point-in-Time 财务、后台任务和既有备份。
 
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 

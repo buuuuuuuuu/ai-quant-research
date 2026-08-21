@@ -21,9 +21,12 @@
 | Snapshots | `data/snapshots/`、现有运行快照 | 绑定文件、行数、SHA-256 与代码版本 |
 | Catalog | `data/catalog.duckdb` | Schema 版本、主数据、交易日历、批次和 DQ 结果 |
 
-目录和 DuckDB 文件可以分别通过 `AI_QUANT_DATA_DIR` 与
-`AI_QUANT_DUCKDB_PATH` 配置。运行产物仍写入 `artifacts/`，缓存仍写入
-`data/cache/`，清缓存不得删除正式数据与研究快照。
+默认目录相对于项目根目录定位，不因命令从项目根目录还是子目录执行而变化。对于历史
+遗留的 `data/catalog.duckdb` 与 `data/data/catalog.duckdb` 双库，启动时以只读方式比较
+Schema 版本、已发布数据量和证券数量，自动选择更完整的数据库；评分相同时保留标准
+`data/catalog.duckdb`。目录和 DuckDB 文件仍可以分别通过 `AI_QUANT_DATA_DIR` 与
+`AI_QUANT_DUCKDB_PATH` 显式覆盖，且显式配置优先。运行产物写入项目根目录的
+`artifacts/`，缓存写入选中数据目录的 `cache/`；清缓存不得删除正式数据与研究快照。
 
 ## Schema 迁移
 

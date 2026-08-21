@@ -274,6 +274,29 @@ def test_local_first_provider_uses_coverage_then_falls_back(tmp_path) -> None:
     assert remote["local_fallback_reason"].tolist() == ["coverage_incomplete"]
 
 
+def test_local_prices_resolve_relative_raw_lineage_from_data_root(tmp_path, monkeypatch) -> None:
+    service, database = _service(tmp_path, FakeSyncProvider())
+    service.run(_spec("qfq"))
+    with database.connect() as connection:
+        partitions = connection.execute("SELECT partition_key, raw_path FROM sync_partition").fetchall()
+        for partition_key, raw_path in partitions:
+            relative_path = Path(raw_path).relative_to(database.layout.root.parent)
+            connection.execute(
+                "UPDATE sync_partition SET raw_path = ? WHERE partition_key = ?",
+                [str(relative_path), partition_key],
+            )
+
+    other_directory = tmp_path / "other-working-directory"
+    other_directory.mkdir()
+    monkeypatch.chdir(other_directory)
+    prices = database.read_published_prices(
+        "600519", date(2024, 1, 1), date(2024, 1, 5), "qfq"
+    )
+
+    assert prices["provider_source"].unique().tolist() == ["fixture-daily:qfq"]
+    assert all(Path(path).is_absolute() and Path(path).is_file() for path in prices["raw_path"])
+
+
 def test_local_first_treats_published_empty_prelisting_partitions_as_coverage(tmp_path) -> None:
     provider = FakeRecentlyListedProvider()
     service, database = _service(tmp_path, provider)

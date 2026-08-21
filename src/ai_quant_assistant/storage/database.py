@@ -176,6 +176,8 @@ class LocalDatabase:
             if not mask.any() or not partition.raw_path:
                 continue
             raw_path = Path(str(partition.raw_path))
+            if not raw_path.is_absolute():
+                raw_path = self.layout.root.resolve().parent / raw_path
             frame.loc[mask, "raw_path"] = str(raw_path)
             if not raw_path.is_file():
                 continue

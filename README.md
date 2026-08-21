@@ -154,9 +154,19 @@ mv data/catalog.duckdb data/catalog.fixture.duckdb
 uv run ai-quant data init
 ```
 
-默认创建 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
-`data/catalog.duckdb`。可使用 `--data-dir`、`--duckdb-path` 或环境变量
-`AI_QUANT_DATA_DIR`、`AI_QUANT_DUCKDB_PATH` 调整位置。
+默认创建项目根目录下的 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
+`data/catalog.duckdb`；从项目子目录执行命令时，也会自动定位同一个项目根目录。
+如果历史操作同时产生了 `data/catalog.duckdb` 与 `data/data/catalog.duckdb`，程序会
+优先选择 Schema 更新、已发布数据更完整的数据库，因此无需每次手动导出环境变量。
+可使用 `--data-dir`、`--duckdb-path` 或环境变量 `AI_QUANT_DATA_DIR`、
+`AI_QUANT_DUCKDB_PATH` 显式指定位置；显式配置始终优先于自动识别。
+
+升级后可以取消旧的临时环境变量并检查自动识别结果：
+
+```bash
+unset AI_QUANT_DATA_DIR AI_QUANT_DUCKDB_PATH
+uv run ai-quant data status
+```
 
 数据平台架构、同步语义和字段说明见：
 

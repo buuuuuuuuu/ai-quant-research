@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Daily AI Quant DuckDB Backups
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10min
+Unit=ai-quant-backup.service
+
+[Install]
+WantedBy=timers.target

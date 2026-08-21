@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +355,45 @@ MIGRATIONS = (
             """
             CREATE OR REPLACE VIEW published_financial_metric AS
             SELECT * FROM financial_metric WHERE quality_status = 'published'
+            """,
+        ),
+    ),
+    Migration(
+        version=5,
+        name="persistent_operations_tasks_and_database_backups",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS operation_task (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL
+                    CHECK (task_type IN ('backtest', 'sync', 'backup')),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS database_backup (
+                backup_id VARCHAR PRIMARY KEY,
+                database_path VARCHAR NOT NULL,
+                backup_path VARCHAR NOT NULL UNIQUE,
+                size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+                sha256 VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
             """,
         ),
     ),

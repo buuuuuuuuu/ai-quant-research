@@ -9,6 +9,7 @@ from test_factor_backtest import _database
 from ai_quant_assistant.api.app import create_app
 from ai_quant_assistant.api.run_repository import BacktestRunRepository
 from ai_quant_assistant.config import Settings
+from ai_quant_assistant.storage.schema import SCHEMA_VERSION
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -76,7 +77,7 @@ def test_database_overview_exposes_counts_coverage_and_research_universe(tmp_pat
 
     assert response.status_code == 200
     overview = response.json()
-    assert overview["database"]["schema_version"] == 4
+    assert overview["database"]["schema_version"] == SCHEMA_VERSION
     assert overview["database"]["relations"]["security_master"] == 3
     assert {row["symbol"] for row in overview["securities"]} == {"600519", "000001", "300750"}
     securities = {row["symbol"]: row for row in overview["securities"]}

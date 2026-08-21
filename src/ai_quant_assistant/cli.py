@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -30,8 +31,15 @@ from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.financial_sync_service import FinancialDataSyncService
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.operations import (
+    DatabaseBackupService,
+    ExclusiveOperationLock,
+    IncrementalSyncService,
+    OperationsDashboard,
+)
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
+from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 
 
 def _date(value: str) -> date:
@@ -177,6 +185,20 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--refresh", action="store_true")
     backfill.add_argument("--data-dir", type=Path)
     backfill.add_argument("--duckdb-path", type=Path)
+
+    operations = subcommands.add_parser("ops", help="运行同步、备份与平台运维任务")
+    operation_commands = operations.add_subparsers(dest="ops_command", required=True)
+    operation_sync = operation_commands.add_parser("sync", help="增量更新行情、指数、公告与财务")
+    operation_sync.add_argument("--as-of", type=_date, default=date.today())
+    operation_sync.add_argument("--symbols", nargs="+")
+    operation_backup = operation_commands.add_parser("backup", help="创建一致性 DuckDB 备份")
+    operation_backup.add_argument("--backup-dir", type=Path)
+    operation_status = operation_commands.add_parser("status", help="查看同步、任务和备份状态")
+    operation_tasks = operation_commands.add_parser("tasks", help="查看持久化后台任务")
+    operation_tasks.add_argument("--limit", type=int, default=20)
+    for command in (operation_sync, operation_backup, operation_status, operation_tasks):
+        command.add_argument("--data-dir", type=Path)
+        command.add_argument("--duckdb-path", type=Path)
     return parser
 
 
@@ -320,6 +342,43 @@ def main() -> None:
             and payload["status"] == "failed"
         ):
             raise SystemExit(1)
+        return
+
+    if args.command == "ops":
+        if args.ops_command == "sync" and args.symbols:
+            settings = replace(settings, sync_symbols=tuple(args.symbols))
+        if args.ops_command == "backup" and args.backup_dir:
+            settings = replace(settings, backup_dir=args.backup_dir)
+        database = _local_database(args, settings)
+        tasks = OperationTaskRepository(database)
+        operation_lock = ExclusiveOperationLock(database.layout.root / ".operations.lock")
+        backup_service = DatabaseBackupService(
+            database=database,
+            backup_dir=settings.resolved_backup_dir,
+            tasks=tasks,
+            operation_lock=operation_lock,
+        )
+        if args.ops_command == "status":
+            payload = OperationsDashboard(database, tasks, backup_service).status()
+        elif args.ops_command == "tasks":
+            payload = {"tasks": tasks.list(limit=args.limit)}
+        elif args.ops_command == "backup":
+            payload = backup_service.run()
+        else:
+            provider = AkShareProvider(
+                cache_dir=settings.cache_dir,
+                retries=settings.akshare_retries,
+                timeout_seconds=settings.akshare_timeout_seconds,
+            )
+            service = IncrementalSyncService(
+                database=database,
+                settings=settings,
+                provider=provider,
+                tasks=tasks,
+                operation_lock=operation_lock,
+            )
+            payload = service.run(as_of=args.as_of)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
 
     if args.command == "backtest":

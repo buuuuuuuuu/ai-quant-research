@@ -40,6 +40,13 @@ except ImportError:  # pragma: no cover - Windows development fallback
 logger = logging.getLogger(__name__)
 
 
+def _accessible_regular_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 class ExclusiveOperationLock:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -408,7 +415,7 @@ class DatabaseBackupService:
                 "created_at": row[5].astimezone(UTC).isoformat()
                 if row[5].tzinfo is not None
                 else row[5].replace(tzinfo=UTC).isoformat(),
-                "exists": Path(row[2]).is_file(),
+                "exists": _accessible_regular_file(Path(row[2])),
                 "deleted_at": row[6].isoformat() if row[6] else None,
                 "deletion_reason": row[7],
             }

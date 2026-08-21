@@ -224,7 +224,9 @@ def test_backup_retention_does_not_remove_recent_files(tmp_path) -> None:
     assert len(backups.list()) == 3
 
 
-def test_backup_relocation_preserves_existing_backup_history_after_production_move(tmp_path) -> None:
+def test_backup_relocation_preserves_existing_backup_history_after_production_move(
+    tmp_path, monkeypatch
+) -> None:
     database, _, _, audit, _, _, backups = _services(tmp_path)
     created = backups.run()
     old_root = Path("/root/code/ai-quant-research/data/data")
@@ -235,6 +237,14 @@ def test_backup_relocation_preserves_existing_backup_history_after_production_mo
             [str(old_root / "catalog.duckdb"), str(old_path), created["backup_id"]],
         )
 
+    original_is_file = Path.is_file
+
+    def inaccessible_root(path: Path) -> bool:
+        if str(path).startswith(str(old_root)):
+            raise PermissionError("service account cannot enter /root")
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", inaccessible_root)
     result = backups.relocate(old_root)
 
     assert result["updated_count"] == 1

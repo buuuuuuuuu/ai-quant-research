@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from ai_quant_assistant.providers.normalization import (
     normalize_security_master,
     normalize_trading_calendar,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AkShareProvider:
@@ -203,24 +206,99 @@ class AkShareProvider:
             refresh=self.refresh,
         )
 
+    @staticmethod
+    def _industry_name(frame: pd.DataFrame) -> str:
+        if frame.empty:
+            raise ProviderError("endpoint returned no company information")
+        for column in ("所属行业", "行业", "所属证监会行业", "industry_name", "industry"):
+            if column in frame.columns:
+                candidates = frame[column]
+                break
+        else:
+            key = next(
+                (name for name in ("item", "项目", "指标", "字段") if name in frame.columns), None
+            )
+            value = next((name for name in ("value", "值", "内容") if name in frame.columns), None)
+            if key is None or value is None:
+                raise ProviderError(f"industry columns not found: {list(frame.columns)}")
+            matches = (
+                frame[key].astype(str).str.contains(r"行业|industry|ind_name", case=False, na=False)
+            )
+            candidates = frame.loc[matches, value]
+        for candidate in candidates:
+            if pd.notna(candidate):
+                industry = str(candidate).strip()
+                if industry and industry.lower() not in {"-", "--", "none", "null", "nan"}:
+                    return industry
+        raise ProviderError("company information contains no usable industry classification")
+
     def get_industry_snapshot(self, symbols: tuple[str, ...] = ()) -> pd.DataFrame:
         ak = self._akshare()
-        rows = []
+        rows: list[dict[str, str]] = []
+        failures: list[dict[str, object]] = []
+        fallback_count = 0
         for symbol in symbols:
-            try:
-                frame = ak.stock_individual_info_em(symbol=symbol)
-                key = next((name for name in ("item", "项目") if name in frame.columns), None)
-                value = next((name for name in ("value", "值") if name in frame.columns), None)
-                if key is None or value is None:
-                    continue
-                matches = frame.loc[frame[key].astype(str).str.contains("行业", na=False), value]
-                if not matches.empty and pd.notna(matches.iloc[0]):
-                    rows.append({"symbol": symbol, "industry_name": str(matches.iloc[0]).strip()})
-            except Exception:  # noqa: BLE001 - missing individual endpoint should not stop the batch
-                continue
+            attempts: list[dict[str, str]] = []
+            endpoints = (
+                (
+                    "akshare:stock_individual_info_em",
+                    lambda symbol=symbol: ak.stock_individual_info_em(
+                        symbol=symbol, timeout=self.timeout_seconds
+                    ),
+                ),
+                (
+                    "akshare:stock_profile_cninfo",
+                    lambda symbol=symbol: ak.stock_profile_cninfo(symbol=symbol),
+                ),
+                (
+                    "akshare:stock_individual_basic_info_xq",
+                    lambda symbol=symbol: ak.stock_individual_basic_info_xq(
+                        symbol=self._exchange_symbol(symbol).upper(),
+                        timeout=self.timeout_seconds,
+                    ),
+                ),
+            )
+            for index, (source, fetch) in enumerate(endpoints):
+                try:
+                    industry = self._industry_name(fetch())
+                    rows.append({"symbol": symbol, "industry_name": industry, "source": source})
+                    if index:
+                        fallback_count += 1
+                        logger.info("industry snapshot %s used fallback %s", symbol, source)
+                    break
+                except Exception as exc:  # noqa: BLE001 - external provider boundary
+                    attempts.append(
+                        {"source": source, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+            else:
+                failures.append({"symbol": symbol, "attempts": attempts})
+                logger.warning(
+                    "industry snapshot %s failed across all providers: %s",
+                    symbol,
+                    "; ".join(
+                        f"{item['source']}={item['error_type']}: {item['error']}"
+                        for item in attempts
+                    ),
+                )
         if symbols and not rows:
-            raise ProviderError("industry snapshot endpoint returned no classifications")
-        return pd.DataFrame(rows, columns=["symbol", "industry_name"])
+            detail = "; ".join(
+                f"{item['source']}={item['error_type']}: {item['error']}"
+                for item in failures[0]["attempts"]
+            )
+            raise ProviderError(
+                f"industry snapshot endpoints returned no classifications for "
+                f"{len(failures)}/{len(symbols)} symbols; {failures[0]['symbol']}: {detail}"
+            )
+        frame = pd.DataFrame(rows, columns=["symbol", "industry_name", "source"])
+        frame.attrs["diagnostics"] = {
+            "requested_symbols": len(symbols),
+            "successful_symbols": len(rows),
+            "failed_symbols": failures,
+            "provider_sources": sorted({item["source"] for item in rows}),
+            "provider_fallback_used": fallback_count > 0,
+            "provider_fallback_count": fallback_count,
+        }
+        return frame
 
     def get_index_constituent_snapshot(self, benchmark_symbol: str) -> pd.DataFrame:
         code = benchmark_symbol.removeprefix("csi").removeprefix("sh").removeprefix("sz")

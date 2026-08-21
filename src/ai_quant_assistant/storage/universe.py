@@ -106,6 +106,10 @@ class UniverseRepository:
                     security_id = securities.get(symbol)
                     if security_id is None:
                         continue
+                    row_source = item.get("source")
+                    row_source = (
+                        source if row_source is None or pd.isna(row_source) else str(row_source)
+                    )
                     effective_from = pd.Timestamp(item.get("effective_from", as_of)).date()
                     published = self._stamp(
                         item.get("published_at", datetime.combine(as_of, datetime.min.time()))
@@ -151,7 +155,7 @@ class UniverseRepository:
                                 published,
                                 observed,
                                 history_mode,
-                                source,
+                                row_source,
                                 batch_id,
                             ],
                         )
@@ -173,7 +177,7 @@ class UniverseRepository:
                                 observed,
                                 history_mode,
                                 weight,
-                                source,
+                                row_source,
                                 batch_id,
                             ],
                         )

@@ -460,7 +460,7 @@ def test_akshare_snapshots_are_normalized_without_claiming_historical_membership
 ) -> None:
     class Fake:
         @staticmethod
-        def stock_individual_info_em(symbol):
+        def stock_individual_info_em(symbol, timeout=None):
             return pd.DataFrame({"item": ["行业"], "value": ["白酒"]})
 
         @staticmethod
@@ -470,23 +470,159 @@ def test_akshare_snapshots_are_normalized_without_claiming_historical_membership
 
     monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
     provider = AkShareProvider(tmp_path / "cache")
-    assert provider.get_industry_snapshot(("600519",))["industry_name"].tolist() == ["白酒"]
+    industry = provider.get_industry_snapshot(("600519",))
+    assert industry["industry_name"].tolist() == ["白酒"]
+    assert industry["source"].tolist() == ["akshare:stock_individual_info_em"]
+    assert industry.attrs["diagnostics"]["provider_fallback_used"] is False
     assert set(provider.get_index_constituent_snapshot("csi000300")["symbol"]) == {
         "600519",
         "000001",
     }
 
 
+def test_industry_snapshot_falls_back_to_cninfo_and_preserves_actual_source(
+    tmp_path, monkeypatch
+) -> None:
+    class Fake:
+        @staticmethod
+        def stock_individual_info_em(symbol, timeout=None):
+            raise ConnectionError("eastmoney blocked")
+
+        @staticmethod
+        def stock_profile_cninfo(symbol):
+            return pd.DataFrame({"所属行业": ["酒、饮料和精制茶制造业"]})
+
+    monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
+    frame = AkShareProvider(tmp_path / "cache").get_industry_snapshot(("600519",))
+    assert frame["industry_name"].tolist() == ["酒、饮料和精制茶制造业"]
+    assert frame["source"].tolist() == ["akshare:stock_profile_cninfo"]
+    assert frame.attrs["diagnostics"]["provider_sources"] == ["akshare:stock_profile_cninfo"]
+    assert frame.attrs["diagnostics"]["provider_fallback_count"] == 1
+
+
+def test_industry_snapshot_falls_back_to_xueqiu_with_exchange_symbol(tmp_path, monkeypatch) -> None:
+    class Fake:
+        @staticmethod
+        def stock_individual_info_em(symbol, timeout=None):
+            return pd.DataFrame({"item": ["股票简称"], "value": ["贵州茅台"]})
+
+        @staticmethod
+        def stock_profile_cninfo(symbol):
+            raise TimeoutError("cninfo timeout")
+
+        @staticmethod
+        def stock_individual_basic_info_xq(symbol, timeout=None):
+            assert symbol == "SH600519"
+            return pd.DataFrame({"item": ["affiliate_industry"], "value": ["白酒"]})
+
+    monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
+    frame = AkShareProvider(tmp_path / "cache").get_industry_snapshot(("600519",))
+    assert frame["industry_name"].tolist() == ["白酒"]
+    assert frame["source"].tolist() == ["akshare:stock_individual_basic_info_xq"]
+
+
+def test_industry_snapshot_reports_partial_failures_without_losing_successes(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    class Fake:
+        @staticmethod
+        def stock_individual_info_em(symbol, timeout=None):
+            if symbol == "600519":
+                return pd.DataFrame({"item": ["行业"], "value": ["白酒"]})
+            raise ConnectionError("eastmoney unreachable")
+
+        @staticmethod
+        def stock_profile_cninfo(symbol):
+            raise TimeoutError("cninfo unavailable")
+
+        @staticmethod
+        def stock_individual_basic_info_xq(symbol, timeout=None):
+            raise PermissionError("xueqiu requires authentication")
+
+    monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
+    frame = AkShareProvider(tmp_path / "cache").get_industry_snapshot(("600519", "000001"))
+    diagnostics = frame.attrs["diagnostics"]
+    assert frame["symbol"].tolist() == ["600519"]
+    assert diagnostics["requested_symbols"] == 2
+    assert diagnostics["successful_symbols"] == 1
+    assert diagnostics["failed_symbols"][0]["symbol"] == "000001"
+    assert len(diagnostics["failed_symbols"][0]["attempts"]) == 3
+    assert "eastmoney unreachable" in caplog.text
+    assert "cninfo unavailable" in caplog.text
+
+
+def test_mixed_industry_sources_keep_per_security_lineage(tmp_path) -> None:
+    database = _database(tmp_path)
+    repository = UniverseRepository(database)
+    result = repository.store_industries(
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "600519",
+                    "industry_name": "白酒",
+                    "source": "akshare:stock_profile_cninfo",
+                },
+                {
+                    "symbol": "000001",
+                    "industry_name": "银行",
+                    "source": "akshare:stock_individual_info_em",
+                },
+            ]
+        ),
+        classification_system="provider",
+        history_mode="observed_snapshot",
+        as_of=date(2024, 3, 1),
+        source="akshare:mixed_industry_sources",
+    )
+    industry = repository.industries(("600519", "000001"), "2024-03-01 15:00:00")
+    assert result["source"] == "akshare:mixed_industry_sources"
+    assert dict(zip(industry["symbol"], industry["source"], strict=True)) == {
+        "000001": "akshare:stock_individual_info_em",
+        "600519": "akshare:stock_profile_cninfo",
+    }
+
+
+def test_live_snapshot_cli_displays_fallback_source_and_diagnostics(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    database = _database(tmp_path)
+    monkeypatch.setenv("AI_QUANT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("AI_QUANT_DUCKDB_PATH", str(tmp_path / "data" / "catalog.duckdb"))
+
+    class Fake:
+        @staticmethod
+        def stock_individual_info_em(symbol, timeout=None):
+            raise ConnectionError("eastmoney blocked")
+
+        @staticmethod
+        def stock_profile_cninfo(symbol):
+            return pd.DataFrame({"所属行业": ["白酒"]})
+
+    monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
+    monkeypatch.setattr(sys, "argv", ["ai-quant", "data", "sync-industries", "--symbols", "600519"])
+    main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source"] == "akshare:stock_profile_cninfo"
+    assert payload["diagnostics"]["provider_fallback_used"] is True
+    assert payload["diagnostics"]["provider_sources"] == ["akshare:stock_profile_cninfo"]
+    with database.connect(read_only=True) as connection:
+        source = connection.execute("SELECT source FROM security_industry_history").fetchone()[0]
+    assert source == "akshare:stock_profile_cninfo"
+
+
 def test_akshare_empty_industry_snapshot_is_not_published_as_success(tmp_path, monkeypatch) -> None:
     class Fake:
         @staticmethod
-        def stock_individual_info_em(symbol):
+        def stock_individual_info_em(symbol, timeout=None):
             raise RuntimeError("provider offline")
 
     monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(lambda: Fake()))
     provider = AkShareProvider(tmp_path / "cache")
-    with pytest.raises(ProviderError, match="no classifications"):
+    with pytest.raises(ProviderError, match="provider offline") as error:
         provider.get_industry_snapshot(("600519",))
+    assert "stock_individual_info_em" in str(error.value)
+    assert "stock_profile_cninfo" in str(error.value)
+    assert "stock_individual_basic_info_xq" in str(error.value)
 
 
 def test_factor_lab_domain_preserves_universe_and_industry_controls() -> None:

@@ -34,8 +34,11 @@ uv run ai-quant data sync-industries \
 uv run ai-quant data sync-constituents --benchmark csi000300
 ```
 
-行业来自 AkShare `stock_individual_info_em`；指数当前成员来自
-`index_stock_cons_csindex`。只写入本地证券主数据中已存在的股票；两者都会明确记录为
+行业优先来自 AkShare `stock_individual_info_em`；失败时逐只股票回退到巨潮资讯
+`stock_profile_cninfo`，再回退到雪球 `stock_individual_basic_info_xq`。同步结果会显示
+实际成功接口、是否使用备用源及仍然失败的证券；逐行数据血缘保留真实来源，不会把备用
+结果标记为东方财富。指数当前成员来自 `index_stock_cons_csindex`。
+只写入本地证券主数据中已存在的股票；两者都会明确记录为
 `observed_snapshot`，仅适用于观察日之后的前瞻研究，不能解释为历史指数成员。
 实时同步命令拒绝人为指定过去或未来的观察日期，防止通过 `--as-of` 伪造历史。
 

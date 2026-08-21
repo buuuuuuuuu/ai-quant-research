@@ -443,13 +443,23 @@ def main() -> None:
             if args.data_command == "sync-industries":
                 repository = UniverseRepository(database)
                 frame = provider.get_industry_snapshot(tuple(args.symbols))
+                diagnostics = frame.attrs.get("diagnostics", {})
+                sources = diagnostics.get("provider_sources", [])
+                source = (
+                    sources[0]
+                    if len(sources) == 1
+                    else "akshare:mixed_industry_sources"
+                    if len(sources) > 1
+                    else "akshare:stock_individual_info_em"
+                )
                 payload = repository.store_industries(
                     frame,
                     classification_system=args.classification_system,
                     history_mode="observed_snapshot",
                     as_of=args.as_of,
-                    source="akshare:stock_individual_info_em",
+                    source=source,
                 )
+                payload["diagnostics"] = diagnostics
             elif args.data_command == "sync-constituents":
                 repository = UniverseRepository(database)
                 frame = provider.get_index_constituent_snapshot(args.benchmark)

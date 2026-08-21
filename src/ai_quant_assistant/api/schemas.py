@@ -9,7 +9,9 @@ from ai_quant_assistant.domain.models import (
     DEFAULT_RESEARCH_SYMBOLS,
     BatchEventStudySpec,
     EventStudySpec,
+    FactorBacktestSpec,
 )
+from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 
 
 class InterimReportEventStudyRequest(BaseModel):
@@ -121,3 +123,64 @@ class BatchResearchRunResponse(BaseModel):
     runs: list[dict[str, Any]]
     failures: list[dict[str, Any]]
     artifacts: dict[str, str]
+
+
+class FactorBacktestRequest(BaseModel):
+    symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=1)
+    start_date: date = date(2015, 1, 1)
+    end_date: date = Field(default_factory=date.today)
+    factor: str = "roe"
+    factor_direction: Literal["asc", "desc"] = "desc"
+    top_n: int = Field(default=3, ge=1)
+    rebalance: Literal["monthly", "quarterly"] = "quarterly"
+    benchmark_symbol: str = "csi000300"
+    adjustment: Literal["none", "qfq", "hfq"] = "qfq"
+    initial_capital: float = Field(default=1_000_000.0, gt=0, le=1_000_000_000_000)
+    commission_bps: float = Field(default=5.0, ge=0, le=500)
+    slippage_bps: float = Field(default=5.0, ge=0, le=500)
+    stamp_duty_bps: float = Field(default=5.0, ge=0, le=500)
+    lot_size: int = Field(default=100, ge=1, le=100_000)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_backtest_symbols(cls, symbols: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(item.strip() for item in symbols))
+        if len(normalized) > 500:
+            raise ValueError("symbols must contain no more than 500 items")
+        if any(len(item) != 6 or not item.isdigit() for item in normalized):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return normalized
+
+    @field_validator("factor")
+    @classmethod
+    def validate_factor(cls, factor: str) -> str:
+        normalized = factor.strip().lower()
+        if normalized not in FINANCIAL_METRICS:
+            raise ValueError("factor must be a supported published financial metric")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_backtest_range(self) -> FactorBacktestRequest:
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be earlier than end_date")
+        if self.top_n > len(self.symbols):
+            raise ValueError("top_n must not exceed the number of symbols")
+        return self
+
+    def to_spec(self) -> FactorBacktestSpec:
+        return FactorBacktestSpec(
+            symbols=tuple(self.symbols),
+            start_date=self.start_date,
+            end_date=self.end_date,
+            factor=self.factor,
+            factor_direction=self.factor_direction,
+            top_n=self.top_n,
+            rebalance=self.rebalance,
+            benchmark_symbol=self.benchmark_symbol,
+            adjustment=self.adjustment,
+            initial_capital=self.initial_capital,
+            commission_bps=self.commission_bps,
+            slippage_bps=self.slippage_bps,
+            stamp_duty_bps=self.stamp_duty_bps,
+            lot_size=self.lot_size,
+        )

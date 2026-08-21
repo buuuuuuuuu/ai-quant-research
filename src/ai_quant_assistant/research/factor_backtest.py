@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.snapshots import write_json
 
 logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[int, str], None]
 
 
 class FactorBacktestService:
@@ -95,7 +97,16 @@ class FactorBacktestService:
             "final_value": float(nav["portfolio_value"].iloc[-1]),
         }
 
-    def run(self, spec: FactorBacktestSpec) -> dict[str, Any]:
+    def run(
+        self,
+        spec: FactorBacktestSpec,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        def progress(value: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(value, message)
+
+        progress(2, "正在验证本地数据库")
         if spec.factor not in FINANCIAL_METRICS:
             raise ValueError(f"unsupported factor: {spec.factor}")
         status = self.database.status()
@@ -117,6 +128,7 @@ class FactorBacktestService:
         )
         if prices.empty:
             raise ValueError("no published local stock prices cover the requested universe")
+        progress(15, "行情、基准和财务数据已就绪")
 
         calendar = benchmark["date"]
         calendar_dates = calendar.tolist()
@@ -143,7 +155,8 @@ class FactorBacktestService:
         blocked_reasons: Counter[str] = Counter()
         total_costs = 0.0
 
-        for current_date in calendar_dates:
+        last_progress = 15
+        for day_number, current_date in enumerate(calendar_dates, start=1):
             day = prices_by_date.get(current_date, pd.DataFrame())
             day_turnover = 0.0
             order = pending.pop(current_date, None)
@@ -370,6 +383,10 @@ class FactorBacktestService:
                         for row in selected.itertuples(index=False)
                     },
                 }
+            current_progress = 15 + int(day_number / len(calendar_dates) * 70)
+            if current_progress >= last_progress + 5:
+                last_progress = current_progress
+                progress(current_progress, f"正在回放交易日 {day_number}/{len(calendar_dates)}")
 
         nav = pd.DataFrame(nav_rows)
         nav["daily_return"] = nav["portfolio_nav"].pct_change().fillna(0.0)
@@ -422,6 +439,7 @@ class FactorBacktestService:
                 "suspension_detection": "missing bar or zero volume",
             },
         }
+        progress(90, "正在生成研究报告")
         artifacts = self.writer.write(
             run_dir,
             spec=spec.to_dict(),
@@ -447,4 +465,5 @@ class FactorBacktestService:
         manifest = run_dir / "run.json"
         payload["artifacts"]["run_manifest"] = str(manifest)
         write_json(manifest, payload)
+        progress(100, "回测完成")
         return payload

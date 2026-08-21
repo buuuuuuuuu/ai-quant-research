@@ -39,6 +39,7 @@ packages = ["src/ai_quant_assistant"]
 include = [
   "src/ai_quant_assistant/**/*.py",
   "src/ai_quant_assistant/reports/templates/*.j2",
+  "src/ai_quant_assistant/web/**/*",
 ]
 
 [tool.pytest.ini_options]
@@ -53,4 +54,3 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
-

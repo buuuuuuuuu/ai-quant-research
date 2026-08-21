@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A 股本地数据、财务因子选股与 Point-in-Time 组合回测工作台">
+  <title>澄明 · A 股研究工作台</title>
+  <link rel="stylesheet" href="/assets/workbench.css?v={{ version }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="澄明研究工作台首页">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>澄明</b><small>A 股研究工作台</small></span>
+    </a>
+    <nav aria-label="工具导航">
+      <a href="#backtest">新建回测</a>
+      <a href="#results">研究结果</a>
+      <a href="/docs" target="_blank" rel="noreferrer">API 文档</a>
+    </nav>
+    <div id="database-status" class="status-pill"><span></span>正在连接数据库</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">POINT-IN-TIME RESEARCH</p>
+        <h1>用本地数据，<br><em>跑清楚每个决定。</em></h1>
+        <p class="hero-copy">从真实披露时点出发，完成财务因子选股、组合回测和结果复盘。没有未来函数，没有模糊的数据来源。</p>
+      </div>
+      <div class="hero-note">
+        <span>研究纪律 01</span>
+        <strong>信号日 15:00 前公开</strong>
+        <p>财报修订只在真正公开后生效，下一交易日开盘执行。</p>
+      </div>
+    </section>
+
+    <section class="overview" aria-labelledby="overview-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">LOCAL DATA</p><h2 id="overview-title">数据库概览</h2></div>
+        <code id="database-path">正在读取数据库位置…</code>
+      </div>
+      <div class="metric-strip">
+        <article><span>研究股票</span><strong id="metric-securities">—</strong><small>只</small></article>
+        <article><span>已发布行情</span><strong id="metric-prices">—</strong><small>行</small></article>
+        <article><span>财务指标</span><strong id="metric-financials">—</strong><small>项</small></article>
+        <article><span>定期公告</span><strong id="metric-announcements">—</strong><small>条</small></article>
+      </div>
+      <div id="coverage-list" class="coverage-list" aria-live="polite"></div>
+    </section>
+
+    <section id="backtest" class="workspace-grid">
+      <form id="backtest-form" class="panel form-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">NEW RESEARCH</p><h2>配置财务因子回测</h2></div>
+          <span class="step-number">01</span>
+        </div>
+
+        <label class="field field-full">
+          <span>股票池 <small>空格或换行分隔，最多 500 只</small></span>
+          <textarea id="symbols" rows="4" required>600519 000001 601318 000858 600036 000333 600276 601888 002594 300750</textarea>
+        </label>
+
+        <div class="form-grid">
+          <label class="field"><span>开始日期</span><input id="start-date" type="date" value="2015-01-01" required></label>
+          <label class="field"><span>结束日期</span><input id="end-date" type="date" value="2025-12-31" required></label>
+          <label class="field"><span>财务因子</span><select id="factor">{% for factor in factors %}<option value="{{ factor.code }}"{% if factor.code == "roe" %} selected{% endif %}>{{ factor.label }} · {{ factor.code }}</option>{% endfor %}</select></label>
+          <label class="field"><span>排序方向</span><select id="factor-direction"><option value="desc">高值优先</option><option value="asc">低值优先</option></select></label>
+          <label class="field"><span>持仓数量</span><input id="top-n" type="number" value="3" min="1" max="500" required></label>
+          <label class="field"><span>调仓频率</span><select id="rebalance"><option value="quarterly">按季度</option><option value="monthly">按月</option></select></label>
+          <label class="field"><span>复权口径</span><select id="adjustment"><option value="qfq">前复权</option><option value="hfq">后复权</option><option value="none">不复权</option></select></label>
+          <label class="field"><span>初始资金</span><input id="initial-capital" type="number" value="1000000" min="1" step="10000" required></label>
+        </div>
+
+        <details class="cost-settings">
+          <summary>交易成本与执行参数</summary>
+          <div class="form-grid">
+            <label class="field"><span>佣金（bp）</span><input id="commission-bps" type="number" value="5" min="0" max="500" step="0.1"></label>
+            <label class="field"><span>滑点（bp）</span><input id="slippage-bps" type="number" value="5" min="0" max="500" step="0.1"></label>
+            <label class="field"><span>卖出印花税（bp）</span><input id="stamp-duty-bps" type="number" value="5" min="0" max="500" step="0.1"></label>
+            <label class="field"><span>买入整手</span><input id="lot-size" type="number" value="100" min="1"></label>
+          </div>
+        </details>
+
+        <div class="form-footer">
+          <p>显式股票池不代表历史指数成分，结果存在幸存者偏差风险。</p>
+          <button id="submit-backtest" class="primary-button" type="submit"><span>开始回测</span><b aria-hidden="true">↗</b></button>
+        </div>
+        <div id="form-error" class="error-message" role="alert" hidden></div>
+      </form>
+
+      <aside class="panel history-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">RUN ARCHIVE</p><h2>历史研究</h2></div>
+          <button id="refresh-history" class="icon-button" type="button" aria-label="刷新历史记录">↻</button>
+        </div>
+        <div id="history-list" class="history-list"><p class="empty-state">正在读取历史研究…</p></div>
+      </aside>
+    </section>
+
+    <section id="task-progress" class="task-progress" hidden aria-live="polite">
+      <div><span id="task-state">任务已提交</span><strong id="task-percent">0%</strong></div>
+      <div class="progress-track"><i id="progress-bar"></i></div>
+      <p id="task-message">正在等待后台执行</p>
+    </section>
+
+    <section id="results" class="results-section" hidden>
+      <div class="section-heading result-heading">
+        <div><p class="eyebrow">RESEARCH OUTPUT</p><h2>策略表现</h2><p id="result-subtitle" class="muted"></p></div>
+        <div id="result-actions" class="result-actions"></div>
+      </div>
+      <div id="result-metrics" class="result-metrics"></div>
+
+      <article class="panel chart-panel">
+        <div class="chart-heading"><div><h3>净值走势</h3><p>策略组合与沪深 300 基准</p></div><div class="chart-legend"><span class="strategy-dot">策略</span><span class="benchmark-dot">基准</span></div></div>
+        <div id="nav-chart" class="nav-chart" role="img" aria-label="策略与基准净值曲线"></div>
+      </article>
+
+      <article class="panel detail-panel">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="trades" role="tab">交易明细</button>
+          <button class="tab" data-tab="positions" role="tab">持仓明细</button>
+          <button class="tab" data-tab="selections" role="tab">因子选择</button>
+        </div>
+        <div class="table-shell"><table><thead id="detail-head"></thead><tbody id="detail-body"></tbody></table></div>
+      </article>
+    </section>
+  </main>
+
+  <footer><span>澄明 A 股研究工作台 · v{{ version }}</span><span>仅供量化研究，不构成投资建议</span></footer>
+  <script src="/assets/workbench.js?v={{ version }}" defer></script>
+</body>
+</html>

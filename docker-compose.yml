@@ -2,7 +2,7 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       AI_QUANT_ARTIFACT_DIR: /app/artifacts
       AI_QUANT_CACHE_DIR: /app/data/cache
@@ -27,4 +27,3 @@ services:
 
 volumes:
   postgres-data:
-

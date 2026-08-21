@@ -471,3 +471,123 @@ class LocalDatabase:
                 for row in latest.itertuples(index=False)
             },
         }
+
+    def read_factor_snapshot(
+        self, symbols: tuple[str, ...], factor: str, as_of: Any
+    ) -> pd.DataFrame:
+        columns = [
+            "symbol",
+            "security_id",
+            "name",
+            "list_date",
+            "factor_value",
+            "report_period_end",
+            "report_type",
+            "published_at",
+            "availability_source",
+            "provider_source",
+            "source_batch_id",
+        ]
+        if not self.path.is_file() or not symbols:
+            return pd.DataFrame(columns=columns)
+        cutoff = pd.Timestamp(as_of).to_pydatetime()
+        placeholders = ", ".join("?" for _ in symbols)
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                f"""
+                WITH ranked_reports AS (
+                    SELECT security.symbol, security.security_id, security.name,
+                           security.list_date, metric.metric_value AS factor_value,
+                           report.report_period_end, report.report_type, report.published_at,
+                           report.availability_source, report.source AS provider_source,
+                           report.source_batch_id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY security.security_id
+                               ORDER BY report.report_period_end DESC,
+                                        report.published_at DESC, report.observed_at DESC
+                           ) AS report_rank
+                    FROM published_financial_report AS report
+                    JOIN published_financial_metric AS metric
+                      ON metric.report_id = report.report_id
+                    JOIN security_master AS security
+                      ON security.security_id = report.security_id
+                    WHERE security.symbol IN ({placeholders})
+                      AND metric.metric_code = ?
+                      AND report.published_at < ?
+                      AND (security.list_date IS NULL OR security.list_date <= CAST(? AS DATE))
+                      AND (security.delist_date IS NULL OR security.delist_date >= CAST(? AS DATE))
+                )
+                SELECT symbol, security_id, name, list_date, factor_value,
+                       report_period_end, report_type, published_at,
+                       availability_source, provider_source, source_batch_id
+                FROM ranked_reports
+                WHERE report_rank = 1
+                ORDER BY symbol
+                """,
+                [*symbols, factor, cutoff, cutoff, cutoff],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["report_period_end"] = pd.to_datetime(frame["report_period_end"]).dt.normalize()
+        frame["published_at"] = pd.to_datetime(frame["published_at"])
+        return frame[columns]
+
+    def read_backtest_prices(
+        self, symbols: tuple[str, ...], start_date: Any, end_date: Any, adjustment: str
+    ) -> pd.DataFrame:
+        columns = [
+            "symbol",
+            "security_id",
+            "exchange",
+            "list_date",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "unadjusted_open",
+            "unadjusted_high",
+            "unadjusted_low",
+            "unadjusted_close",
+            "previous_unadjusted_close",
+            "source_batch_id",
+        ]
+        if not self.path.is_file() or not symbols:
+            return pd.DataFrame(columns=columns)
+        placeholders = ", ".join("?" for _ in symbols)
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                f"""
+                WITH selected_bars AS (
+                    SELECT security.symbol, security.security_id, security.exchange,
+                           security.list_date, bar.trade_date AS date,
+                           bar.open, bar.high, bar.low, bar.close, bar.volume,
+                           COALESCE(raw.open, bar.open) AS unadjusted_open,
+                           COALESCE(raw.high, bar.high) AS unadjusted_high,
+                           COALESCE(raw.low, bar.low) AS unadjusted_low,
+                           COALESCE(raw.close, bar.close) AS unadjusted_close,
+                           LAG(COALESCE(raw.close, bar.close)) OVER (
+                               PARTITION BY security.security_id ORDER BY bar.trade_date
+                           ) AS previous_unadjusted_close,
+                           bar.source_batch_id
+                    FROM published_daily_bar AS bar
+                    JOIN security_master AS security USING (security_id)
+                    LEFT JOIN published_daily_bar AS raw
+                      ON raw.security_id = bar.security_id
+                     AND raw.trade_date = bar.trade_date
+                     AND raw.adjustment = 'none'
+                    WHERE security.symbol IN ({placeholders})
+                      AND bar.adjustment = ?
+                      AND bar.trade_date <= ?
+                )
+                SELECT * FROM selected_bars
+                WHERE date >= ?
+                ORDER BY date, symbol
+                """,
+                [*symbols, adjustment, end_date, start_date],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        return frame[columns]

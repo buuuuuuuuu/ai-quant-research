@@ -142,6 +142,37 @@ uv run ai-quant batch-event-study \
 财务特征、失败股票列表、四工作表 Excel、HTML 报告和批次清单。单只股票失败不会中断
 其他股票；返回状态为 `succeeded`、`partial` 或 `failed`。
 
+## 财务因子选股与组合回测（M3-A）
+
+已有本地股票行情、沪深 300 和 Point-in-Time 财务指标后，可以直接运行组合回测：
+
+```bash
+uv run ai-quant backtest \
+  --source local \
+  --symbols 600519 000001 601318 000858 600036 000333 600276 601888 002594 300750 \
+  --start-date 2015-01-01 \
+  --end-date 2025-12-31 \
+  --factor roe \
+  --top-n 3 \
+  --rebalance quarterly \
+  --benchmark csi000300 \
+  --adjustment qfq
+```
+
+因子可选 `roe`、`revenue_yoy`、`parent_net_profit_yoy`、`gross_margin`、`net_margin`、
+`debt_asset_ratio` 等已发布财务指标。默认按因子从高到低排序；负债率等低值优先指标可
+增加 `--factor-direction asc`。支持 `--rebalance monthly`、自定义初始资金，以及
+`--commission-bps`、`--slippage-bps`、`--stamp-duty-bps` 和 `--lot-size`。
+
+每次调仓只允许读取信号日 15:00 之前真正公开的财报，下一基准交易日开盘执行，使用
+等权组合、100 股整数买入、T+1、停牌和一字涨跌停约束。研究输出累计/年化收益、最大
+回撤、夏普比率、相对沪深 300 超额收益，以及净值、订单、逐日持仓、财务因子选择的
+CSV、五工作表 Excel、HTML 净值报告和运行清单，统一写入
+`artifacts/backtests/<run_id>/`。
+
+股票池仅代表显式研究样本，不代表任何时点的真实指数成分；不能将当前股票池的回测结果
+解释为无幸存者偏差的全市场策略收益。
+
 事件研究的 `diagnostics.data_sources` 和 HTML 报告会分别显示股票、基准、公告的服务
 来源、底层 Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据
 对应的同步批次。三类研究快照均保留 `provider_source`、`source_batch_id` 和 `raw_path`，
@@ -172,6 +203,7 @@ uv run ai-quant data status
 
 - `docs/data-platform-architecture.md`
 - `docs/data-dictionary.md`
+- `docs/factor-backtest.md`
 
 ## Ubuntu 快速启动
 

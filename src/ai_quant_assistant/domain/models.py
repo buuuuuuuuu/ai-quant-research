@@ -276,6 +276,59 @@ class BatchEventStudySpec:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class FactorBacktestSpec:
+    symbols: tuple[str, ...]
+    start_date: date
+    end_date: date
+    factor: str = "roe"
+    top_n: int = 3
+    rebalance: str = "quarterly"
+    benchmark_symbol: str = "csi000300"
+    adjustment: str = "qfq"
+    factor_direction: str = "desc"
+    initial_capital: float = 1_000_000.0
+    commission_bps: float = 5.0
+    slippage_bps: float = 5.0
+    stamp_duty_bps: float = 5.0
+    lot_size: int = 100
+
+    def __post_init__(self) -> None:
+        symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
+        if not symbols or any(len(item) != 6 or not item.isdigit() for item in symbols):
+            raise ValueError("symbols must contain at least one six-digit A-share code")
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be earlier than end_date")
+        if not self.factor.strip():
+            raise ValueError("factor must not be empty")
+        if self.top_n < 1 or self.top_n > len(symbols):
+            raise ValueError("top_n must be between one and the number of requested symbols")
+        if self.rebalance not in {"monthly", "quarterly"}:
+            raise ValueError("rebalance must be monthly or quarterly")
+        if self.adjustment not in {"qfq", "hfq", "none"}:
+            raise ValueError("adjustment must be qfq, hfq, or none")
+        if self.factor_direction not in {"asc", "desc"}:
+            raise ValueError("factor_direction must be asc or desc")
+        if self.initial_capital <= 0:
+            raise ValueError("initial_capital must be positive")
+        if min(self.commission_bps, self.slippage_bps, self.stamp_duty_bps) < 0:
+            raise ValueError("transaction cost basis points must be non-negative")
+        if self.lot_size < 1:
+            raise ValueError("lot_size must be positive")
+        object.__setattr__(self, "symbols", symbols)
+        object.__setattr__(self, "factor", self.factor.strip().lower())
+        object.__setattr__(
+            self, "benchmark_symbol", normalize_benchmark_symbol(self.benchmark_symbol)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["symbols"] = list(self.symbols)
+        payload["start_date"] = self.start_date.isoformat()
+        payload["end_date"] = self.end_date.isoformat()
+        return payload
+
+
 @dataclass(slots=True)
 class EventStudyResult:
     spec: EventStudySpec

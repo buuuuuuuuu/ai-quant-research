@@ -10,6 +10,8 @@ from ai_quant_assistant.domain.models import (
     BatchEventStudySpec,
     EventStudySpec,
     FactorBacktestSpec,
+    FactorComponent,
+    FactorLabSpec,
 )
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 
@@ -188,6 +190,96 @@ class FactorBacktestRequest(BaseModel):
 
 class IncrementalSyncRequest(BaseModel):
     as_of: date = Field(default_factory=date.today)
+
+
+class FactorComponentRequest(BaseModel):
+    code: str
+    weight: float = Field(default=1.0, gt=0, le=1_000)
+    direction: Literal["asc", "desc"] = "desc"
+
+    @field_validator("code")
+    @classmethod
+    def validate_factor_code(cls, value: str) -> str:
+        code = value.strip().lower()
+        if code not in FINANCIAL_METRICS:
+            raise ValueError("factor must be a supported published financial metric")
+        return code
+
+    def to_component(self) -> FactorComponent:
+        return FactorComponent(code=self.code, weight=self.weight, direction=self.direction)
+
+
+class FactorLabRequest(BaseModel):
+    symbols: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=2, max_length=500
+    )
+    start_date: date = date(2015, 1, 1)
+    end_date: date = Field(default_factory=date.today)
+    factors: list[FactorComponentRequest] = Field(
+        default_factory=lambda: [
+            FactorComponentRequest(code="roe"),
+            FactorComponentRequest(code="debt_asset_ratio", direction="asc"),
+        ],
+        min_length=1,
+        max_length=12,
+    )
+    top_n_values: list[int] = Field(default_factory=lambda: [3], min_length=1, max_length=12)
+    rebalance_values: list[Literal["monthly", "quarterly"]] = Field(
+        default_factory=lambda: ["quarterly"], min_length=1, max_length=2
+    )
+    commission_bps_values: list[float] = Field(
+        default_factory=lambda: [5.0], min_length=1, max_length=8
+    )
+    quantiles: int = Field(default=5, ge=2, le=10)
+    benchmark_symbol: str = "csi000300"
+    adjustment: Literal["none", "qfq", "hfq"] = "qfq"
+    initial_capital: float = Field(default=1_000_000.0, gt=0, le=1_000_000_000_000)
+    slippage_bps: float = Field(default=5.0, ge=0, le=500)
+    stamp_duty_bps: float = Field(default=5.0, ge=0, le=500)
+    lot_size: int = Field(default=100, ge=1, le=100_000)
+    missing_policy: Literal["exclude", "available"] = "exclude"
+    training_fraction: float = Field(default=0.6, gt=0, lt=1)
+    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
+    walk_forward_folds: int = Field(default=3, ge=1, le=12)
+    max_combinations: int = Field(default=48, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_lab(self) -> FactorLabRequest:
+        self.to_spec()
+        count = (
+            (len(self.factors) + (1 if len(self.factors) > 1 else 0))
+            * len(set(self.top_n_values))
+            * len(set(self.rebalance_values))
+            * len(set(self.commission_bps_values))
+        )
+        if count > self.max_combinations:
+            raise ValueError(
+                f"parameter grid contains {count} combinations, exceeding max_combinations={self.max_combinations}"
+            )
+        return self
+
+    def to_spec(self) -> FactorLabSpec:
+        return FactorLabSpec(
+            symbols=tuple(self.symbols),
+            start_date=self.start_date,
+            end_date=self.end_date,
+            factors=tuple(item.to_component() for item in self.factors),
+            top_n_values=tuple(self.top_n_values),
+            rebalance_values=tuple(self.rebalance_values),
+            commission_bps_values=tuple(self.commission_bps_values),
+            quantiles=self.quantiles,
+            benchmark_symbol=self.benchmark_symbol,
+            adjustment=self.adjustment,
+            initial_capital=self.initial_capital,
+            slippage_bps=self.slippage_bps,
+            stamp_duty_bps=self.stamp_duty_bps,
+            lot_size=self.lot_size,
+            missing_policy=self.missing_policy,
+            training_fraction=self.training_fraction,
+            validation_fraction=self.validation_fraction,
+            walk_forward_folds=self.walk_forward_folds,
+            max_combinations=self.max_combinations,
+        )
 
 
 class BackupRestoreRequest(BaseModel):

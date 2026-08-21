@@ -16,13 +16,14 @@ from ai_quant_assistant.ai.tool_registry import require_allowed_tool
 from ai_quant_assistant.api.auth import SESSION_COOKIE, WebAuthenticator, safe_next_path
 from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
-from ai_quant_assistant.api.run_repository import BacktestRunRepository
+from ai_quant_assistant.api.run_repository import BacktestRunRepository, FactorLabRunRepository
 from ai_quant_assistant.api.schemas import (
     BackupPruneRequest,
     BackupRestoreRequest,
     BatchInterimReportEventStudyRequest,
     BatchResearchRunResponse,
     FactorBacktestRequest,
+    FactorLabRequest,
     IncrementalSyncRequest,
     InterimReportEventStudyRequest,
     ResearchRunResponse,
@@ -36,6 +37,7 @@ from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
+from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
@@ -126,6 +128,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task_repository,
         operation_lock,
     )
+    factor_lab_repository = FactorLabRunRepository(resolved_settings.artifact_dir)
+    factor_lab_manager = BacktestTaskManager(
+        FactorLabService(database=database, artifact_dir=resolved_settings.artifact_dir),
+        task_repository,
+        operation_lock,
+        max_workers=1,
+        task_type="factor_lab",
+    )
     web_root = Path(__file__).resolve().parents[1] / "web"
     templates = Jinja2Templates(directory=web_root / "templates")
 
@@ -133,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         yield
         task_manager.shutdown()
+        factor_lab_manager.shutdown()
         operation_manager.shutdown()
 
     app = FastAPI(
@@ -144,6 +155,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.database = database
     app.state.backtest_tasks = task_manager
     app.state.backtest_runs = run_repository
+    app.state.factor_lab_tasks = factor_lab_manager
+    app.state.factor_lab_runs = factor_lab_repository
     app.state.operation_tasks = operation_manager
     app.state.task_repository = task_repository
     app.state.backup_service = backup_service
@@ -277,6 +290,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "docs": "/docs",
             "workbench": "/",
             "backtests": "/api/v1/backtests",
+            "factor_lab": "/api/v1/factor-lab",
         }
 
     @app.get("/health")
@@ -352,9 +366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/ops/backups/prune")
     def prune_database_backups(request: BackupPruneRequest) -> dict[str, Any]:
-        return backup_service.prune(
-            dry_run=not request.apply, actor=resolved_settings.web_username
-        )
+        return backup_service.prune(dry_run=not request.apply, actor=resolved_settings.web_username)
 
     @app.get("/api/v1/ops/alerts")
     def list_operation_alerts(active_only: bool = True) -> list[dict[str, Any]]:
@@ -434,6 +446,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             path, _ = run_repository.file(run_id, "report.html")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="backtest report not found") from exc
+        return FileResponse(path, media_type="text/html")
+
+    @app.post("/api/v1/factor-lab", status_code=202)
+    def create_factor_lab(request: FactorLabRequest) -> dict[str, Any]:
+        task = factor_lab_manager.submit(request.to_spec())
+        audit_repository.record(
+            "factor_lab_requested",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task["task_id"],
+            details={"factor_count": len(request.factors), "symbol_count": len(request.symbols)},
+        )
+        return task
+
+    @app.get("/api/v1/factor-lab")
+    def list_factor_lab_tasks() -> list[dict[str, Any]]:
+        return factor_lab_manager.list()
+
+    @app.get("/api/v1/factor-lab/{task_id}")
+    def get_factor_lab_task(task_id: str) -> dict[str, Any]:
+        try:
+            return factor_lab_manager.get(task_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="factor lab task not found") from exc
+
+    @app.get("/api/v1/factor-lab-runs")
+    def list_factor_lab_runs() -> list[dict[str, Any]]:
+        return factor_lab_repository.list()
+
+    @app.get("/api/v1/factor-lab-runs/{run_id}")
+    def get_factor_lab_run(run_id: str) -> dict[str, Any]:
+        try:
+            return factor_lab_repository.detail(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="factor lab run not found") from exc
+
+    @app.get("/api/v1/factor-lab-runs/{run_id}/downloads/{filename}")
+    def download_factor_lab_file(run_id: str, filename: str) -> FileResponse:
+        try:
+            path, media_type = factor_lab_repository.file(run_id, filename)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="factor lab artifact not found") from exc
+        return FileResponse(path, media_type=media_type, filename=f"{run_id}-{filename}")
+
+    @app.get("/reports/factor-lab/{run_id}", include_in_schema=False)
+    def factor_lab_report(run_id: str) -> FileResponse:
+        try:
+            path, _ = factor_lab_repository.file(run_id, "report.html")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="factor lab report not found") from exc
         return FileResponse(path, media_type="text/html")
 
     @app.post(

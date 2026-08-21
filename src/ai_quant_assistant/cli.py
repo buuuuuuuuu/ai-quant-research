@@ -17,6 +17,8 @@ from ai_quant_assistant.domain.models import (
     DataSyncSpec,
     EventStudySpec,
     FactorBacktestSpec,
+    FactorComponent,
+    FactorLabSpec,
     FinancialSyncSpec,
     ResearchBackfillSpec,
 )
@@ -26,6 +28,7 @@ from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
+from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
@@ -96,6 +99,33 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--stamp-duty-bps", type=float, default=5.0)
     backtest.add_argument("--lot-size", type=int, default=100)
     backtest.add_argument("--artifact-dir", type=Path)
+
+    lab = subcommands.add_parser("factor-lab", help="运行多因子研究、IC 分析与样本外参数扫描")
+    lab.add_argument("--source", choices=["local"], default="local")
+    lab.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    lab.add_argument("--start-date", type=_date, required=True)
+    lab.add_argument("--end-date", type=_date, default=date.today())
+    lab.add_argument(
+        "--factors", nargs="+", required=True, help="因子格式：roe:1:desc debt_asset_ratio:1:asc"
+    )
+    lab.add_argument("--top-n-values", nargs="+", type=int, default=[3])
+    lab.add_argument(
+        "--rebalance-values", nargs="+", choices=["monthly", "quarterly"], default=["quarterly"]
+    )
+    lab.add_argument("--commission-bps-values", nargs="+", type=float, default=[5.0])
+    lab.add_argument("--quantiles", type=int, default=5)
+    lab.add_argument("--benchmark", default="csi000300")
+    lab.add_argument("--adjustment", choices=["none", "qfq", "hfq"], default="qfq")
+    lab.add_argument("--initial-capital", type=float, default=1_000_000.0)
+    lab.add_argument("--slippage-bps", type=float, default=5.0)
+    lab.add_argument("--stamp-duty-bps", type=float, default=5.0)
+    lab.add_argument("--lot-size", type=int, default=100)
+    lab.add_argument("--missing-policy", choices=["exclude", "available"], default="exclude")
+    lab.add_argument("--training-fraction", type=float, default=0.6)
+    lab.add_argument("--validation-fraction", type=float, default=0.2)
+    lab.add_argument("--walk-forward-folds", type=int, default=3)
+    lab.add_argument("--max-combinations", type=int, default=48)
+    lab.add_argument("--artifact-dir", type=Path)
 
     data = subcommands.add_parser("data", help="初始化和检查 A 股本地数据库")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -468,6 +498,51 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         if args.ops_command == "check" and args.fail_on_alert and payload["active_count"]:
             raise SystemExit(1)
+        return
+
+    if args.command == "factor-lab":
+        components = []
+        for definition in args.factors:
+            parts = definition.split(":")
+            if len(parts) > 3 or not parts[0]:
+                raise SystemExit(
+                    f"invalid factor definition: {definition}; expected code[:weight[:direction]]"
+                )
+            components.append(
+                FactorComponent(
+                    code=parts[0],
+                    weight=float(parts[1]) if len(parts) > 1 else 1.0,
+                    direction=parts[2] if len(parts) > 2 else "desc",
+                )
+            )
+        database = LocalDatabase(
+            path=settings.duckdb_path, layout=DataLayout.from_root(settings.data_dir)
+        )
+        service = FactorLabService(
+            database=database, artifact_dir=args.artifact_dir or settings.artifact_dir
+        )
+        spec = FactorLabSpec(
+            symbols=tuple(args.symbols),
+            start_date=args.start_date,
+            end_date=args.end_date,
+            factors=tuple(components),
+            top_n_values=tuple(args.top_n_values),
+            rebalance_values=tuple(args.rebalance_values),
+            commission_bps_values=tuple(args.commission_bps_values),
+            quantiles=args.quantiles,
+            benchmark_symbol=args.benchmark,
+            adjustment=args.adjustment,
+            initial_capital=args.initial_capital,
+            slippage_bps=args.slippage_bps,
+            stamp_duty_bps=args.stamp_duty_bps,
+            lot_size=args.lot_size,
+            missing_policy=args.missing_policy,
+            training_fraction=args.training_fraction,
+            validation_fraction=args.validation_fraction,
+            walk_forward_folds=args.walk_forward_folds,
+            max_combinations=args.max_combinations,
+        )
+        print(json.dumps(service.run(spec), ensure_ascii=False, indent=2, default=str))
         return
 
     if args.command == "backtest":

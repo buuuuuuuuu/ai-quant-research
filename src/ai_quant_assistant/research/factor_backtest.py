@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from collections.abc import Callable
@@ -32,6 +33,92 @@ class FactorBacktestService:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         return f"factor-backtest-{timestamp}-{uuid4().hex[:8]}"
 
+    def factor_snapshot(self, spec: FactorBacktestSpec, as_of: Any) -> pd.DataFrame:
+        if not spec.factors:
+            return self.database.read_factor_snapshot(spec.symbols, spec.factor, as_of)
+        snapshots: list[pd.DataFrame] = []
+        for component in spec.factors:
+            current = self.database.read_factor_snapshot(spec.symbols, component.code, as_of)
+            if current.empty:
+                current = current.copy()
+            current = current.rename(columns={"factor_value": component.code})
+            keep = [
+                "symbol",
+                component.code,
+                "report_period_end",
+                "report_type",
+                "published_at",
+                "availability_source",
+                "source_batch_id",
+            ]
+            snapshots.append(current[keep])
+        if not snapshots or (
+            spec.missing_policy == "exclude" and any(frame.empty for frame in snapshots)
+        ):
+            return pd.DataFrame(
+                columns=[
+                    "symbol",
+                    "factor_value",
+                    "report_period_end",
+                    "report_type",
+                    "published_at",
+                    "availability_source",
+                    "source_batch_id",
+                    "component_values",
+                ]
+            )
+        metadata = [
+            "report_period_end",
+            "report_type",
+            "published_at",
+            "availability_source",
+            "source_batch_id",
+        ]
+        result = snapshots[0][["symbol", spec.factors[0].code]].copy()
+        for frame in snapshots[1:]:
+            result = result.merge(
+                frame.drop(columns=metadata),
+                on="symbol",
+                how="inner" if spec.missing_policy == "exclude" else "outer",
+            )
+        if result.empty:
+            result["factor_value"] = pd.Series(dtype=float)
+            return result
+        available_metadata = [
+            frame[["symbol", *metadata]] for frame in snapshots if not frame.empty
+        ]
+        lineage = (
+            pd.concat(available_metadata, ignore_index=True)
+            .sort_values(["symbol", "published_at", "report_period_end"])
+            .drop_duplicates("symbol", keep="last")
+        )
+        result = result.merge(lineage, on="symbol", how="left")
+        scores = pd.DataFrame(index=result.index)
+        weights = pd.DataFrame(index=result.index)
+        for component in spec.factors:
+            values = pd.to_numeric(result[component.code], errors="coerce")
+            percentile = values.rank(
+                pct=True, method="average", ascending=component.direction == "desc"
+            )
+            scores[component.code] = percentile * component.weight
+            weights[component.code] = values.notna().astype(float) * component.weight
+        total_weight = weights.sum(axis=1)
+        result["factor_value"] = scores.fillna(0).sum(axis=1).div(total_weight.replace(0, np.nan))
+        result = result.dropna(subset=["factor_value"])
+        result["component_values"] = result.apply(
+            lambda row: json.dumps(
+                {
+                    component.code: None
+                    if pd.isna(row[component.code])
+                    else float(row[component.code])
+                    for component in spec.factors
+                },
+                ensure_ascii=False,
+            ),
+            axis=1,
+        )
+        return result
+
     @staticmethod
     def _rebalance_dates(calendar: pd.Series, frequency: str) -> list[pd.Timestamp]:
         frame = pd.DataFrame({"date": pd.to_datetime(calendar).dt.normalize()})
@@ -56,14 +143,12 @@ class FactorBacktestService:
         upper = float(previous) * (1.0 + limit)
         lower = float(previous) * (1.0 - limit)
         tolerance = 0.002
-        one_price_up = (
-            float(row.unadjusted_low) >= upper * (1.0 - tolerance)
-            and float(row.unadjusted_high) >= upper * (1.0 - tolerance)
-        )
-        one_price_down = (
-            float(row.unadjusted_high) <= lower * (1.0 + tolerance)
-            and float(row.unadjusted_low) <= lower * (1.0 + tolerance)
-        )
+        one_price_up = float(row.unadjusted_low) >= upper * (1.0 - tolerance) and float(
+            row.unadjusted_high
+        ) >= upper * (1.0 - tolerance)
+        one_price_down = float(row.unadjusted_high) <= lower * (1.0 + tolerance) and float(
+            row.unadjusted_low
+        ) <= lower * (1.0 + tolerance)
         return one_price_up, one_price_down
 
     @staticmethod
@@ -107,7 +192,10 @@ class FactorBacktestService:
                 progress_callback(value, message)
 
         progress(2, "正在验证本地数据库")
-        if spec.factor not in FINANCIAL_METRICS:
+        unsupported = [item.code for item in spec.factors if item.code not in FINANCIAL_METRICS]
+        if unsupported:
+            raise ValueError(f"unsupported factors: {', '.join(unsupported)}")
+        if not spec.factors and spec.factor not in FINANCIAL_METRICS:
             raise ValueError(f"unsupported factor: {spec.factor}")
         status = self.database.status()
         if status.get("schema_version", 0) < 4:
@@ -268,9 +356,12 @@ class FactorBacktestService:
                             }
                         )
                         continue
-                    affordable = int(
-                        cash / (price * (1.0 + commission_rate + slippage_rate)) / spec.lot_size
-                    ) * spec.lot_size
+                    affordable = (
+                        int(
+                            cash / (price * (1.0 + commission_rate + slippage_rate)) / spec.lot_size
+                        )
+                        * spec.lot_size
+                    )
                     quantity = min(quantity, affordable)
                     if quantity <= 0:
                         blocked_reasons["insufficient_cash_or_round_lot"] += 1
@@ -304,8 +395,7 @@ class FactorBacktestService:
                 for symbol, row in day.iterrows():
                     last_prices[str(symbol)] = float(row["close"])
             market_value = sum(
-                item["shares"] * last_prices.get(symbol, 0.0)
-                for symbol, item in holdings.items()
+                item["shares"] * last_prices.get(symbol, 0.0) for symbol, item in holdings.items()
             )
             portfolio_value = cash + market_value
             for symbol, item in holdings.items():
@@ -341,12 +431,10 @@ class FactorBacktestService:
                     continue
                 execution_date = calendar_dates[index + 1]
                 cutoff = pd.Timestamp(current_date).replace(hour=15)
-                factors = self.database.read_factor_snapshot(spec.symbols, spec.factor, cutoff)
+                factors = self.factor_snapshot(spec, cutoff)
                 available = set(day.index) if not day.empty else set()
                 factors = factors.loc[factors["symbol"].isin(available)].copy()
-                factors["factor_value"] = pd.to_numeric(
-                    factors["factor_value"], errors="coerce"
-                )
+                factors["factor_value"] = pd.to_numeric(factors["factor_value"], errors="coerce")
                 factors = factors.dropna(subset=["factor_value"])
                 factors = factors.sort_values(
                     ["factor_value", "symbol"],
@@ -370,6 +458,7 @@ class FactorBacktestService:
                             "published_at": row.published_at,
                             "availability_source": row.availability_source,
                             "source_batch_id": row.source_batch_id,
+                            "component_values": getattr(row, "component_values", ""),
                         }
                     )
                 pending[execution_date] = {
@@ -420,6 +509,8 @@ class FactorBacktestService:
         )
         diagnostics = {
             "point_in_time_rule": "published_at strictly before signal-day 15:00",
+            "factor_combination": [item.to_dict() for item in spec.factors],
+            "missing_factor_policy": spec.missing_policy,
             "execution_rule": "next benchmark trading day open",
             "universe_mode": "explicit_symbols_not_historical_index_constituents",
             "survivorship_bias_warning": (

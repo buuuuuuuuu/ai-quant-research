@@ -15,6 +15,7 @@
     </a>
     <nav aria-label="工具导航">
       <a href="#operations">平台运维</a>
+      <a href="#factor-lab">因子实验室</a>
       <a href="#backtest">新建回测</a>
       <a href="#results">研究结果</a>
       <a href="/docs" target="_blank" rel="noreferrer">API 文档</a>
@@ -121,6 +122,29 @@
         </div>
         <div id="history-list" class="history-list"><p class="empty-state">正在读取历史研究…</p></div>
       </aside>
+    </section>
+
+    <section id="factor-lab" class="factor-lab-section">
+      <div class="section-heading"><div><p class="eyebrow">FACTOR RESEARCH LAB</p><h2>多因子研究实验室</h2><p class="muted">沿用上方股票池和日期；验证集挑选参数，样本外独立检验。</p></div><button id="refresh-lab-history" class="icon-button" type="button" aria-label="刷新因子研究记录">↻</button></div>
+      <form id="factor-lab-form" class="panel form-panel">
+        <div class="factor-component-list">
+          {% for factor in factors %}{% if factor.code in ["roe", "revenue_yoy", "parent_net_profit_yoy", "gross_margin", "net_margin", "debt_asset_ratio"] %}
+          <label class="factor-component"><input class="factor-enabled" type="checkbox" value="{{ factor.code }}"{% if factor.code in ["roe", "debt_asset_ratio"] %} checked{% endif %}><span>{{ factor.label }}</span><input class="factor-weight" type="number" value="1" min="0.01" step="0.1" aria-label="{{ factor.label }}权重"><select class="factor-direction"><option value="desc"{% if factor.code != "debt_asset_ratio" %} selected{% endif %}>高值优先</option><option value="asc"{% if factor.code == "debt_asset_ratio" %} selected{% endif %}>低值优先</option></select></label>
+          {% endif %}{% endfor %}
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>持仓数量扫描 <small>空格分隔</small></span><input id="lab-top-n" value="3 5" required></label>
+          <label class="field"><span>佣金扫描（bp）</span><input id="lab-commissions" value="5 10" required></label>
+          <label class="field"><span>调仓周期</span><select id="lab-rebalances"><option value="quarterly">季度</option><option value="monthly">月度</option><option value="monthly quarterly">月度 + 季度</option></select></label>
+          <label class="field"><span>因子分组数量</span><input id="lab-quantiles" type="number" min="2" max="10" value="5"></label>
+          <label class="field"><span>训练集比例</span><input id="lab-training" type="number" min="0.1" max="0.8" step="0.05" value="0.6"></label>
+          <label class="field"><span>验证集比例</span><input id="lab-validation" type="number" min="0.05" max="0.5" step="0.05" value="0.2"></label>
+        </div>
+        <div class="form-footer"><p>财报在调仓时点之前公开；显式股票池仍可能存在幸存者偏差。</p><button id="submit-factor-lab" class="primary-button" type="submit"><span>开始因子研究</span><b>↗</b></button></div>
+        <div id="lab-error" class="error-message" role="alert" hidden></div>
+      </form>
+      <div id="lab-history" class="lab-history"></div>
+      <article id="lab-results" class="panel lab-results" hidden><div class="section-heading"><div><p class="eyebrow">IC · RANK IC · OUT OF SAMPLE</p><h3>因子研究结果</h3><p id="lab-selected" class="muted"></p></div><div id="lab-actions" class="result-actions"></div></div><div id="lab-ic-chart" class="lab-ic-chart"></div><h3>因子有效性</h3><div id="lab-ic-table" class="table-shell"></div><h3>参数扫描与样本外验证</h3><div id="lab-strategy-table" class="table-shell"></div><h3>最优策略分段表现</h3><div id="lab-validation-table" class="table-shell"></div></article>
     </section>
 
     <section id="task-progress" class="task-progress" hidden aria-live="polite">

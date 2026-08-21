@@ -18,6 +18,7 @@ async function requestJson(url, options = {}) {
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
 const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
+const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", alert_acknowledged: "确认运行告警" };
 
 function operationTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
@@ -33,13 +34,41 @@ async function loadOperations() {
     const datasets = overview.datasets || [];
     const tasks = overview.tasks || [];
     const backups = overview.backups || [];
+    const alerts = overview.alerts || [];
+    const audits = overview.audit || [];
+    const quality = overview.quality || {};
     $("#sync-status-list").innerHTML = datasets.length ? datasets.map((item) => operationRow(`${datasetLabels[item.dataset] || item.dataset} · ${taskStatusLabels[item.status] || item.status}`, item.error || `${formatNumber(item.row_count)} 行 · ${operationTime(item.ended_at || item.started_at)}`, Boolean(item.error))).join("") : '<p class="empty-state">还没有数据同步记录。</p>';
     $("#operations-task-list").innerHTML = tasks.length ? tasks.slice(0, 5).map((item) => operationRow(`${taskTypeLabels[item.task_type] || item.task_type} · ${taskStatusLabels[item.status] || item.status}`, item.error || `${item.progress}% · ${operationTime(item.created_at)}`, item.status === "failed")).join("") : '<p class="empty-state">还没有后台任务。</p>';
     $("#backup-status-list").innerHTML = backups.length ? backups.slice(0, 4).map((item) => operationRow(`${(Number(item.size_bytes) / 1024 / 1024).toFixed(1)} MB · ${item.exists ? "文件正常" : "文件缺失"}`, operationTime(item.created_at), !item.exists)).join("") : '<p class="empty-state">还没有数据库备份。</p>';
+    $("#alert-status-list").innerHTML = alerts.length ? alerts.slice(0, 5).map((item) => operationRow(`${item.severity === "critical" ? "严重" : "提醒"} · ${item.title}`, item.message, item.severity === "critical")).join("") : '<p class="empty-state">当前没有运行告警。</p>';
+    const checks = quality.checks || [];
+    const failedPartitions = quality.failed_partitions || [];
+    const checkRows = checks.map((item) => operationRow(`${item.severity === "blocking" ? "阻断规则" : "提醒规则"} · ${formatNumber(item.total)} 项`, item.failed ? `${formatNumber(item.failed)} 项未通过` : "全部通过", Boolean(item.failed)));
+    if (failedPartitions.length) checkRows.push(operationRow("失败同步分区", `${formatNumber(failedPartitions.length)} 个分区需要处理`, true));
+    checkRows.push(operationRow("已监控股票", `${formatNumber((quality.securities || []).length)} 只`));
+    $("#quality-status-list").innerHTML = checkRows.join("");
+    $("#audit-status-list").innerHTML = audits.length ? audits.slice(0, 5).map((item) => operationRow(auditActionLabels[item.action] || item.action, `${item.actor} · ${operationTime(item.created_at)}`, item.outcome === "failure")).join("") : '<p class="empty-state">还没有运维审计记录。</p>';
   } catch (error) {
     const message = $("#operations-message");
     message.textContent = error.message;
     message.classList.add("error");
+  }
+}
+
+async function checkOperations() {
+  const button = $("#run-health-check");
+  const message = $("#operations-message");
+  button.disabled = true;
+  try {
+    const result = await requestJson("/api/v1/ops/alerts/check", { method: "POST" });
+    message.textContent = result.active_count ? `发现 ${result.active_count} 项运行告警` : "运行检查通过，没有发现活动告警";
+    message.classList.toggle("error", result.status === "critical");
+    await loadOperations();
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add("error");
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -224,6 +253,7 @@ async function loadRun(runId) {
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#refresh-history").addEventListener("click", loadHistory);
 $("#refresh-operations").addEventListener("click", loadOperations);
+$("#run-health-check").addEventListener("click", checkOperations);
 $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));

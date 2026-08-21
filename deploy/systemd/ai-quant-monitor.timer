@@ -1,0 +1,12 @@
+[Unit]
+Description=Run AI Quant Production Health Checks Every 15 Minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=ai-quant-monitor.service
+
+[Install]
+WantedBy=timers.target

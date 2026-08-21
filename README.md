@@ -15,6 +15,7 @@ V1 是研究与决策支持工具，不连接券商、不自动下单，也不�
 - 数据快照、SHA-256 摘要、运行清单、CSV、Excel 和 HTML 报告。
 - 财务因子选股、Point-in-Time 组合回测与 Web 研究工作台。
 - 单管理员登录、持久化后台任务、定时增量同步和 DuckDB 一致性备份。
+- 非 root 服务、Nginx 反向代理、备份恢复、运行告警、运维审计与自动 CI。
 - CLI、FastAPI 接口、离线端到端测试、Docker 与 systemd 部署入口。
 
 ## 项目结构
@@ -34,14 +35,14 @@ ai-quant-research/
 │   ├── research/            # 事件研究引擎与服务
 │   └── storage/             # Parquet 快照与 DuckDB 目录
 ├── docs/                    # 黄金路径口径与架构决策
-├── deploy/systemd/          # Web 常驻、增量同步和每日备份单元
+├── deploy/                  # systemd、Nginx、低权限安装和发布部署模板
 ├── scripts/                 # 可直接运行的演示脚本
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1 + M2 + M3 + M4-A）
+## A 股本地数据库（M0 + M1 + M2 + M3 + M4）
 
-数据平台提供 DuckDB Schema v5、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v6、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -53,7 +54,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1/v2/v3/v4 数据库执行同一命令时会自动升级到 Schema v5，不删除已发布的
+已有 Schema v1/v2/v3/v4/v5 数据库执行同一命令时会自动升级到 Schema v6，不删除已发布的
 股票日线、指数、历史公告或财务报告。
 
 初始化并写入离线样例：
@@ -209,6 +210,7 @@ uv run ai-quant data status
 - `docs/factor-backtest.md`
 - `docs/web-workbench.md`
 - `docs/platform-operations.md`
+- `docs/release-hardening.md`
 
 ## Ubuntu 快速启动
 
@@ -287,12 +289,13 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v5 会持久化回测、增量同步和数据库备份任务。同步按现有覆盖区间依次更新股票、
+Schema v6 会持久化回测、增量同步、数据库备份任务、运行告警和管理员审计。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256
 校验。Web 首页“数据同步与备份”可直接查看状态并启动任务。
 
-`deploy/systemd/` 提供 Web 常驻服务、交易日收盘后增量同步定时器和每日备份定时器；
-完整安装、密钥配置与运维命令见 `docs/platform-operations.md`。
+`deploy/systemd/` 提供低权限 Web 常驻服务、交易日收盘后增量同步、每日备份及每
+15 分钟运行检查；`deploy/nginx/` 提供 HTTP 和 HTTPS 反向代理模板。完整升级、
+备份恢复和发布操作见 `docs/platform-operations.md` 与 `docs/release-hardening.md`。
 
 离线请求示例：
 
@@ -326,5 +329,5 @@ uv run ruff check .
 
 - 后台任务使用单机线程池与 DuckDB 持久化，不适用于多节点分布式执行。
 - 登录是单管理员会话认证，不包含多租户、权限分级或外部身份提供商。
-- systemd 单元默认匹配 `/root/code/ai-quant-research`；迁移到专用用户时应调整路径。
+- 生产 systemd 单元使用 `/opt/ai-quant/app` 与 `/var/lib/ai-quant`，避免服务访问 `/root`。
 - 免费数据源只用于研究原型；商业化前必须完成数据授权与许可审查。

@@ -18,6 +18,8 @@ from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
 from ai_quant_assistant.api.run_repository import BacktestRunRepository
 from ai_quant_assistant.api.schemas import (
+    BackupPruneRequest,
+    BackupRestoreRequest,
     BatchInterimReportEventStudyRequest,
     BatchResearchRunResponse,
     FactorBacktestRequest,
@@ -37,6 +39,11 @@ from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.monitoring import (
+    OperationAlertRepository,
+    OperationAuditRepository,
+    PlatformMonitor,
+)
 from ai_quant_assistant.storage.operations import (
     DatabaseBackupService,
     ExclusiveOperationLock,
@@ -80,11 +87,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if database.path.is_file():
         task_repository.recover_interrupted()
     operation_lock = ExclusiveOperationLock(resolved_settings.data_dir / ".operations.lock")
+    audit_repository = OperationAuditRepository(database)
+    alert_repository = OperationAlertRepository(database)
+    monitor = PlatformMonitor(database, resolved_settings, alert_repository, audit_repository)
     backup_service = DatabaseBackupService(
         database=database,
         backup_dir=resolved_settings.resolved_backup_dir,
         tasks=task_repository,
         operation_lock=operation_lock,
+        audit=audit_repository,
+        retention_days=resolved_settings.backup_retention_days,
+        minimum_count=resolved_settings.backup_minimum_count,
     )
     sync_service = IncrementalSyncService(
         database=database,
@@ -92,13 +105,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         provider=_provider("akshare", resolved_settings),
         tasks=task_repository,
         operation_lock=operation_lock,
+        audit=audit_repository,
     )
     operation_manager = OperationsTaskManager(
         repository=task_repository,
         sync_service=sync_service,
         backup_service=backup_service,
     )
-    dashboard = OperationsDashboard(database, task_repository, backup_service)
+    dashboard = OperationsDashboard(
+        database,
+        task_repository,
+        backup_service,
+        alert_repository,
+        audit_repository,
+        monitor,
+    )
     run_repository = BacktestRunRepository(resolved_settings.artifact_dir)
     task_manager = BacktestTaskManager(
         FactorBacktestService(database=database, artifact_dir=resolved_settings.artifact_dir),
@@ -127,6 +148,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.task_repository = task_repository
     app.state.backup_service = backup_service
     app.state.sync_service = sync_service
+    app.state.audit_repository = audit_repository
+    app.state.alert_repository = alert_repository
+    app.state.platform_monitor = monitor
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -171,6 +195,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         next_path = safe_next_path(values.get("next", ["/"])[0])
         remote_host = request.client.host if request.client else "unknown"
         if not authenticator.allow_attempt(remote_host):
+            audit_repository.record(
+                "login_rate_limited",
+                actor=username or "anonymous",
+                outcome="warning",
+                remote_host=remote_host,
+            )
             return templates.TemplateResponse(
                 request=request,
                 name="login.html",
@@ -182,6 +212,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=429,
             )
         if not authenticator.verify_credentials(username, password):
+            audit_repository.record(
+                "login_failed",
+                actor=username or "anonymous",
+                outcome="failure",
+                remote_host=remote_host,
+            )
             return templates.TemplateResponse(
                 request=request,
                 name="login.html",
@@ -193,6 +229,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=401,
             )
         authenticator.clear_attempts(remote_host)
+        audit_repository.record("login_succeeded", actor=username, remote_host=remote_host)
         response = RedirectResponse(next_path, status_code=303)
         response.set_cookie(
             SESSION_COOKIE,
@@ -205,7 +242,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.post("/logout", include_in_schema=False)
-    def logout():
+    def logout(request: Request):
+        audit_repository.record(
+            "logout",
+            actor=resolved_settings.web_username,
+            remote_host=request.client.host if request.client else None,
+        )
         response = RedirectResponse("/login" if authenticator.enabled else "/", status_code=303)
         response.delete_cookie(SESSION_COOKIE)
         return response
@@ -262,19 +304,99 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/ops/sync", status_code=202)
     def create_incremental_sync(request: IncrementalSyncRequest) -> dict[str, Any]:
-        return operation_manager.submit_sync(as_of=request.as_of)
+        task = operation_manager.submit_sync(as_of=request.as_of)
+        audit_repository.record(
+            "sync_requested",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task["task_id"],
+        )
+        return task
 
     @app.post("/api/v1/ops/backup", status_code=202)
     def create_database_backup() -> dict[str, Any]:
-        return operation_manager.submit_backup()
+        task = operation_manager.submit_backup()
+        audit_repository.record(
+            "backup_requested",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task["task_id"],
+        )
+        return task
 
     @app.get("/api/v1/ops/backups")
     def list_database_backups() -> list[dict[str, Any]]:
         return backup_service.list()
 
+    @app.get("/api/v1/ops/backups/{backup_id}/verify")
+    def verify_database_backup(backup_id: str) -> dict[str, Any]:
+        try:
+            return backup_service.verify(backup_id, actor=resolved_settings.web_username)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="database backup not found") from exc
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ops/backups/{backup_id}/restore")
+    def restore_database_backup(backup_id: str, request: BackupRestoreRequest) -> dict[str, Any]:
+        try:
+            return backup_service.restore(
+                backup_id,
+                confirm_backup_id=request.confirm_backup_id,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="database backup not found") from exc
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/ops/backups/prune")
+    def prune_database_backups(request: BackupPruneRequest) -> dict[str, Any]:
+        return backup_service.prune(
+            dry_run=not request.apply, actor=resolved_settings.web_username
+        )
+
+    @app.get("/api/v1/ops/alerts")
+    def list_operation_alerts(active_only: bool = True) -> list[dict[str, Any]]:
+        return alert_repository.list(active_only=active_only)
+
+    @app.post("/api/v1/ops/alerts/check")
+    def check_operation_alerts() -> dict[str, Any]:
+        return monitor.check()
+
+    @app.post("/api/v1/ops/alerts/{alert_id}/acknowledge")
+    def acknowledge_operation_alert(alert_id: str) -> dict[str, Any]:
+        try:
+            alert = alert_repository.acknowledge(alert_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="active platform alert not found") from exc
+        audit_repository.record(
+            "alert_acknowledged",
+            actor=resolved_settings.web_username,
+            object_type="operation_alert",
+            object_id=alert_id,
+        )
+        return alert
+
+    @app.get("/api/v1/ops/audit")
+    def list_operation_audit(limit: int = 50) -> list[dict[str, Any]]:
+        return audit_repository.list(limit=limit)
+
+    @app.get("/api/v1/ops/quality")
+    def data_quality_status() -> dict[str, Any]:
+        return monitor.quality()
+
     @app.post("/api/v1/backtests", status_code=202)
     def create_backtest(request: FactorBacktestRequest) -> dict[str, Any]:
-        return task_manager.submit(request.to_spec())
+        task = task_manager.submit(request.to_spec())
+        audit_repository.record(
+            "backtest_requested",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task["task_id"],
+            details={"factor": request.factor, "symbol_count": len(request.symbols)},
+        )
+        return task
 
     @app.get("/api/v1/backtests")
     def list_backtest_tasks() -> list[dict[str, Any]]:

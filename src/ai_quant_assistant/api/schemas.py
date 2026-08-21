@@ -188,3 +188,11 @@ class FactorBacktestRequest(BaseModel):
 
 class IncrementalSyncRequest(BaseModel):
     as_of: date = Field(default_factory=date.today)
+
+
+class BackupRestoreRequest(BaseModel):
+    confirm_backup_id: str = Field(min_length=1, max_length=128)
+
+
+class BackupPruneRequest(BaseModel):
+    apply: bool = False

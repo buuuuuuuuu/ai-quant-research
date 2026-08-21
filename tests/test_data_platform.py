@@ -71,7 +71,7 @@ def test_existing_schema_v1_database_upgrades_to_latest(tmp_path) -> None:
 
     initialized = database.initialize()
 
-    assert initialized["applied_migrations"] == [2, 3, 4, 5]
+    assert initialized["applied_migrations"] == [2, 3, 4, 5, 6]
     assert database.status()["schema_version"] == SCHEMA_VERSION
     assert database.status()["relations"]["sync_partition"] == 0
     assert database.status()["relations"]["research_sync_partition"] == 0
@@ -103,7 +103,7 @@ def test_existing_schema_v2_database_upgrades_without_losing_published_data(tmp_
     initialized = database.initialize()
     status = database.status()
 
-    assert initialized["applied_migrations"] == [3, 4, 5]
+    assert initialized["applied_migrations"] == [3, 4, 5, 6]
     assert status["schema_version"] == SCHEMA_VERSION
     assert status["relations"]["daily_bar"] == 5
     assert status["relations"]["published_daily_bar"] == 5
@@ -168,7 +168,7 @@ def test_existing_schema_v3_keeps_announcements_and_accepts_quarterly_reports(tm
             "SELECT report_type, published_at FROM published_announcement ORDER BY published_at"
         ).fetchall()
 
-    assert initialized["applied_migrations"] == [4, 5]
+    assert initialized["applied_migrations"] == [4, 5, 6]
     assert [item[0] for item in announcements] == ["q1", "interim"]
     assert str(announcements[1][1]) == "2024-08-15 18:30:00"
 

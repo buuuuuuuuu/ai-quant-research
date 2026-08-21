@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v5）
+# A 股本地数据库数据字典（Schema v6）
 
 ## 公共约定
 
@@ -330,8 +330,8 @@ Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。�
 
 ## database_backup
 
-记录已通过 DuckDB 打开校验、SHA-256 校验和原子发布的完整数据库文件；应用不会自动
-删除既有备份。
+记录已通过 DuckDB 打开校验、SHA-256 校验和原子发布的完整数据库文件。只有明确执行
+保留策略才会删除超出保留天数且超过最少保留数量的旧文件，并保留删除审计信息。
 
 | 字段 | 类型 | 约束 | 含义 |
 |---|---|---|---|
@@ -341,3 +341,32 @@ Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。�
 | size_bytes | BIGINT | 非负 | 备份文件大小 |
 | sha256 | VARCHAR | NOT NULL | 备份文件 SHA-256 |
 | created_at | TIMESTAMPTZ | NOT NULL | 带时区的备份创建时间 |
+| deleted_at | TIMESTAMPTZ | 可空 | 经明确授权执行保留策略的删除时间 |
+| deletion_reason | VARCHAR | 可空 | 删除原因，当前固定为 `retention` |
+
+## operation_audit
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| event_id | VARCHAR | PK | 审计事件标识 |
+| action | VARCHAR | NOT NULL | 登录、同步、备份、恢复或告警处理动作 |
+| actor | VARCHAR | NOT NULL | 管理员用户名或 `system` |
+| outcome | VARCHAR | success/failure/warning | 操作结果 |
+| remote_host | VARCHAR | 可空 | 经可信反向代理解析的客户端地址 |
+| object_type/object_id | VARCHAR | 可空 | 关联任务、告警或备份标识 |
+| details_json | VARCHAR | NOT NULL | 不包含密码、密钥和令牌的结构化详情 |
+| created_at | TIMESTAMPTZ | NOT NULL | 审计时间 |
+
+## operation_alert
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| alert_id | VARCHAR | PK | 告警实例标识 |
+| alert_key | VARCHAR | UNIQUE | 同类异常去重键 |
+| severity | VARCHAR | warning/critical | 告警级别 |
+| category | VARCHAR | NOT NULL | 同步、备份、磁盘、安全或数据质量 |
+| title/message | VARCHAR | NOT NULL | 告警标题与说明 |
+| status | VARCHAR | active/acknowledged/resolved | 告警生命周期 |
+| details_json | VARCHAR | NOT NULL | 阈值、时间和失败原因等详情 |
+| first_seen_at/last_seen_at | TIMESTAMPTZ | NOT NULL | 首次与最近检测时间 |
+| acknowledged_at/resolved_at/notified_at | TIMESTAMPTZ | 可空 | 确认、恢复和 Webhook 通知时间 |

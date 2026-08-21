@@ -1,9 +1,10 @@
-# 平台部署与自动化运维（M4-A）
+# 平台部署与自动化运维（M4-A + M4-B）
 
 ## 数据库迁移
 
-M4-A 将 DuckDB Schema 升级到 v5，新增 `operation_task` 和 `database_backup`。已有
-v1–v4 数据库通过下列命令原地迁移，历史行情、财务和研究产物保持不变：
+M4-A 将 DuckDB Schema 升级到 v5；M4-B 进一步升级到 v6，新增持久化运维告警、安全
+审计与备份生命周期字段。已有 v1–v5 数据库通过下列命令原地迁移，历史行情、财务和
+研究产物保持不变：
 
 ```bash
 uv run ai-quant data init
@@ -39,6 +40,12 @@ uv run ai-quant ops sync
 uv run ai-quant ops sync --symbols 600519 000001
 uv run ai-quant ops tasks --limit 20
 uv run ai-quant ops backup
+uv run ai-quant ops backup-list
+uv run ai-quant ops backup-prune
+uv run ai-quant ops check
+uv run ai-quant ops alerts --active-only
+uv run ai-quant ops quality
+uv run ai-quant ops audit --limit 20
 ```
 
 股票池默认取数据库中状态为 `active` 的证券；也可通过 `AI_QUANT_SYNC_SYMBOLS` 指定。
@@ -48,38 +55,37 @@ uv run ai-quant ops backup
 
 备份默认保存到自动识别的数据目录下的 `backups/`。流程先持有跨进程互斥锁，再执行
 DuckDB `CHECKPOINT`、复制数据库、重新打开验证 Schema、计算 SHA-256，最后原子发布
-备份文件。系统不会自动删除已有备份。同步、备份与 Web 回测共用同一把锁。
+备份文件。清理默认只预演；systemd 备份服务通过明确的 `--apply-retention` 开启保留
+策略，默认至少保留最近 7 份且只清理超过 30 天的旧备份。同步、备份、恢复与 Web
+回测共用同一把锁。
 
 ## 安装 systemd 服务
 
-仓库提供的单元默认匹配 `/root/code/ai-quant-research`。如果项目路径或运行用户不同，
-请先修改 `deploy/systemd/*.service` 中的 `WorkingDirectory`、`User` 和可执行文件路径。
+M4-B 不再让服务访问 `/root`。专用 `ai-quant` 用户执行 `/opt/ai-quant/app` 中的应用，
+行情、研究产物与备份分别位于 `/var/lib/ai-quant/data`、`artifacts` 和 `backups`。
+从已验收的 M4-A 环境安全迁移：
 
 ```bash
 cd /root/code/ai-quant-research
-uv sync --extra dev
+git switch main
+git pull --ff-only
 
-install -d -m 700 /etc/ai-quant
-install -m 600 deploy/systemd/ai-quant.env.example /etc/ai-quant/ai-quant.env
+# 安装前先停止旧服务，避免复制活跃 DuckDB。
+systemctl stop ai-quant-web.service ai-quant-sync.timer ai-quant-backup.timer
+systemctl stop ai-quant-sync.service ai-quant-backup.service
+bash deploy/scripts/install-production.sh /root/code/ai-quant-research
 
-# 必须填入 AI_QUANT_WEB_PASSWORD 和 AI_QUANT_WEB_SESSION_SECRET。
-# 可使用 openssl rand -base64 32 生成随机值。
+# 旧管理员密码和会话密钥不会被覆盖；确认新增 /var/lib 路径。
 nano /etc/ai-quant/ai-quant.env
 
-install -m 644 deploy/systemd/ai-quant-web.service /etc/systemd/system/
-install -m 644 deploy/systemd/ai-quant-sync.service /etc/systemd/system/
-install -m 644 deploy/systemd/ai-quant-sync.timer /etc/systemd/system/
-install -m 644 deploy/systemd/ai-quant-backup.service /etc/systemd/system/
-install -m 644 deploy/systemd/ai-quant-backup.timer /etc/systemd/system/
-
-systemctl daemon-reload
 systemctl enable --now ai-quant-web.service
-systemctl enable --now ai-quant-sync.timer ai-quant-backup.timer
+systemctl enable --now ai-quant-sync.timer ai-quant-backup.timer ai-quant-monitor.timer
 ```
 
 Web 单元在启动前会拒绝空密码和空会话签名密钥，并执行一次数据库迁移。同步定时器
-在上海时区工作日 18:30 后运行，备份定时器每日 02:30 后运行；错过的任务会在机器恢复
-后补执行。
+在上海时区工作日 18:30 后运行，备份定时器每日 02:30 后运行，运行风险检查每 15 分钟
+执行；错过的任务会在机器恢复后补执行。生产 Web 仅绑定 `127.0.0.1:8080`，外部访问
+需要安装 `deploy/nginx/` 中的反向代理模板。
 
 ```bash
 systemctl status ai-quant-web.service
@@ -88,7 +94,9 @@ journalctl -u ai-quant-web.service -f
 journalctl -u ai-quant-sync.service -n 100 --no-pager
 systemctl start ai-quant-sync.service
 systemctl start ai-quant-backup.service
+systemctl start ai-quant-monitor.service
 ```
 
-Web 运维面板显示最近同步批次、任务进度、失败信息和已验证备份；点击“立即增量同步”
-或“创建数据库备份”即可提交后台任务。
+Web 运维面板显示最近同步批次、任务进度、失败信息、已验证备份、运行告警、数据质量
+与管理员审计；点击“立即增量同步”“创建数据库备份”或“检查运行风险”可立即执行。
+完整反向代理、备份恢复和回滚说明见 `docs/release-hardening.md`。

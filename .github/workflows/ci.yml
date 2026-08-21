@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Lint Python source
+        run: uv run ruff check .
+
+      - name: Execute offline tests
+        run: uv run pytest
+
+      - name: Validate browser JavaScript
+        run: node --check src/ai_quant_assistant/web/static/workbench.js
+
+      - name: Validate deployment shell scripts
+        run: bash -n deploy/scripts/install-production.sh
+
+      - name: Validate systemd units
+        run: systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer
+
+      - name: Build Python wheel
+        run: uv build --wheel

@@ -26,6 +26,14 @@ class Settings:
     sync_financial_lookback_days: int = 400
     sync_symbols: tuple[str, ...] = ()
     sync_benchmark_symbol: str = "csi000300"
+    backup_retention_days: int = 30
+    backup_minimum_count: int = 7
+    alert_sync_stale_hours: int = 48
+    alert_backup_stale_hours: int = 36
+    alert_disk_free_percent: float = 10.0
+    alert_login_failure_threshold: int = 5
+    alert_webhook_url: str = ""
+    alert_webhook_timeout_seconds: float = 5.0
 
     @property
     def resolved_backup_dir(self) -> Path:
@@ -140,6 +148,18 @@ class Settings:
                 if symbol.strip()
             ),
             sync_benchmark_symbol=os.getenv("AI_QUANT_SYNC_BENCHMARK", "csi000300"),
+            backup_retention_days=int(os.getenv("AI_QUANT_BACKUP_RETENTION_DAYS", "30")),
+            backup_minimum_count=int(os.getenv("AI_QUANT_BACKUP_MINIMUM_COUNT", "7")),
+            alert_sync_stale_hours=int(os.getenv("AI_QUANT_ALERT_SYNC_STALE_HOURS", "48")),
+            alert_backup_stale_hours=int(os.getenv("AI_QUANT_ALERT_BACKUP_STALE_HOURS", "36")),
+            alert_disk_free_percent=float(os.getenv("AI_QUANT_ALERT_DISK_FREE_PERCENT", "10")),
+            alert_login_failure_threshold=int(
+                os.getenv("AI_QUANT_ALERT_LOGIN_FAILURE_THRESHOLD", "5")
+            ),
+            alert_webhook_url=os.getenv("AI_QUANT_ALERT_WEBHOOK_URL", ""),
+            alert_webhook_timeout_seconds=float(
+                os.getenv("AI_QUANT_ALERT_WEBHOOK_TIMEOUT_SECONDS", "5")
+            ),
         )
 
     def ensure_directories(self) -> None:

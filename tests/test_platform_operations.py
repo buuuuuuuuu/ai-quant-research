@@ -90,7 +90,7 @@ def test_v4_catalog_upgrades_without_losing_existing_market_data(tmp_path) -> No
     result = database.initialize()
     status = database.status()
 
-    assert result["applied_migrations"] == [5]
+    assert result["applied_migrations"] == [5, 6]
     assert status["schema_version"] == SCHEMA_VERSION
     assert status["relations"]["security_master"] == 1
     assert status["relations"]["operation_task"] == 0

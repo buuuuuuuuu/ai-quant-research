@@ -40,6 +40,8 @@ CORE_RELATIONS = (
     "published_financial_metric",
     "operation_task",
     "database_backup",
+    "operation_audit",
+    "operation_alert",
 )
 
 _CONNECTION_LOCKS: dict[Path, RLock] = {}

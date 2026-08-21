@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +395,53 @@ MIGRATIONS = (
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """,
+        ),
+    ),
+    Migration(
+        version=6,
+        name="release_hardening_alerts_audit_and_backup_lifecycle",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS operation_audit (
+                event_id VARCHAR PRIMARY KEY,
+                action VARCHAR NOT NULL,
+                actor VARCHAR NOT NULL,
+                outcome VARCHAR NOT NULL CHECK (outcome IN ('success', 'failure', 'warning')),
+                remote_host VARCHAR,
+                object_type VARCHAR,
+                object_id VARCHAR,
+                details_json VARCHAR NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS operation_audit_created_idx
+            ON operation_audit (created_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS operation_alert (
+                alert_id VARCHAR PRIMARY KEY,
+                alert_key VARCHAR NOT NULL UNIQUE,
+                severity VARCHAR NOT NULL CHECK (severity IN ('warning', 'critical')),
+                category VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                message VARCHAR NOT NULL,
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('active', 'acknowledged', 'resolved')),
+                details_json VARCHAR NOT NULL DEFAULT '{}',
+                first_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                acknowledged_at TIMESTAMPTZ,
+                resolved_at TIMESTAMPTZ,
+                notified_at TIMESTAMPTZ
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS operation_alert_status_seen_idx
+            ON operation_alert (status, last_seen_at)
+            """,
+            "ALTER TABLE database_backup ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
+            "ALTER TABLE database_backup ADD COLUMN IF NOT EXISTS deletion_reason VARCHAR",
         ),
     ),
 )

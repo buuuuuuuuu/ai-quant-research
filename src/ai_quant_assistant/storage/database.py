@@ -196,15 +196,28 @@ class LocalDatabase:
         with self.connect(read_only=True) as connection:
             rows = connection.execute(
                 """
-                SELECT coverage.start_date, coverage.end_date
-                FROM data_coverage AS coverage
+                WITH verified_intervals AS (
+                    SELECT coverage.security_id, coverage.adjustment,
+                           coverage.start_date, coverage.end_date
+                    FROM data_coverage AS coverage
+                    WHERE coverage.dataset = 'daily_bar'
+
+                    UNION
+
+                    SELECT partition.security_id, partition.adjustment,
+                           partition.start_date, partition.end_date
+                    FROM sync_partition AS partition
+                    WHERE partition.status = 'published'
+                      AND partition.row_count = 0
+                )
+                SELECT interval.start_date, interval.end_date
+                FROM verified_intervals AS interval
                 JOIN security_master AS security USING (security_id)
-                WHERE coverage.dataset = 'daily_bar'
-                  AND security.symbol = ?
-                  AND coverage.adjustment = ?
-                  AND coverage.end_date >= ?
-                  AND coverage.start_date <= ?
-                ORDER BY coverage.start_date, coverage.end_date
+                WHERE security.symbol = ?
+                  AND interval.adjustment = ?
+                  AND interval.end_date >= ?
+                  AND interval.start_date <= ?
+                ORDER BY interval.start_date, interval.end_date
                 """,
                 [symbol, adjustment, start_date, end_date],
             ).fetchall()

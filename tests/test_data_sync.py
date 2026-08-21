@@ -100,6 +100,28 @@ class FakeSyncProvider:
         )
 
 
+class FakeRecentlyListedProvider(FakeSyncProvider):
+    def get_daily_bars(
+        self, symbol: str, start_date: date, end_date: date, adjustment: str
+    ) -> pd.DataFrame:
+        if end_date < date(2024, 1, 1):
+            return pd.DataFrame(
+                columns=[
+                    "trade_date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "amount_missing",
+                    "symbol",
+                    "source",
+                ]
+            )
+        return super().get_daily_bars(symbol, start_date, end_date, adjustment)
+
+
 class TrackingFallback:
     name = "tracking-fallback"
 
@@ -250,6 +272,66 @@ def test_local_first_provider_uses_coverage_then_falls_back(tmp_path) -> None:
     assert remote["local_hit"].tolist() == [False]
     assert remote["local_fallback_used"].tolist() == [True]
     assert remote["local_fallback_reason"].tolist() == ["coverage_incomplete"]
+
+
+def test_local_first_treats_published_empty_prelisting_partitions_as_coverage(tmp_path) -> None:
+    provider = FakeRecentlyListedProvider()
+    service, database = _service(tmp_path, provider)
+    result = service.run(
+        DataSyncSpec(
+            start_date=date(2023, 1, 1),
+            end_date=date(2024, 1, 5),
+            symbols=("600519",),
+            adjustments=("qfq",),
+        )
+    )
+    fallback = TrackingFallback()
+    local_first = LocalFirstProvider(database=database, fallback=fallback)
+
+    local = local_first.get_stock_prices(
+        "600519", date(2023, 1, 1), date(2024, 1, 5), "qfq"
+    )
+
+    assert result["status"] == "published"
+    assert result["partitions"] == {"published": 4}
+    assert local["source"].unique().tolist() == ["local:published_daily_bar"]
+    assert local["local_hit"].unique().tolist() == [True]
+    assert fallback.stock_calls == 0
+    with database.connect() as connection:
+        empty_coverage = connection.execute(
+            """
+            SELECT COUNT(*) FROM data_coverage
+            WHERE dataset = 'daily_bar' AND security_id = 'SSE.600519'
+              AND adjustment = 'qfq' AND start_date = DATE '2023-01-01'
+              AND end_date = DATE '2023-12-31'
+            """
+        ).fetchone()[0]
+    assert empty_coverage == 1
+
+
+def test_legacy_empty_published_partition_repairs_coverage_at_read_time(tmp_path) -> None:
+    provider = FakeRecentlyListedProvider()
+    service, database = _service(tmp_path, provider)
+    service.run(
+        DataSyncSpec(
+            start_date=date(2023, 1, 1),
+            end_date=date(2024, 1, 5),
+            symbols=("600519",),
+            adjustments=("qfq",),
+        )
+    )
+    with database.connect() as connection:
+        connection.execute(
+            """
+            DELETE FROM data_coverage
+            WHERE dataset = 'daily_bar' AND security_id = 'SSE.600519'
+              AND start_date = DATE '2023-01-01'
+            """
+        )
+
+    assert database.has_coverage(
+        "600519", date(2023, 1, 1), date(2024, 1, 5), "qfq"
+    )
 
 
 def test_cli_data_sync_runs_offline_with_injected_provider(

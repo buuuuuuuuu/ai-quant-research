@@ -160,8 +160,9 @@
 | updated_at | TIMESTAMP | NOT NULL | 更新时间 |
 
 本地优先 Provider 会合并相邻覆盖区间；股票和指数只有完整覆盖请求范围且 published 视图
-存在数据时才返回本地价格。公告允许“已完整同步但零记录”，此时返回本地空结果，不再
-重复回退外部 Provider。
+存在数据时才返回本地价格。股票上市前、退市后等合法 0 行分区仍写入完整覆盖；为兼容旧
+数据库，`sync_partition` 中状态为 `published` 且 `row_count=0` 的分区读取时也视为完整
+覆盖。公告允许“已完整同步但零记录”，此时返回本地空结果，不再重复回退外部 Provider。
 
 ## benchmark_master
 

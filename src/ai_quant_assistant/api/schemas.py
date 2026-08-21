@@ -5,7 +5,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ai_quant_assistant.domain.models import EventStudySpec
+from ai_quant_assistant.domain.models import (
+    DEFAULT_RESEARCH_SYMBOLS,
+    BatchEventStudySpec,
+    EventStudySpec,
+)
 
 
 class InterimReportEventStudyRequest(BaseModel):
@@ -54,3 +58,66 @@ class ResearchRunResponse(BaseModel):
     diagnostics: dict[str, Any]
     artifacts: dict[str, str]
     snapshots: dict[str, dict[str, Any]]
+
+
+class BatchInterimReportEventStudyRequest(BaseModel):
+    source: Literal["fixture", "akshare", "local"] = "local"
+    symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=1)
+    start_date: date = date(2012, 1, 1)
+    end_date: date = Field(default_factory=date.today)
+    benchmark_symbol: str = "csi000300"
+    windows: list[int] = Field(default_factory=lambda: [5, 10, 20], min_length=1)
+    adjustment: Literal["hfq", "qfq", ""] = "qfq"
+    round_trip_cost_bps: float = Field(default=20.0, ge=0, le=500)
+    min_events: int = Field(default=1, ge=1)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, symbols: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(item.strip() for item in symbols))
+        if any(len(item) != 6 or not item.isdigit() for item in normalized):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return normalized
+
+    @field_validator("windows")
+    @classmethod
+    def validate_windows(cls, windows: list[int]) -> list[int]:
+        normalized = sorted(set(windows))
+        if any(window <= 0 or window > 250 for window in normalized):
+            raise ValueError("windows must be between 1 and 250 trading days")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> BatchInterimReportEventStudyRequest:
+        if self.start_date > self.end_date:
+            raise ValueError("start_date must not be later than end_date")
+        return self
+
+    def to_spec(self) -> BatchEventStudySpec:
+        return BatchEventStudySpec(
+            symbols=tuple(self.symbols),
+            start_date=self.start_date,
+            end_date=self.end_date,
+            benchmark_symbol=self.benchmark_symbol,
+            windows=tuple(self.windows),
+            adjustment=self.adjustment,
+            round_trip_cost_bps=self.round_trip_cost_bps,
+            min_events=self.min_events,
+        )
+
+
+class BatchResearchRunResponse(BaseModel):
+    batch_id: str
+    status: Literal["succeeded", "partial", "failed"]
+    started_at: str
+    completed_at: str
+    duration_seconds: float
+    provider: str
+    spec: dict[str, Any]
+    requested_symbols: int
+    successful_symbols: int
+    failed_symbols: int
+    pooled_summary: list[dict[str, Any]]
+    runs: list[dict[str, Any]]
+    failures: list[dict[str, Any]]
+    artifacts: dict[str, str]

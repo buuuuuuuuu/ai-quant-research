@@ -36,12 +36,13 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1 + M2-A）
+## A 股本地数据库（M0 + M1 + M2-A + M2-B）
 
-数据平台提供 DuckDB Schema v3、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v4、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
-半年报/年报公告增量同步。分区支持失败续跑，阻断级质量检查失败的数据不会发布；公告
-同时保存报告期和实际公开时间，防止把未来信息带入历史研究。
+一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
+级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
+未来信息带入历史研究。
 
 初始化空数据库：
 
@@ -49,7 +50,8 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v2 数据库执行同一命令时会自动升级到 Schema v3，不删除已发布的股票日线。
+已有 Schema v1/v2/v3 数据库执行同一命令时会自动升级到 Schema v4，不删除已发布的
+股票日线、指数或历史公告。
 
 初始化并写入离线样例：
 
@@ -71,7 +73,7 @@ uv run ai-quant data sync \
 `--limit 10` 冒烟验证。完全相同的请求会复用批次，只重试失败或中断的分区；需要强制
 重新抓取时同时使用 `--no-resume --refresh`。
 
-同步沪深 300 指数基准，以及指定公司的半年报、年报公告：
+同步沪深 300 指数基准，以及指定公司的四类定期报告公告：
 
 ```bash
 uv run ai-quant data sync-index \
@@ -81,14 +83,40 @@ uv run ai-quant data sync-index \
 
 uv run ai-quant data sync-announcements \
   --start-date 2024-01-01 \
-  --end-date 2024-12-31 \
+  --end-date 2025-06-30 \
   --symbols 600519 \
-  --types interim annual
+  --types q1 interim q3 annual
+
+uv run ai-quant data sync-financial \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --symbols 600519
+
+uv run ai-quant data financial-status \
+  --symbol 600519 \
+  --as-of 2024-08-15
 ```
 
-指数和股票覆盖区间应包含研究窗口所需的向后延伸日期；公告只需要覆盖研究起止区间。
-三类数据同步完成后，事件研究会优先读取本地已发布的股票、基准和公告，任意数据集覆盖
-不足时仅对该数据集回退 AkShare：
+财务指标优先使用 Provider 自带披露时间；缺失时按证券、报告期和报告类型匹配本地真实
+公告。两者均不存在时会阻断发布，绝不会把报告期结束日伪装成公开时间。年报一般在次年
+披露，因此公告同步区间需要覆盖研究期之后的实际年报发布日期。
+
+一条命令批量回填股票日线、沪深 300、四类公告和 Point-in-Time 财务指标：
+
+```bash
+uv run ai-quant data backfill-research \
+  --start-date 2012-01-01 \
+  --end-date 2025-12-31 \
+  --symbols 600519 000001 601318 000858 600036 000333 600276 601888 002594 300750 \
+  --adjustments qfq
+```
+
+省略 `--symbols` 时使用上面十只显式研究样本；它们不代表历史沪深 300 成分股，以免误把
+当前成分当作历史成分造成幸存者偏差。回填自动为研究窗口预留股票/指数后续交易日，并为
+年报等延迟披露预留 180 天公告区间。相同请求复用各数据集批次，只重试失败分区。
+
+研究会优先读取本地已发布的股票、基准和公告，任意数据集覆盖不足时仅对该数据集回退
+AkShare：
 
 ```bash
 uv run ai-quant event-study \
@@ -97,6 +125,22 @@ uv run ai-quant event-study \
   --start-date 2024-01-01 \
   --adjustment qfq
 ```
+
+对多只股票运行同一研究并关联公告日当时已经公开的财务指标：
+
+```bash
+uv run ai-quant batch-event-study \
+  --source local \
+  --symbols 600519 000001 601318 \
+  --start-date 2012-01-01 \
+  --end-date 2025-12-31 \
+  --windows 5 10 20 \
+  --adjustment qfq
+```
+
+批量结果写入 `artifacts/batch-runs/<batch_id>/`，包括股票级汇总、全样本汇总、事件级
+财务特征、失败股票列表、四工作表 Excel、HTML 报告和批次清单。单只股票失败不会中断
+其他股票；返回状态为 `succeeded`、`partial` 或 `failed`。
 
 事件研究的 `diagnostics.data_sources` 和 HTML 报告会分别显示股票、基准、公告的服务
 来源、底层 Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据
@@ -110,9 +154,19 @@ mv data/catalog.duckdb data/catalog.fixture.duckdb
 uv run ai-quant data init
 ```
 
-默认创建 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
-`data/catalog.duckdb`。可使用 `--data-dir`、`--duckdb-path` 或环境变量
-`AI_QUANT_DATA_DIR`、`AI_QUANT_DUCKDB_PATH` 调整位置。
+默认创建项目根目录下的 `data/raw`、`data/silver`、`data/gold`、`data/snapshots` 和
+`data/catalog.duckdb`；从项目子目录执行命令时，也会自动定位同一个项目根目录。
+如果历史操作同时产生了 `data/catalog.duckdb` 与 `data/data/catalog.duckdb`，程序会
+优先选择 Schema 更新、已发布数据更完整的数据库，因此无需每次手动导出环境变量。
+可使用 `--data-dir`、`--duckdb-path` 或环境变量 `AI_QUANT_DATA_DIR`、
+`AI_QUANT_DUCKDB_PATH` 显式指定位置；显式配置始终优先于自动识别。
+
+升级后可以取消旧的临时环境变量并检查自动识别结果：
+
+```bash
+unset AI_QUANT_DATA_DIR AI_QUANT_DUCKDB_PATH
+uv run ai-quant data status
+```
 
 数据平台架构、同步语义和字段说明见：
 
@@ -155,9 +209,10 @@ uv run ai-quant event-study \
 
 AkShare 当前官方接口口径：
 
-- 公告：`stock_zh_a_disclosure_report_cninfo(..., category="半年报"/"年报")`
+- 公告：`stock_zh_a_disclosure_report_cninfo(..., category="一季报"/"半年报"/"三季报"/"年报")`
 - 股票行情：`stock_zh_a_hist(..., adjust="hfq")`
 - 指数行情：主接口 `stock_zh_index_daily_em(symbol="csi000300")`，失败时回退 `stock_zh_index_daily(symbol="sh000300")`
+- 财务指标：主接口 `stock_financial_analysis_indicator_em(symbol="600519.SH", indicator="按报告期")`，失败时回退 `stock_financial_analysis_indicator(symbol="600519", start_year="2012")`
 
 仓库内置一份完全离线生成的示例产物，位于 `examples/golden-path-output/runs/`。
 
@@ -189,6 +244,9 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/interim-report-event-study \
 
 将请求中的 `"source": "fixture"` 改为 `"source": "local"`，即可使用与 CLI 一致的本地
 优先股票、指数和公告数据源。
+
+批量研究接口为 `POST /api/v1/research/batch-interim-report-event-study`，使用 `symbols`
+数组代替单个 `symbol`，其余日期、窗口、基准和复权参数与单股票接口一致。
 
 ## 测试与代码检查
 

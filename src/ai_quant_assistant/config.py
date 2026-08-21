@@ -16,16 +16,87 @@ class Settings:
     data_sync_rate_limit_seconds: float = 0.2
     log_level: str = "INFO"
 
+    @staticmethod
+    def _project_root() -> Path:
+        current = Path.cwd().resolve()
+        for candidate in (current, *current.parents):
+            if (candidate / "pyproject.toml").is_file() and (
+                candidate / "src" / "ai_quant_assistant"
+            ).is_dir():
+                return candidate
+        return current
+
+    @staticmethod
+    def _catalog_rank(path: Path) -> tuple[int, int, int]:
+        if not path.is_file():
+            return (-1, -1, -1)
+
+        try:
+            import duckdb
+
+            with duckdb.connect(str(path), read_only=True) as connection:
+                available = {
+                    str(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = 'main'
+                        """
+                    ).fetchall()
+                }
+                if "schema_migrations" not in available:
+                    return (-1, -1, -1)
+                version = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                    ).fetchone()[0]
+                )
+                published_rows = sum(
+                    int(connection.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+                    for name in (
+                        "published_daily_bar",
+                        "published_benchmark_daily_bar",
+                        "published_announcement",
+                        "published_financial_report",
+                        "published_financial_metric",
+                    )
+                    if name in available
+                )
+                security_count = (
+                    int(connection.execute("SELECT COUNT(*) FROM security_master").fetchone()[0])
+                    if "security_master" in available
+                    else 0
+                )
+            return (version, published_rows, security_count)
+        except Exception:  # noqa: BLE001 - an unreadable candidate must not block another catalog
+            return (-1, -1, -1)
+
+    @classmethod
+    def _default_data_dir(cls, project_root: Path) -> Path:
+        canonical = project_root / "data"
+        nested = canonical / "data"
+        candidates = (canonical, nested)
+        return max(candidates, key=lambda root: cls._catalog_rank(root / "catalog.duckdb"))
+
     @classmethod
     def from_env(cls) -> Settings:
-        data_dir = Path(os.getenv("AI_QUANT_DATA_DIR", "data"))
+        project_root = cls._project_root()
+        explicit_data_dir = os.getenv("AI_QUANT_DATA_DIR")
+        explicit_duckdb_path = os.getenv("AI_QUANT_DUCKDB_PATH")
+        if explicit_data_dir is not None:
+            data_dir = Path(explicit_data_dir)
+        elif explicit_duckdb_path is not None:
+            data_dir = Path(explicit_duckdb_path).parent
+        else:
+            data_dir = cls._default_data_dir(project_root)
+
         return cls(
             data_dir=data_dir,
-            artifact_dir=Path(os.getenv("AI_QUANT_ARTIFACT_DIR", "artifacts")),
-            cache_dir=Path(os.getenv("AI_QUANT_CACHE_DIR", str(data_dir / "cache"))),
-            duckdb_path=Path(
-                os.getenv("AI_QUANT_DUCKDB_PATH", str(data_dir / "catalog.duckdb"))
+            artifact_dir=Path(
+                os.getenv("AI_QUANT_ARTIFACT_DIR", str(project_root / "artifacts"))
             ),
+            cache_dir=Path(os.getenv("AI_QUANT_CACHE_DIR", str(data_dir / "cache"))),
+            duckdb_path=Path(explicit_duckdb_path or data_dir / "catalog.duckdb"),
             akshare_retries=int(os.getenv("AI_QUANT_AKSHARE_RETRIES", "3")),
             akshare_timeout_seconds=float(
                 os.getenv("AI_QUANT_AKSHARE_TIMEOUT_SECONDS", "30")

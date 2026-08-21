@@ -71,8 +71,8 @@ def test_existing_schema_v1_database_upgrades_to_latest(tmp_path) -> None:
 
     initialized = database.initialize()
 
-    assert initialized["applied_migrations"] == [2, 3]
-    assert database.status()["schema_version"] == 3
+    assert initialized["applied_migrations"] == [2, 3, 4]
+    assert database.status()["schema_version"] == 4
     assert database.status()["relations"]["sync_partition"] == 0
     assert database.status()["relations"]["research_sync_partition"] == 0
 
@@ -103,12 +103,74 @@ def test_existing_schema_v2_database_upgrades_without_losing_published_data(tmp_
     initialized = database.initialize()
     status = database.status()
 
-    assert initialized["applied_migrations"] == [3]
-    assert status["schema_version"] == 3
+    assert initialized["applied_migrations"] == [3, 4]
+    assert status["schema_version"] == 4
     assert status["relations"]["daily_bar"] == 5
     assert status["relations"]["published_daily_bar"] == 5
     assert status["relations"]["benchmark_daily_bar"] == 0
     assert status["relations"]["announcement"] == 0
+    assert status["relations"]["financial_report"] == 0
+    assert status["relations"]["financial_metric"] == 0
+
+
+def test_existing_schema_v3_keeps_announcements_and_accepts_quarterly_reports(tmp_path) -> None:
+    database = _database(tmp_path)
+    database.layout.ensure()
+    database.path.parent.mkdir(parents=True, exist_ok=True)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for migration in MIGRATIONS[:3]:
+            for statement in migration.statements:
+                connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+                [migration.version, migration.name],
+            )
+        load_fixture_data(connection)
+        connection.execute(
+            """
+            INSERT INTO announcement (
+                announcement_id, security_id, company_name, title, report_type,
+                report_year, report_period_end, announcement_date, published_at,
+                url, source, source_batch_id, content_sha256
+            ) VALUES (
+                'existing-interim', 'SSE.600519', '贵州茅台', '2024年半年度报告',
+                'interim', 2024, DATE '2024-06-30', DATE '2024-08-15',
+                TIMESTAMP '2024-08-15 18:30:00', '', 'fixture', 'fixture-batch', 'abc'
+            )
+            """
+        )
+
+    initialized = database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO announcement (
+                announcement_id, security_id, company_name, title, report_type,
+                report_year, report_period_end, announcement_date, published_at,
+                url, source, source_batch_id, content_sha256
+            ) VALUES (
+                'new-q1', 'SSE.600519', '贵州茅台', '2024年第一季度报告',
+                'q1', 2024, DATE '2024-03-31', DATE '2024-04-20',
+                TIMESTAMP '2024-04-20 18:30:00', '', 'fixture', 'fixture-batch', 'def'
+            )
+            """
+        )
+        announcements = connection.execute(
+            "SELECT report_type, published_at FROM published_announcement ORDER BY published_at"
+        ).fetchall()
+
+    assert initialized["applied_migrations"] == [4]
+    assert [item[0] for item in announcements] == ["q1", "interim"]
+    assert str(announcements[1][1]) == "2024-08-15 18:30:00"
 
 
 def test_cli_data_init_and_status_use_environment_paths(tmp_path, monkeypatch, capsys) -> None:

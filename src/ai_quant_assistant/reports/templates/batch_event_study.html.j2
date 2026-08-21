@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>股票池半年报事件批量研究</title>
+  <style>
+    :root { --navy:#173b5e; --blue:#2e74b5; --ink:#17212b; --muted:#66727d; --line:#d5dee7; --soft:#f3f6f9; --red:#a13b35; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#eef2f5; color:var(--ink); font-family:"Noto Sans SC","Microsoft YaHei",Arial,sans-serif; }
+    main { max-width:1240px; margin:28px auto; background:#fff; padding:40px 46px; box-shadow:0 8px 30px rgba(24,43,61,.08); }
+    h1,h2 { color:var(--navy); } h1 { margin:0 0 8px; } h2 { margin:30px 0 12px; }
+    .muted { color:var(--muted); } .notice { padding:14px; background:#e9f2f8; border-left:4px solid var(--blue); margin:18px 0; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:20px 0; }
+    .metric { background:var(--soft); padding:14px; border:1px solid var(--line); }
+    .metric b { display:block; margin-top:6px; font-size:20px; color:var(--navy); }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { background:var(--navy); color:#fff; text-align:left; padding:9px; }
+    td { border:1px solid var(--line); padding:8px; vertical-align:top; }
+    tr:nth-child(even) td { background:var(--soft); } .failure { color:var(--red); }
+    @media(max-width:760px){main{margin:0;padding:20px}.grid{grid-template-columns:1fr 1fr}table{font-size:11px}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="muted">AI 量化研究助手 · 多股票 Point-in-Time 研究</div>
+  <h1>半年报事件批量研究</h1>
+  <div class="muted">{{ spec.start_date }} 至 {{ spec.end_date }} · 基准 {{ spec.benchmark_symbol }} · 复权 {{ spec.adjustment }}</div>
+  <div class="notice">固定股票池按输入代码研究，未声明为历史指数成分；财务指标按公告时点读取，禁止使用尚未公开的报告。</div>
+  <div class="grid">
+    <div class="metric">股票池数量<b>{{ spec.symbols|length }}</b></div>
+    <div class="metric">研究成功<b>{{ success_count }}</b></div>
+    <div class="metric">研究失败<b>{{ failures|length }}</b></div>
+    <div class="metric">事件明细<b>{{ event_count }}</b></div>
+  </div>
+  <h2>跨股票汇总</h2>
+  <table><thead><tr><th>窗口</th><th>股票数</th><th>事件数</th><th>平均超额收益</th><th>中位超额收益</th><th>胜率</th></tr></thead><tbody>
+  {% for row in pooled_summary %}<tr><td>{{ row.window }} 日</td><td>{{ row.stock_count }}</td><td>{{ row.sample_size }}</td><td>{{ row.mean_excess_return|pct }}</td><td>{{ row.median_excess_return|pct }}</td><td>{{ row.win_rate|pct }}</td></tr>{% endfor %}
+  </tbody></table>
+  <h2>逐股票汇总</h2>
+  <table><thead><tr><th>股票</th><th>窗口</th><th>样本</th><th>平均超额收益</th><th>胜率</th><th>财务报告期</th><th>研究运行</th></tr></thead><tbody>
+  {% for row in stock_summary %}<tr><td>{{ row.symbol }}</td><td>{{ row.window }} 日</td><td>{{ row.sample_size }}</td><td>{{ row.mean_excess_return|pct }}</td><td>{{ row.win_rate|pct }}</td><td>{{ row.financial_report_period_end or '-' }}</td><td>{{ row.run_id }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if failures %}<h2>失败清单</h2><table><thead><tr><th>股票</th><th>错误类型</th><th>原因</th></tr></thead><tbody>{% for row in failures %}<tr><td>{{ row.symbol }}</td><td class="failure">{{ row.error_type }}</td><td>{{ row.error }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+  <p class="muted">免费数据源可能修订历史数据；本报告仅供量化研究，不构成投资建议。</p>
+</main>
+</body>
+</html>

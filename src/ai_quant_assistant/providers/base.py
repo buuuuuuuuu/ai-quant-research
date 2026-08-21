@@ -44,3 +44,11 @@ class ResearchDataProvider(Protocol):
     def get_report_announcements(
         self, symbol: str, start_date: date, end_date: date, report_type: str
     ) -> pd.DataFrame: ...
+
+
+class FinancialDataProvider(Protocol):
+    name: str
+
+    def get_financial_indicators(
+        self, symbol: str, start_date: date, end_date: date
+    ) -> pd.DataFrame: ...

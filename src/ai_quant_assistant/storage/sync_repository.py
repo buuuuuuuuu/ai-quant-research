@@ -363,18 +363,17 @@ class SyncRepository:
                         """,
                         [security_id, adjustment, start_date, end_date],
                     )
-                if rows:
-                    connection.execute(
-                        """
-                        INSERT INTO data_coverage (
-                            dataset, security_id, adjustment, start_date, end_date, source_batch_id
-                        ) VALUES ('daily_bar', ?, ?, ?, ?, ?)
-                        ON CONFLICT (dataset, security_id, adjustment, start_date, end_date)
-                        DO UPDATE SET source_batch_id = EXCLUDED.source_batch_id,
-                                      updated_at = now()
-                        """,
-                        [security_id, adjustment, start_date, end_date, batch_id],
-                    )
+                connection.execute(
+                    """
+                    INSERT INTO data_coverage (
+                        dataset, security_id, adjustment, start_date, end_date, source_batch_id
+                    ) VALUES ('daily_bar', ?, ?, ?, ?, ?)
+                    ON CONFLICT (dataset, security_id, adjustment, start_date, end_date)
+                    DO UPDATE SET source_batch_id = EXCLUDED.source_batch_id,
+                                  updated_at = now()
+                    """,
+                    [security_id, adjustment, start_date, end_date, batch_id],
+                )
                 connection.execute(
                     """
                     UPDATE sync_partition

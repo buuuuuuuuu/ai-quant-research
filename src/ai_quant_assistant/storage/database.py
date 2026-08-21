@@ -30,6 +30,11 @@ CORE_RELATIONS = (
     "research_sync_partition",
     "published_benchmark_daily_bar",
     "published_announcement",
+    "financial_report",
+    "financial_metric",
+    "financial_sync_partition",
+    "published_financial_report",
+    "published_financial_metric",
 )
 
 
@@ -96,7 +101,9 @@ class LocalDatabase:
                     ).fetchone()[0]
                 )
             relations = {
-                relation: int(connection.execute(f'SELECT COUNT(*) FROM "{relation}"').fetchone()[0])
+                relation: int(
+                    connection.execute(f'SELECT COUNT(*) FROM "{relation}"').fetchone()[0]
+                )
                 for relation in CORE_RELATIONS
                 if relation in available
             }
@@ -169,6 +176,8 @@ class LocalDatabase:
             if not mask.any() or not partition.raw_path:
                 continue
             raw_path = Path(str(partition.raw_path))
+            if not raw_path.is_absolute():
+                raw_path = self.layout.root.resolve().parent / raw_path
             frame.loc[mask, "raw_path"] = str(raw_path)
             if not raw_path.is_file():
                 continue
@@ -183,23 +192,34 @@ class LocalDatabase:
                 continue
         return frame[columns]
 
-    def has_coverage(
-        self, symbol: str, start_date: Any, end_date: Any, adjustment: str
-    ) -> bool:
+    def has_coverage(self, symbol: str, start_date: Any, end_date: Any, adjustment: str) -> bool:
         if not self.path.is_file():
             return False
         with self.connect(read_only=True) as connection:
             rows = connection.execute(
                 """
-                SELECT coverage.start_date, coverage.end_date
-                FROM data_coverage AS coverage
+                WITH verified_intervals AS (
+                    SELECT coverage.security_id, coverage.adjustment,
+                           coverage.start_date, coverage.end_date
+                    FROM data_coverage AS coverage
+                    WHERE coverage.dataset = 'daily_bar'
+
+                    UNION
+
+                    SELECT partition.security_id, partition.adjustment,
+                           partition.start_date, partition.end_date
+                    FROM sync_partition AS partition
+                    WHERE partition.status = 'published'
+                      AND partition.row_count = 0
+                )
+                SELECT interval.start_date, interval.end_date
+                FROM verified_intervals AS interval
                 JOIN security_master AS security USING (security_id)
-                WHERE coverage.dataset = 'daily_bar'
-                  AND security.symbol = ?
-                  AND coverage.adjustment = ?
-                  AND coverage.end_date >= ?
-                  AND coverage.start_date <= ?
-                ORDER BY coverage.start_date, coverage.end_date
+                WHERE security.symbol = ?
+                  AND interval.adjustment = ?
+                  AND interval.end_date >= ?
+                  AND interval.start_date <= ?
+                ORDER BY interval.start_date, interval.end_date
                 """,
                 [symbol, adjustment, start_date, end_date],
             ).fetchall()
@@ -263,9 +283,12 @@ class LocalDatabase:
             "announcement", security_id_for_symbol(symbol), report_type, start_date, end_date
         )
 
-    def read_benchmark_prices(
-        self, symbol: str, start_date: Any, end_date: Any
-    ) -> pd.DataFrame:
+    def has_financial_coverage(self, symbol: str, start_date: Any, end_date: Any) -> bool:
+        return self._has_dataset_coverage(
+            "financial_metric", security_id_for_symbol(symbol), "all", start_date, end_date
+        )
+
+    def read_benchmark_prices(self, symbol: str, start_date: Any, end_date: Any) -> pd.DataFrame:
         columns = [
             "date",
             "close",
@@ -356,3 +379,95 @@ class LocalDatabase:
             return pd.DataFrame(columns=columns)
         frame["announcement_date"] = pd.to_datetime(frame["announcement_date"]).dt.normalize()
         return frame[columns]
+
+    def read_financial_metrics(
+        self,
+        symbol: str,
+        as_of: Any,
+        *,
+        start_date: Any | None = None,
+        end_date: Any | None = None,
+    ) -> pd.DataFrame:
+        columns = [
+            "symbol",
+            "report_period_end",
+            "report_type",
+            "published_at",
+            "availability_source",
+            "metric_code",
+            "metric_value",
+            "unit",
+            "source",
+            "provider_source",
+            "source_batch_id",
+            "raw_path",
+        ]
+        if not self.path.is_file():
+            return pd.DataFrame(columns=columns)
+        cutoff = pd.Timestamp(as_of).to_pydatetime()
+        if cutoff == pd.Timestamp(as_of).normalize().to_pydatetime():
+            cutoff += timedelta(days=1)
+        requested_start = start_date or pd.Timestamp("1900-01-01").date()
+        requested_end = end_date or pd.Timestamp(as_of).date()
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                WITH ranked_metrics AS (
+                    SELECT security.symbol, report.report_period_end, report.report_type,
+                           report.published_at, report.availability_source,
+                           metric.metric_code, metric.metric_value, metric.unit,
+                           'local:published_financial_metric' AS source,
+                           report.source AS provider_source, report.source_batch_id,
+                           COALESCE(partition.raw_path, '') AS raw_path,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY report.security_id, report.report_period_end,
+                                            metric.metric_code
+                               ORDER BY report.published_at DESC, report.observed_at DESC
+                           ) AS revision_rank
+                    FROM published_financial_report AS report
+                    JOIN published_financial_metric AS metric USING (report_id)
+                    JOIN security_master AS security
+                      ON security.security_id = report.security_id
+                    LEFT JOIN financial_sync_partition AS partition
+                      ON partition.batch_id = report.source_batch_id
+                     AND partition.security_id = report.security_id
+                     AND report.report_period_end
+                         BETWEEN partition.start_date AND partition.end_date
+                    WHERE security.symbol = ?
+                      AND report.published_at < ?
+                      AND report.report_period_end BETWEEN ? AND ?
+                )
+                SELECT symbol, report_period_end, report_type, published_at,
+                       availability_source, metric_code, metric_value, unit,
+                       source, provider_source, source_batch_id, raw_path
+                FROM ranked_metrics
+                WHERE revision_rank = 1
+                ORDER BY report_period_end, metric_code
+                """,
+                [symbol, cutoff, requested_start, requested_end],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["report_period_end"] = pd.to_datetime(frame["report_period_end"]).dt.normalize()
+        frame["published_at"] = pd.to_datetime(frame["published_at"])
+        return frame[columns]
+
+    def read_latest_financial_snapshot(self, symbol: str, as_of: Any) -> dict[str, Any]:
+        metrics = self.read_financial_metrics(symbol, as_of)
+        if metrics.empty:
+            return {}
+        latest_period = metrics["report_period_end"].max()
+        latest = metrics.loc[metrics["report_period_end"] == latest_period]
+        first = latest.iloc[0]
+        return {
+            "financial_report_period_end": pd.Timestamp(latest_period).date().isoformat(),
+            "financial_published_at": pd.Timestamp(first["published_at"]).isoformat(),
+            "financial_report_type": str(first["report_type"]),
+            "financial_source": str(first["source"]),
+            "financial_provider_source": str(first["provider_source"]),
+            "financial_source_batch_id": str(first["source_batch_id"]),
+            **{
+                str(row.metric_code): float(row.metric_value)
+                for row in latest.itertuples(index=False)
+            },
+        }

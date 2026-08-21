@@ -8,16 +8,24 @@ from pathlib import Path
 
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.domain.models import (
+    DEFAULT_RESEARCH_SYMBOLS,
+    REPORT_TYPES,
     AnnouncementSyncSpec,
+    BatchEventStudySpec,
     BenchmarkSyncSpec,
     DataSyncSpec,
     EventStudySpec,
+    FinancialSyncSpec,
+    ResearchBackfillSpec,
 )
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.providers.local_provider import LocalFirstProvider
+from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.service import InterimReportResearchService
+from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
+from ai_quant_assistant.storage.financial_sync_service import FinancialDataSyncService
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
@@ -31,9 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ai-quant", description="AI 量化研究助手 V1")
     subcommands = parser.add_subparsers(dest="command", required=True)
     study = subcommands.add_parser("event-study", help="运行半年报公告后超额收益研究")
-    study.add_argument(
-        "--source", choices=["fixture", "akshare", "local"], default="fixture"
-    )
+    study.add_argument("--source", choices=["fixture", "akshare", "local"], default="fixture")
     study.add_argument("--symbol", default="600519")
     study.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
     study.add_argument("--end-date", type=_date, default=date.today())
@@ -43,6 +49,19 @@ def build_parser() -> argparse.ArgumentParser:
     study.add_argument("--cost-bps", type=float, default=20.0)
     study.add_argument("--artifact-dir", type=Path)
     study.add_argument("--refresh", action="store_true")
+
+    batch = subcommands.add_parser("batch-event-study", help="批量运行半年报公告事件研究")
+    batch.add_argument("--source", choices=["fixture", "akshare", "local"], default="local")
+    batch.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    batch.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
+    batch.add_argument("--end-date", type=_date, default=date.today())
+    batch.add_argument("--benchmark", default="csi000300")
+    batch.add_argument("--windows", nargs="+", type=int, default=[5, 10, 20])
+    batch.add_argument("--adjustment", choices=["hfq", "qfq", ""], default="qfq")
+    batch.add_argument("--cost-bps", type=float, default=20.0)
+    batch.add_argument("--min-events", type=int, default=1)
+    batch.add_argument("--artifact-dir", type=Path)
+    batch.add_argument("--refresh", action="store_true")
 
     data = subcommands.add_parser("data", help="初始化和检查 A 股本地数据库")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -85,19 +104,58 @@ def build_parser() -> argparse.ArgumentParser:
     data_index.add_argument("--duckdb-path", type=Path)
 
     data_announcements = data_commands.add_parser(
-        "sync-announcements", help="同步半年报/年报公告及实际公开时间"
+        "sync-announcements", help="同步季报、半年报、年报公告及实际公开时间"
     )
     data_announcements.add_argument("--start-date", type=_date, required=True)
     data_announcements.add_argument("--end-date", type=_date, default=date.today())
     data_announcements.add_argument("--symbols", nargs="+", required=True)
     data_announcements.add_argument(
-        "--types", nargs="+", choices=["interim", "annual"], default=["interim"]
+        "--types", nargs="+", choices=list(REPORT_TYPES), default=["interim"]
     )
     data_announcements.add_argument("--rate-limit-seconds", type=float)
     data_announcements.add_argument("--no-resume", action="store_true")
     data_announcements.add_argument("--refresh", action="store_true")
     data_announcements.add_argument("--data-dir", type=Path)
     data_announcements.add_argument("--duckdb-path", type=Path)
+
+    financial = data_commands.add_parser("sync-financial", help="同步 Point-in-Time 财务指标")
+    financial.add_argument("--start-date", type=_date, required=True)
+    financial.add_argument("--end-date", type=_date, default=date.today())
+    financial.add_argument("--symbols", nargs="+", required=True)
+    financial.add_argument("--rate-limit-seconds", type=float)
+    financial.add_argument("--no-resume", action="store_true")
+    financial.add_argument("--refresh", action="store_true")
+    financial.add_argument("--data-dir", type=Path)
+    financial.add_argument("--duckdb-path", type=Path)
+
+    financial_status = data_commands.add_parser(
+        "financial-status", help="查看指定时点可见的已发布财务指标"
+    )
+    financial_status.add_argument("--symbol", required=True)
+    financial_status.add_argument("--as-of", type=_date, default=date.today())
+    financial_status.add_argument("--start-date", type=_date)
+    financial_status.add_argument("--data-dir", type=Path)
+    financial_status.add_argument("--duckdb-path", type=Path)
+
+    backfill = data_commands.add_parser(
+        "backfill-research", help="批量回填股票、指数、公告和 Point-in-Time 财务指标"
+    )
+    backfill.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
+    backfill.add_argument("--end-date", type=_date, default=date.today())
+    backfill.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    backfill.add_argument("--benchmark", default="csi000300")
+    backfill.add_argument(
+        "--adjustments", nargs="+", choices=["none", "qfq", "hfq"], default=["qfq"]
+    )
+    backfill.add_argument(
+        "--types", nargs="+", choices=list(REPORT_TYPES), default=list(REPORT_TYPES)
+    )
+    backfill.add_argument("--windows", nargs="+", type=int, default=[5, 10, 20])
+    backfill.add_argument("--rate-limit-seconds", type=float)
+    backfill.add_argument("--no-resume", action="store_true")
+    backfill.add_argument("--refresh", action="store_true")
+    backfill.add_argument("--data-dir", type=Path)
+    backfill.add_argument("--duckdb-path", type=Path)
     return parser
 
 
@@ -125,12 +183,22 @@ def main() -> None:
                 payload["database_status"] = database.status()
         elif args.data_command == "status":
             payload = database.status()
+        elif args.data_command == "financial-status":
+            financial_frame = database.read_financial_metrics(
+                args.symbol, args.as_of, start_date=args.start_date
+            )
+            payload = {
+                "symbol": args.symbol,
+                "as_of": args.as_of.isoformat(),
+                "report_count": int(financial_frame["report_period_end"].nunique()),
+                "metric_count": len(financial_frame),
+                "latest": database.read_latest_financial_snapshot(args.symbol, args.as_of),
+                "reports": financial_frame.to_dict(orient="records"),
+            }
         else:
             provider = AkShareProvider(
                 cache_dir=(
-                    settings.cache_dir
-                    if args.data_dir is None
-                    else database.layout.root / "cache"
+                    settings.cache_dir if args.data_dir is None else database.layout.root / "cache"
                 ),
                 retries=settings.akshare_retries,
                 timeout_seconds=settings.akshare_timeout_seconds,
@@ -158,7 +226,7 @@ def main() -> None:
                         resume=not args.no_resume,
                     )
                 )
-            else:
+            elif args.data_command in {"sync-index", "sync-announcements"}:
                 service = ResearchDatasetSyncService(
                     database=database,
                     layout=database.layout,
@@ -184,10 +252,52 @@ def main() -> None:
                             resume=not args.no_resume,
                         )
                     )
+            elif args.data_command == "sync-financial":
+                service = FinancialDataSyncService(
+                    database=database,
+                    layout=database.layout,
+                    provider=provider,
+                    rate_limit_seconds=rate_limit,
+                )
+                payload = service.run(
+                    FinancialSyncSpec(
+                        start_date=args.start_date,
+                        end_date=args.end_date,
+                        symbols=tuple(args.symbols),
+                        resume=not args.no_resume,
+                    )
+                )
+            else:
+                service = ResearchBackfillService(
+                    database=database,
+                    layout=database.layout,
+                    provider=provider,
+                    rate_limit_seconds=rate_limit,
+                )
+                payload = service.run(
+                    ResearchBackfillSpec(
+                        start_date=args.start_date,
+                        end_date=args.end_date,
+                        symbols=tuple(args.symbols),
+                        benchmark_symbol=args.benchmark,
+                        adjustments=tuple(args.adjustments),
+                        report_types=tuple(args.types),
+                        windows=tuple(args.windows),
+                        resume=not args.no_resume,
+                    )
+                )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        if args.data_command in {"sync", "sync-index", "sync-announcements"} and payload[
-            "status"
-        ] == "failed":
+        if (
+            args.data_command
+            in {
+                "sync",
+                "sync-index",
+                "sync-announcements",
+                "sync-financial",
+                "backfill-research",
+            }
+            and payload["status"] == "failed"
+        ):
             raise SystemExit(1)
         return
 
@@ -212,6 +322,37 @@ def main() -> None:
             if args.source == "local"
             else akshare_provider
         )
+    if args.command == "batch-event-study":
+        database = (
+            LocalDatabase(
+                path=settings.duckdb_path,
+                layout=DataLayout.from_root(settings.data_dir),
+            )
+            if args.source == "local" and settings.duckdb_path.is_file()
+            else None
+        )
+        batch_service = BatchInterimReportResearchService(
+            provider=provider,
+            artifact_dir=artifact_dir,
+            database=database,
+        )
+        payload = batch_service.run(
+            BatchEventStudySpec(
+                symbols=tuple(args.symbols),
+                start_date=args.start_date,
+                end_date=args.end_date,
+                benchmark_symbol=args.benchmark,
+                windows=tuple(args.windows),
+                adjustment=args.adjustment,
+                round_trip_cost_bps=args.cost_bps,
+                min_events=args.min_events,
+            )
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if payload["status"] == "failed":
+            raise SystemExit(1)
+        return
+
     spec = EventStudySpec(
         symbol=args.symbol,
         start_date=args.start_date,

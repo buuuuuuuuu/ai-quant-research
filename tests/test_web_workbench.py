@@ -68,7 +68,9 @@ def test_workbench_home_and_static_assets_are_served(tmp_path) -> None:
 
 
 def test_database_overview_exposes_counts_coverage_and_research_universe(tmp_path) -> None:
-    _database(tmp_path)
+    database = _database(tmp_path)
+    with database.connect() as connection:
+        connection.execute("UPDATE security_master SET list_date = NULL WHERE symbol = '300750'")
     with TestClient(create_app(_settings(tmp_path))) as client:
         response = client.get("/api/v1/data/overview")
 
@@ -77,6 +79,8 @@ def test_database_overview_exposes_counts_coverage_and_research_universe(tmp_pat
     assert overview["database"]["schema_version"] == 4
     assert overview["database"]["relations"]["security_master"] == 3
     assert {row["symbol"] for row in overview["securities"]} == {"600519", "000001", "300750"}
+    securities = {row["symbol"]: row for row in overview["securities"]}
+    assert securities["300750"]["list_date"] is None
     assert overview["coverage"]["stock"]["start_date"] == "2024-01-02"
     assert overview["coverage"]["benchmark"]["rows"] > 0
     assert overview["coverage"]["financial"]["rows"] == 5

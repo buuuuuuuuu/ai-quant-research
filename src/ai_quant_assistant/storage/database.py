@@ -154,8 +154,10 @@ class LocalDatabase:
                 FROM published_financial_report
                 """
             ).fetchall()
-        overview["securities"] = securities.where(pd.notna(securities), None).to_dict(
-            orient="records"
+        overview["securities"] = (
+            securities.astype(object)
+            .where(pd.notna(securities), None)
+            .to_dict(orient="records")
         )
         overview["coverage"] = {
             str(dataset): {"start_date": start, "end_date": end, "rows": int(rows)}

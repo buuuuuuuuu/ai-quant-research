@@ -211,6 +211,7 @@ class EventStudyEngine:
             "confidence_interval": "normal_approximation_95pct",
             "excess_return_method": "stock_net_return_minus_benchmark_return",
             "data_sources": {
+                "announcements": self._source_diagnostics(announcements),
                 "stock": self._source_diagnostics(stock_prices),
                 "benchmark": self._source_diagnostics(benchmark_prices),
             },

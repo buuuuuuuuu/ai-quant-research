@@ -63,6 +63,28 @@ class FakeSyncAkShare:
             }
         )
 
+    @staticmethod
+    def stock_zh_a_disclosure_report_cninfo(**kwargs) -> pd.DataFrame:
+        if kwargs["category"] == "半年报":
+            return pd.DataFrame(
+                {
+                    "代码": ["600519"],
+                    "简称": ["贵州茅台"],
+                    "公告标题": ["贵州茅台2024年半年度报告"],
+                    "公告时间": ["2024-08-15 18:45:00"],
+                    "公告链接": ["https://example.test/interim"],
+                }
+            )
+        return pd.DataFrame(
+            {
+                "代码": ["600519", "600519"],
+                "简称": ["贵州茅台", "贵州茅台"],
+                "公告标题": ["贵州茅台2024年年度报告", "贵州茅台2024年半年度报告"],
+                "公告时间": ["2025-03-10 20:15:00", "2025-03-11 08:00:00"],
+                "公告链接": ["https://example.test/annual", "https://example.test/interim"],
+            }
+        )
+
 
 class FakeFallbackMasterAkShare:
     @staticmethod
@@ -156,3 +178,26 @@ def test_security_master_falls_back_when_composite_listing_fails(
     ]
     assert master["symbol"].tolist() == ["600519", "000001", "430047"]
     assert master["source"].unique().tolist() == ["akshare:stock_zh_a_spot_em"]
+
+
+def test_report_announcements_preserve_period_and_actual_publication(
+    tmp_path, monkeypatch
+) -> None:
+    provider = AkShareProvider(cache_dir=tmp_path, retries=1)
+    monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
+
+    interim = provider.get_report_announcements(
+        "600519", date(2024, 1, 1), date(2024, 12, 31), "interim"
+    )
+    annual = provider.get_report_announcements(
+        "600519", date(2025, 1, 1), date(2025, 12, 31), "annual"
+    )
+
+    assert interim["report_period_end"].tolist() == [pd.Timestamp("2024-06-30")]
+    assert interim["published_at"].tolist() == [pd.Timestamp("2024-08-15 18:45:00")]
+    assert interim["source"].tolist() == [
+        "akshare:stock_zh_a_disclosure_report_cninfo:interim"
+    ]
+    assert annual["report_year"].tolist() == [2024]
+    assert annual["report_period_end"].tolist() == [pd.Timestamp("2024-12-31")]
+    assert annual["published_at"].tolist() == [pd.Timestamp("2025-03-10 20:15:00")]

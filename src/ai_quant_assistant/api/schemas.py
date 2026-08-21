@@ -9,7 +9,7 @@ from ai_quant_assistant.domain.models import EventStudySpec
 
 
 class InterimReportEventStudyRequest(BaseModel):
-    source: Literal["fixture", "akshare"] = "fixture"
+    source: Literal["fixture", "akshare", "local"] = "fixture"
     symbol: str = Field(default="600519", pattern=r"^\d{6}$")
     start_date: date = date(2012, 1, 1)
     end_date: date = date(2025, 12, 31)

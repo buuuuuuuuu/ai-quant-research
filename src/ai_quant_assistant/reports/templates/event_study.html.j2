@@ -48,7 +48,7 @@
   <table>
     <thead><tr><th>数据集</th><th>服务来源</th><th>底层来源</th><th>本地命中</th><th>本地回退</th><th>Provider 备用接口</th><th>批次</th></tr></thead>
     <tbody>
-    {% for label, item in [('股票', diagnostics.data_sources.stock), ('基准', diagnostics.data_sources.benchmark)] %}
+    {% for label, item in [('公告', diagnostics.data_sources.announcements), ('股票', diagnostics.data_sources.stock), ('基准', diagnostics.data_sources.benchmark)] %}
       <tr>
         <td>{{ label }}</td>
         <td>{{ item.serving_sources|join(', ') or '-' }}</td>

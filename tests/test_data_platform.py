@@ -3,6 +3,7 @@ import sys
 
 from ai_quant_assistant.cli import main
 from ai_quant_assistant.storage.database import LocalDatabase
+from ai_quant_assistant.storage.fixture_data import load_fixture_data
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.schema import MIGRATIONS, SCHEMA_VERSION
 
@@ -47,7 +48,7 @@ def test_fixture_load_is_repeatable_and_only_publishes_validated_bars(tmp_path) 
     assert status["relations"]["dq_result"] == 1
 
 
-def test_existing_schema_v1_database_upgrades_to_v2(tmp_path) -> None:
+def test_existing_schema_v1_database_upgrades_to_latest(tmp_path) -> None:
     database = _database(tmp_path)
     database.layout.ensure()
     database.path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,9 +71,44 @@ def test_existing_schema_v1_database_upgrades_to_v2(tmp_path) -> None:
 
     initialized = database.initialize()
 
-    assert initialized["applied_migrations"] == [2]
-    assert database.status()["schema_version"] == 2
+    assert initialized["applied_migrations"] == [2, 3]
+    assert database.status()["schema_version"] == 3
     assert database.status()["relations"]["sync_partition"] == 0
+    assert database.status()["relations"]["research_sync_partition"] == 0
+
+
+def test_existing_schema_v2_database_upgrades_without_losing_published_data(tmp_path) -> None:
+    database = _database(tmp_path)
+    database.layout.ensure()
+    database.path.parent.mkdir(parents=True, exist_ok=True)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for migration in MIGRATIONS[:2]:
+            for statement in migration.statements:
+                connection.execute(statement)
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
+                [migration.version, migration.name],
+            )
+        load_fixture_data(connection)
+
+    initialized = database.initialize()
+    status = database.status()
+
+    assert initialized["applied_migrations"] == [3]
+    assert status["schema_version"] == 3
+    assert status["relations"]["daily_bar"] == 5
+    assert status["relations"]["published_daily_bar"] == 5
+    assert status["relations"]["benchmark_daily_bar"] == 0
+    assert status["relations"]["announcement"] == 0
 
 
 def test_cli_data_init_and_status_use_environment_paths(tmp_path, monkeypatch, capsys) -> None:

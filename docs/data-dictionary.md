@@ -1,8 +1,9 @@
-# A 股本地数据库数据字典（Schema v2）
+# A 股本地数据库数据字典（Schema v3）
 
 ## 公共约定
 
 - `security_id`：`交易所.六位代码`，如 `SSE.600519`、`SZSE.000001`、`BSE.430047`。
+- `benchmark_id`：`INDEX.标准指数代码`，如 `INDEX.csi000300`。
 - `source`：实际数据来源或 Fixture 版本，任何降级接口都必须保留实际来源。
 - `batch_id/source_batch_id`：关联一次同步批次，便于重试、质量检查和血缘追踪。
 - 时间戳使用 UTC 存储；`trade_date/list_date/delist_date` 是不含时区的业务日期。
@@ -97,6 +98,9 @@
 | error | VARCHAR | 可空 | 失败摘要 |
 | created_at | TIMESTAMP | NOT NULL | 创建时间 |
 
+`dataset` 取 `daily_bar`、`benchmark_daily_bar` 或 `announcement`；不同数据集复用相同
+的批次状态机和请求参数规范化规则。
+
 ## dq_result
 
 | 字段 | 类型 | 约束 | 含义 |
@@ -147,13 +151,81 @@
 
 | 字段 | 类型 | 约束 | 含义 |
 |---|---|---|---|
-| dataset | VARCHAR | PK(1) | 当前为 `daily_bar` |
-| security_id | VARCHAR | PK(2) | 证券标识 |
-| adjustment | VARCHAR | PK(3) | 复权口径 |
+| dataset | VARCHAR | PK(1) | `daily_bar`、`benchmark_daily_bar`、`announcement` |
+| security_id | VARCHAR | PK(2) | 股票标识或 `INDEX.<symbol>` |
+| adjustment | VARCHAR | PK(3) | 股票复权口径、指数 `none`、公告 `interim/annual` |
 | start_date | DATE | PK(4) | 已处理区间起点 |
 | end_date | DATE | PK(5) | 已处理区间终点 |
 | source_batch_id | VARCHAR | NOT NULL | 发布批次 |
 | updated_at | TIMESTAMP | NOT NULL | 更新时间 |
 
-本地优先 Provider 会合并相邻覆盖区间；只有完整覆盖请求范围且 published 视图存在数据时
-才返回本地价格，否则回退外部 Provider。
+本地优先 Provider 会合并相邻覆盖区间；股票和指数只有完整覆盖请求范围且 published 视图
+存在数据时才返回本地价格。公告允许“已完整同步但零记录”，此时返回本地空结果，不再
+重复回退外部 Provider。
+
+## benchmark_master
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| benchmark_id | VARCHAR | PK | 稳定指数标识，如 `INDEX.csi000300` |
+| symbol | VARCHAR | UNIQUE, NOT NULL | 标准指数代码 |
+| name | VARCHAR | NOT NULL | 指数名称 |
+| source | VARCHAR | NOT NULL | 主数据来源 |
+| source_batch_id | VARCHAR | NOT NULL | 最近更新批次 |
+| updated_at | TIMESTAMP | NOT NULL | 更新时间 |
+
+## benchmark_daily_bar
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| benchmark_id | VARCHAR | PK(1) | 指数标识 |
+| trade_date | DATE | PK(2) | 交易日 |
+| close | DOUBLE | 正数 | 指数收盘点位 |
+| source | VARCHAR | NOT NULL | 主接口或备用接口实际来源 |
+| source_batch_id | VARCHAR | NOT NULL | 发布批次 |
+| quality_status | VARCHAR | pending/warning/published/rejected | 质量发布状态 |
+| published_at | TIMESTAMP | NOT NULL | 本地发布时间 |
+
+`published_benchmark_daily_bar` 只暴露 `quality_status='published'` 的稳定指数记录。
+
+## announcement
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| announcement_id | VARCHAR | PK | 规范公告的稳定标识 |
+| security_id | VARCHAR | NOT NULL | 证券标识 |
+| company_name | VARCHAR | NOT NULL | 公告披露时的公司名称 |
+| title | VARCHAR | NOT NULL | 公告标题 |
+| report_type | VARCHAR | interim/annual | 半年报或年报 |
+| report_year | INTEGER | NOT NULL | 报告所属年度 |
+| report_period_end | DATE | NOT NULL | 报告所属期间结束日，即信息有效时间 |
+| announcement_date | DATE | 不早于报告期结束 | 业务公告日期 |
+| published_at | TIMESTAMP | NOT NULL | 信息实际公开时间，即可知时间 |
+| url | VARCHAR | NOT NULL | 原始公告链接，无链接时为空字符串 |
+| source | VARCHAR | NOT NULL | 实际公告 Provider 来源 |
+| source_batch_id | VARCHAR | NOT NULL | 发布批次 |
+| content_sha256 | VARCHAR | NOT NULL | 规范公告内容 SHA-256 |
+| quality_status | VARCHAR | pending/warning/published/rejected | 质量发布状态 |
+| ingested_at | TIMESTAMP | NOT NULL | 本地入库时间 |
+
+半年报 `report_period_end` 为报告年度的 6 月 30 日，年报为 12 月 31 日。读取
+`published_announcement` 时同时要求实际公开时间早于研究截止日次日零点，禁止
+“报告已经形成但尚未公开”的记录参与研究。
+
+## research_sync_partition
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| batch_id | VARCHAR | PK(1) | 所属同步批次 |
+| dataset | VARCHAR | benchmark_daily_bar/announcement | 研究数据集 |
+| partition_key | VARCHAR | PK(2) | 对象、类型和日期共同确定的稳定键 |
+| object_id | VARCHAR | NOT NULL | 股票 `security_id` 或指数 `benchmark_id` |
+| variant | VARCHAR | NOT NULL | 指数 `none` 或公告 `interim/annual` |
+| start_date/end_date | DATE | start <= end | 分区请求区间 |
+| status | VARCHAR | planned/fetching/published/failed | 断点续跑状态 |
+| attempts | INTEGER | 非负 | 已尝试次数 |
+| row_count | BIGINT | 非负 | 已发布行数 |
+| error | VARCHAR | 可空 | 最近一次错误 |
+| raw_path | VARCHAR | 可空 | 原始响应 Parquet 路径 |
+| raw_sha256 | VARCHAR | 可空 | 原始文件 SHA-256 |
+| created_at/updated_at | TIMESTAMP | NOT NULL | 生命周期时间 |

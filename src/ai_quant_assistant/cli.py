@@ -7,13 +7,19 @@ from datetime import date
 from pathlib import Path
 
 from ai_quant_assistant.config import Settings
-from ai_quant_assistant.domain.models import DataSyncSpec, EventStudySpec
+from ai_quant_assistant.domain.models import (
+    AnnouncementSyncSpec,
+    BenchmarkSyncSpec,
+    DataSyncSpec,
+    EventStudySpec,
+)
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 
 
@@ -67,6 +73,31 @@ def build_parser() -> argparse.ArgumentParser:
     data_sync.add_argument("--refresh", action="store_true")
     data_sync.add_argument("--data-dir", type=Path)
     data_sync.add_argument("--duckdb-path", type=Path)
+
+    data_index = data_commands.add_parser("sync-index", help="同步并发布沪深指数历史日线")
+    data_index.add_argument("--start-date", type=_date, required=True)
+    data_index.add_argument("--end-date", type=_date, default=date.today())
+    data_index.add_argument("--symbols", nargs="+", default=["csi000300"])
+    data_index.add_argument("--rate-limit-seconds", type=float)
+    data_index.add_argument("--no-resume", action="store_true")
+    data_index.add_argument("--refresh", action="store_true")
+    data_index.add_argument("--data-dir", type=Path)
+    data_index.add_argument("--duckdb-path", type=Path)
+
+    data_announcements = data_commands.add_parser(
+        "sync-announcements", help="同步半年报/年报公告及实际公开时间"
+    )
+    data_announcements.add_argument("--start-date", type=_date, required=True)
+    data_announcements.add_argument("--end-date", type=_date, default=date.today())
+    data_announcements.add_argument("--symbols", nargs="+", required=True)
+    data_announcements.add_argument(
+        "--types", nargs="+", choices=["interim", "annual"], default=["interim"]
+    )
+    data_announcements.add_argument("--rate-limit-seconds", type=float)
+    data_announcements.add_argument("--no-resume", action="store_true")
+    data_announcements.add_argument("--refresh", action="store_true")
+    data_announcements.add_argument("--data-dir", type=Path)
+    data_announcements.add_argument("--duckdb-path", type=Path)
     return parser
 
 
@@ -110,24 +141,53 @@ def main() -> None:
                 if args.rate_limit_seconds is not None
                 else settings.data_sync_rate_limit_seconds
             )
-            service = MarketDataSyncService(
-                database=database,
-                layout=database.layout,
-                provider=provider,
-                rate_limit_seconds=rate_limit,
-            )
-            payload = service.run(
-                DataSyncSpec(
-                    start_date=args.start_date,
-                    end_date=args.end_date,
-                    symbols=tuple(args.symbols),
-                    adjustments=tuple(args.adjustments),
-                    symbol_limit=args.limit,
-                    resume=not args.no_resume,
+            if args.data_command == "sync":
+                service = MarketDataSyncService(
+                    database=database,
+                    layout=database.layout,
+                    provider=provider,
+                    rate_limit_seconds=rate_limit,
                 )
-            )
+                payload = service.run(
+                    DataSyncSpec(
+                        start_date=args.start_date,
+                        end_date=args.end_date,
+                        symbols=tuple(args.symbols),
+                        adjustments=tuple(args.adjustments),
+                        symbol_limit=args.limit,
+                        resume=not args.no_resume,
+                    )
+                )
+            else:
+                service = ResearchDatasetSyncService(
+                    database=database,
+                    layout=database.layout,
+                    provider=provider,
+                    rate_limit_seconds=rate_limit,
+                )
+                if args.data_command == "sync-index":
+                    payload = service.sync_benchmarks(
+                        BenchmarkSyncSpec(
+                            start_date=args.start_date,
+                            end_date=args.end_date,
+                            symbols=tuple(args.symbols),
+                            resume=not args.no_resume,
+                        )
+                    )
+                else:
+                    payload = service.sync_announcements(
+                        AnnouncementSyncSpec(
+                            start_date=args.start_date,
+                            end_date=args.end_date,
+                            symbols=tuple(args.symbols),
+                            report_types=tuple(args.types),
+                            resume=not args.no_resume,
+                        )
+                    )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-        if args.data_command == "sync" and payload["status"] == "failed":
+        if args.data_command in {"sync", "sync-index", "sync-announcements"} and payload[
+            "status"
+        ] == "failed":
             raise SystemExit(1)
         return
 

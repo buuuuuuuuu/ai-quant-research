@@ -18,7 +18,23 @@ class LocalFirstProvider:
     def get_interim_announcements(
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
-        return self.fallback.get_interim_announcements(symbol, start_date, end_date)
+        if self.database.has_announcement_coverage(symbol, start_date, end_date, "interim"):
+            local = self.database.read_published_announcements(
+                symbol, start_date, end_date, "interim"
+            )
+            return self._annotate_access(
+                local,
+                local_hit=True,
+                local_fallback_used=False,
+                fallback_reason="",
+            )
+        fallback = self.fallback.get_interim_announcements(symbol, start_date, end_date)
+        return self._annotate_access(
+            fallback,
+            local_hit=False,
+            local_fallback_used=True,
+            fallback_reason="coverage_incomplete",
+        )
 
     def get_stock_prices(
         self, symbol: str, start_date: date, end_date: date, adjustment: str
@@ -49,12 +65,24 @@ class LocalFirstProvider:
     def get_benchmark_prices(
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
+        if self.database.has_benchmark_coverage(symbol, start_date, end_date):
+            local = self.database.read_benchmark_prices(symbol, start_date, end_date)
+            if not local.empty:
+                return self._annotate_access(
+                    local,
+                    local_hit=True,
+                    local_fallback_used=False,
+                    fallback_reason="",
+                )
+            fallback_reason = "published_rows_empty"
+        else:
+            fallback_reason = "coverage_incomplete"
         fallback = self.fallback.get_benchmark_prices(symbol, start_date, end_date)
         return self._annotate_access(
             fallback,
             local_hit=False,
             local_fallback_used=True,
-            fallback_reason="dataset_not_local",
+            fallback_reason=fallback_reason,
         )
 
     @staticmethod

@@ -36,17 +36,20 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1）
+## A 股本地数据库（M0 + M1 + M2-A）
 
-数据平台提供 DuckDB Schema v2、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
-目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历和日线增量同步。日线按
-证券、年份和复权口径分区，失败分区可以断点续跑，阻断级质量检查失败的数据不会发布。
+数据平台提供 DuckDB Schema v3、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
+半年报/年报公告增量同步。分区支持失败续跑，阻断级质量检查失败的数据不会发布；公告
+同时保存报告期和实际公开时间，防止把未来信息带入历史研究。
 
 初始化空数据库：
 
 ```bash
 uv run ai-quant data init
 ```
+
+已有 Schema v2 数据库执行同一命令时会自动升级到 Schema v3，不删除已发布的股票日线。
 
 初始化并写入离线样例：
 
@@ -68,7 +71,24 @@ uv run ai-quant data sync \
 `--limit 10` 冒烟验证。完全相同的请求会复用批次，只重试失败或中断的分区；需要强制
 重新抓取时同时使用 `--no-resume --refresh`。
 
-同步完成后，事件研究可以优先读取本地已发布数据，覆盖不足时自动回退 AkShare：
+同步沪深 300 指数基准，以及指定公司的半年报、年报公告：
+
+```bash
+uv run ai-quant data sync-index \
+  --start-date 2024-01-01 \
+  --end-date 2025-03-16 \
+  --symbols csi000300
+
+uv run ai-quant data sync-announcements \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --symbols 600519 \
+  --types interim annual
+```
+
+指数和股票覆盖区间应包含研究窗口所需的向后延伸日期；公告只需要覆盖研究起止区间。
+三类数据同步完成后，事件研究会优先读取本地已发布的股票、基准和公告，任意数据集覆盖
+不足时仅对该数据集回退 AkShare：
 
 ```bash
 uv run ai-quant event-study \
@@ -78,10 +98,10 @@ uv run ai-quant event-study \
   --adjustment qfq
 ```
 
-事件研究的 `diagnostics.data_sources` 和 HTML 报告会显示股票、基准的服务来源、底层
-Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据对应的同步批次。
-本地股票快照还保留 `provider_source`、`source_batch_id` 和 `raw_path`，可从研究结果追溯
-到同步批次与 Raw Parquet。
+事件研究的 `diagnostics.data_sources` 和 HTML 报告会分别显示股票、基准、公告的服务
+来源、底层 Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据
+对应的同步批次。三类研究快照均保留 `provider_source`、`source_batch_id` 和 `raw_path`，
+可从研究结果追溯到同步批次与 Raw Parquet。
 
 如果当前 `catalog.duckdb` 曾使用 `--with-fixture` 写入测试数据，正式同步前建议先归档：
 
@@ -135,7 +155,7 @@ uv run ai-quant event-study \
 
 AkShare 当前官方接口口径：
 
-- 公告：`stock_zh_a_disclosure_report_cninfo(..., category="半年报")`
+- 公告：`stock_zh_a_disclosure_report_cninfo(..., category="半年报"/"年报")`
 - 股票行情：`stock_zh_a_hist(..., adjust="hfq")`
 - 指数行情：主接口 `stock_zh_index_daily_em(symbol="csi000300")`，失败时回退 `stock_zh_index_daily(symbol="sh000300")`
 
@@ -166,6 +186,9 @@ curl -X POST http://127.0.0.1:8000/api/v1/research/interim-report-event-study \
     "round_trip_cost_bps": 20
   }'
 ```
+
+将请求中的 `"source": "fixture"` 改为 `"source": "local"`，即可使用与 CLI 一致的本地
+优先股票、指数和公告数据源。
 
 ## 测试与代码检查
 

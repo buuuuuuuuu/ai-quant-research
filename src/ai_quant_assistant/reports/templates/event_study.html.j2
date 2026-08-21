@@ -83,10 +83,10 @@
 
   <h2>事件明细</h2>
   <table>
-    <thead><tr><th>报告年度</th><th>公告日</th><th>入场日</th><th>退出日</th><th>窗口</th><th>股票净收益</th><th>基准收益</th><th>超额收益</th></tr></thead>
+    <thead><tr><th>报告年度</th><th>公告日</th><th>公告日股价</th><th>入场日</th><th>入场日股价</th><th>退出日</th><th>退出日股价</th><th>窗口</th><th>股票净收益</th><th>基准收益</th><th>超额收益</th></tr></thead>
     <tbody>
     {% for row in events %}
-      <tr><td>{{ row.report_year }}</td><td>{{ row.announcement_date|date }}</td><td>{{ row.entry_date|date }}</td><td>{{ row.exit_date|date }}</td><td>{{ row.window }}</td><td>{{ row.stock_net_return|pct }}</td><td>{{ row.benchmark_return|pct }}</td><td>{{ row.excess_return|pct }}</td></tr>
+      <tr><td>{{ row.report_year }}</td><td>{{ row.announcement_date|date }}</td><td>{{ row.stock_announcement_close|price }}</td><td>{{ row.entry_date|date }}</td><td>{{ row.stock_entry_close|price }}</td><td>{{ row.exit_date|date }}</td><td>{{ row.stock_exit_close|price }}</td><td>{{ row.window }}</td><td>{{ row.stock_net_return|pct }}</td><td>{{ row.benchmark_return|pct }}</td><td>{{ row.excess_return|pct }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

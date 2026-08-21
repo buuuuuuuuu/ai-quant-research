@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +255,106 @@ MIGRATIONS = (
             """
             CREATE OR REPLACE VIEW published_announcement AS
             SELECT * FROM announcement WHERE quality_status = 'published'
+            """,
+        ),
+    ),
+    Migration(
+        version=4,
+        name="point_in_time_financial_reports_and_quarterly_disclosures",
+        statements=(
+            """
+            CREATE TABLE announcement_v4 (
+                announcement_id VARCHAR PRIMARY KEY,
+                security_id VARCHAR NOT NULL,
+                company_name VARCHAR NOT NULL,
+                title VARCHAR NOT NULL,
+                report_type VARCHAR NOT NULL
+                    CHECK (report_type IN ('q1', 'interim', 'q3', 'annual')),
+                report_year INTEGER NOT NULL,
+                report_period_end DATE NOT NULL,
+                announcement_date DATE NOT NULL,
+                published_at TIMESTAMP NOT NULL,
+                url VARCHAR NOT NULL DEFAULT '',
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                content_sha256 VARCHAR NOT NULL,
+                quality_status VARCHAR NOT NULL DEFAULT 'published'
+                    CHECK (quality_status IN ('pending', 'warning', 'published', 'rejected')),
+                ingested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (announcement_date >= report_period_end)
+            )
+            """,
+            "INSERT INTO announcement_v4 SELECT * FROM announcement",
+            "DROP VIEW published_announcement",
+            "DROP TABLE announcement",
+            "ALTER TABLE announcement_v4 RENAME TO announcement",
+            """
+            CREATE VIEW published_announcement AS
+            SELECT * FROM announcement WHERE quality_status = 'published'
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS financial_report (
+                report_id VARCHAR PRIMARY KEY,
+                security_id VARCHAR NOT NULL,
+                report_period_end DATE NOT NULL,
+                report_type VARCHAR NOT NULL
+                    CHECK (report_type IN ('q1', 'interim', 'q3', 'annual')),
+                published_at TIMESTAMP NOT NULL,
+                availability_source VARCHAR NOT NULL
+                    CHECK (availability_source IN ('provider_notice', 'matched_announcement')),
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                raw_sha256 VARCHAR NOT NULL,
+                quality_status VARCHAR NOT NULL DEFAULT 'published'
+                    CHECK (quality_status IN ('pending', 'warning', 'published', 'rejected')),
+                observed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (CAST(published_at AS DATE) >= report_period_end),
+                UNIQUE (security_id, report_period_end, published_at)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS financial_metric (
+                report_id VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                report_period_end DATE NOT NULL,
+                published_at TIMESTAMP NOT NULL,
+                metric_code VARCHAR NOT NULL,
+                metric_value DOUBLE NOT NULL,
+                unit VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                quality_status VARCHAR NOT NULL DEFAULT 'published'
+                    CHECK (quality_status IN ('pending', 'warning', 'published', 'rejected')),
+                PRIMARY KEY (report_id, metric_code)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS financial_sync_partition (
+                batch_id VARCHAR NOT NULL,
+                partition_key VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'planned'
+                    CHECK (status IN ('planned', 'fetching', 'published', 'failed')),
+                attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                row_count BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                metric_count BIGINT NOT NULL DEFAULT 0 CHECK (metric_count >= 0),
+                error VARCHAR,
+                raw_path VARCHAR,
+                raw_sha256 VARCHAR,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (start_date <= end_date),
+                PRIMARY KEY (batch_id, partition_key)
+            )
+            """,
+            """
+            CREATE OR REPLACE VIEW published_financial_report AS
+            SELECT * FROM financial_report WHERE quality_status = 'published'
+            """,
+            """
+            CREATE OR REPLACE VIEW published_financial_metric AS
+            SELECT * FROM financial_metric WHERE quality_status = 'published'
             """,
         ),
     ),

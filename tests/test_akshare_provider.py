@@ -65,6 +65,21 @@ class FakeSyncAkShare:
 
     @staticmethod
     def stock_zh_a_disclosure_report_cninfo(**kwargs) -> pd.DataFrame:
+        quarterly = {
+            "一季报": ("第一季度", "2024-04-20 18:30:00"),
+            "三季报": ("第三季度", "2024-10-20 19:10:00"),
+        }
+        if kwargs["category"] in quarterly:
+            quarter, published_at = quarterly[kwargs["category"]]
+            return pd.DataFrame(
+                {
+                    "代码": ["600519"],
+                    "简称": ["贵州茅台"],
+                    "公告标题": [f"贵州茅台2024年{quarter}报告"],
+                    "公告时间": [published_at],
+                    "公告链接": [f"https://example.test/{quarter}"],
+                }
+            )
         if kwargs["category"] == "半年报":
             return pd.DataFrame(
                 {
@@ -82,6 +97,41 @@ class FakeSyncAkShare:
                 "公告标题": ["贵州茅台2024年年度报告", "贵州茅台2024年半年度报告"],
                 "公告时间": ["2025-03-10 20:15:00", "2025-03-11 08:00:00"],
                 "公告链接": ["https://example.test/annual", "https://example.test/interim"],
+            }
+        )
+
+    @staticmethod
+    def stock_financial_analysis_indicator_em(**kwargs) -> pd.DataFrame:
+        assert kwargs == {"symbol": "600519.SH", "indicator": "按报告期"}
+        return pd.DataFrame(
+            {
+                "REPORT_DATE": ["2024-03-31", "2024-06-30"],
+                "SECURITY_NAME_ABBR": ["贵州茅台", "贵州茅台"],
+                "NOTICE_DATE": ["2024-04-20 18:30:00", "2024-08-15 18:45:00"],
+                "TOTALOPERATEREVE": [100.0, 250.0],
+                "PARENTNETPROFIT": [30.0, 80.0],
+                "EPSJB": [0.3, 0.8],
+                "ROEJQ": [12.0, 18.0],
+                "JYXJLYYSR": [0.22, 0.31],
+            }
+        )
+
+
+class FakeFinancialFallbackAkShare:
+    @staticmethod
+    def stock_financial_analysis_indicator_em(**kwargs) -> pd.DataFrame:
+        assert kwargs["symbol"] == "000001.SZ"
+        raise ConnectionError("EastMoney financial endpoint disconnected")
+
+    @staticmethod
+    def stock_financial_analysis_indicator(**kwargs) -> pd.DataFrame:
+        assert kwargs == {"symbol": "000001", "start_year": "2024"}
+        return pd.DataFrame(
+            {
+                "日期": ["2024-06-30"],
+                "营业收入(元)": [900.0],
+                "净利润(元)": [120.0],
+                "经营现金净流量对销售收入比率(%)": [25.0],
             }
         )
 
@@ -105,9 +155,7 @@ def test_benchmark_provider_falls_back_and_clips_dates(tmp_path, monkeypatch) ->
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeAkShare())
 
-    result = provider.get_benchmark_prices(
-        "csi000300", date(2024, 1, 2), date(2024, 1, 3)
-    )
+    result = provider.get_benchmark_prices("csi000300", date(2024, 1, 2), date(2024, 1, 3))
 
     assert result["date"].tolist() == [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
     assert result["symbol"].unique().tolist() == ["csi000300"]
@@ -118,9 +166,7 @@ def test_stock_provider_falls_back_to_sina_daily(tmp_path, monkeypatch) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeAkShare())
 
-    result = provider.get_stock_prices(
-        "601318", date(2024, 1, 2), date(2024, 1, 3), "hfq"
-    )
+    result = provider.get_stock_prices("601318", date(2024, 1, 2), date(2024, 1, 3), "hfq")
 
     assert result["date"].tolist() == [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
     assert result["symbol"].unique().tolist() == ["601318"]
@@ -136,9 +182,7 @@ def test_sync_provider_normalizes_master_calendar_and_full_daily_bars(
     master = provider.get_security_master()
     cached_master = provider.get_security_master()
     calendar = provider.get_trading_calendar()
-    bars = provider.get_daily_bars(
-        "600519", date(2024, 1, 2), date(2024, 1, 3), "none"
-    )
+    bars = provider.get_daily_bars("600519", date(2024, 1, 2), date(2024, 1, 3), "none")
 
     assert master["security_id"].tolist() == [
         "SSE.600519",
@@ -163,9 +207,7 @@ def test_sync_provider_normalizes_master_calendar_and_full_daily_bars(
     assert bars["amount_missing"].tolist() == [False, False]
 
 
-def test_security_master_falls_back_when_composite_listing_fails(
-    tmp_path, monkeypatch
-) -> None:
+def test_security_master_falls_back_when_composite_listing_fails(tmp_path, monkeypatch) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeFallbackMasterAkShare())
 
@@ -180,9 +222,7 @@ def test_security_master_falls_back_when_composite_listing_fails(
     assert master["source"].unique().tolist() == ["akshare:stock_zh_a_spot_em"]
 
 
-def test_report_announcements_preserve_period_and_actual_publication(
-    tmp_path, monkeypatch
-) -> None:
+def test_report_announcements_preserve_period_and_actual_publication(tmp_path, monkeypatch) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
 
@@ -195,9 +235,51 @@ def test_report_announcements_preserve_period_and_actual_publication(
 
     assert interim["report_period_end"].tolist() == [pd.Timestamp("2024-06-30")]
     assert interim["published_at"].tolist() == [pd.Timestamp("2024-08-15 18:45:00")]
-    assert interim["source"].tolist() == [
-        "akshare:stock_zh_a_disclosure_report_cninfo:interim"
-    ]
+    assert interim["source"].tolist() == ["akshare:stock_zh_a_disclosure_report_cninfo:interim"]
     assert annual["report_year"].tolist() == [2024]
     assert annual["report_period_end"].tolist() == [pd.Timestamp("2024-12-31")]
     assert annual["published_at"].tolist() == [pd.Timestamp("2025-03-10 20:15:00")]
+
+
+def test_quarterly_announcements_preserve_report_period_and_publication_time(
+    tmp_path, monkeypatch
+) -> None:
+    provider = AkShareProvider(cache_dir=tmp_path, retries=1)
+    monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
+
+    q1 = provider.get_report_announcements("600519", date(2024, 1, 1), date(2024, 12, 31), "q1")
+    q3 = provider.get_report_announcements("600519", date(2024, 1, 1), date(2024, 12, 31), "q3")
+
+    assert q1["report_period_end"].tolist() == [pd.Timestamp("2024-03-31")]
+    assert q1["published_at"].tolist() == [pd.Timestamp("2024-04-20 18:30:00")]
+    assert q3["report_period_end"].tolist() == [pd.Timestamp("2024-09-30")]
+    assert q3["published_at"].tolist() == [pd.Timestamp("2024-10-20 19:10:00")]
+
+
+def test_financial_provider_normalizes_quarterly_metrics_and_publication_times(
+    tmp_path, monkeypatch
+) -> None:
+    provider = AkShareProvider(cache_dir=tmp_path, retries=1)
+    monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
+
+    result = provider.get_financial_indicators("600519", date(2024, 1, 1), date(2024, 12, 31))
+
+    assert result["report_type"].tolist() == ["q1", "interim"]
+    assert result["published_at"].tolist() == [
+        pd.Timestamp("2024-04-20 18:30:00"),
+        pd.Timestamp("2024-08-15 18:45:00"),
+    ]
+    assert result["revenue"].tolist() == [100.0, 250.0]
+    assert result["operating_cash_flow_to_revenue"].tolist() == [0.22, 0.31]
+
+
+def test_financial_provider_fallback_converts_percentage_to_ratio(tmp_path, monkeypatch) -> None:
+    provider = AkShareProvider(cache_dir=tmp_path, retries=1)
+    monkeypatch.setattr(provider, "_akshare", lambda: FakeFinancialFallbackAkShare())
+
+    result = provider.get_financial_indicators("000001", date(2024, 1, 1), date(2024, 12, 31))
+
+    assert result["source"].tolist() == ["akshare:stock_financial_analysis_indicator"]
+    assert result["revenue"].tolist() == [900.0]
+    assert result["operating_cash_flow_to_revenue"].tolist() == [0.25]
+    assert result["published_at"].isna().all()

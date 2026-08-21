@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-ALLOWED_RESEARCH_TOOLS = frozenset({"run_interim_report_event_study"})
+ALLOWED_RESEARCH_TOOLS = frozenset(
+    {"run_interim_report_event_study", "run_batch_interim_report_event_study"}
+)
 
 
 def require_allowed_tool(name: str) -> None:

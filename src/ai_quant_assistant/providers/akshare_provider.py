@@ -10,6 +10,7 @@ from ai_quant_assistant.providers.cache import DataFrameCache, load_or_fetch
 from ai_quant_assistant.providers.normalization import (
     clip_dates,
     normalize_daily_bars,
+    normalize_financial_indicators,
     normalize_interim_announcements,
     normalize_prices,
     normalize_report_announcements,
@@ -94,7 +95,7 @@ class AkShareProvider:
         end_date: date,
         report_type: str,
     ) -> pd.DataFrame:
-        categories = {"interim": "半年报", "annual": "年报"}
+        categories = {"q1": "一季报", "interim": "半年报", "q3": "三季报", "annual": "年报"}
         if report_type not in categories:
             raise ProviderError(f"unsupported announcement report type: {report_type}")
         params = {
@@ -117,6 +118,53 @@ class AkShareProvider:
         return load_or_fetch(
             cache=self.cache,
             namespace="report_announcements",
+            params=params,
+            fetcher=fetch,
+            retries=self.retries,
+            refresh=self.refresh,
+        )
+
+    def get_financial_indicators(
+        self, symbol: str, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        params = {
+            "symbol": symbol,
+            "start_date": self._compact(start_date),
+            "end_date": self._compact(end_date),
+        }
+
+        def fetch() -> pd.DataFrame:
+            ak = self._akshare()
+            exchange_symbol = self._exchange_symbol(symbol)
+            suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}[exchange_symbol[:2]]
+            try:
+                raw = ak.stock_financial_analysis_indicator_em(
+                    symbol=f"{symbol}.{suffix}", indicator="按报告期"
+                )
+                normalized = normalize_financial_indicators(
+                    raw, symbol, "akshare:stock_financial_analysis_indicator_em"
+                )
+                if normalized.empty:
+                    raise ProviderError("primary financial indicator endpoint returned no rows")
+            except Exception as primary_error:  # noqa: BLE001 - external provider boundary
+                raw = ak.stock_financial_analysis_indicator(
+                    symbol=symbol, start_year=str(start_date.year)
+                )
+                normalized = normalize_financial_indicators(
+                    raw, symbol, "akshare:stock_financial_analysis_indicator"
+                )
+                if normalized.empty:
+                    raise ProviderError(
+                        "fallback financial indicator endpoint returned no rows"
+                    ) from primary_error
+            dates = pd.to_datetime(normalized["report_period_end"], errors="coerce").dt.date
+            return normalized.loc[(dates >= start_date) & (dates <= end_date)].reset_index(
+                drop=True
+            )
+
+        return load_or_fetch(
+            cache=self.cache,
+            namespace="financial_indicators",
             params=params,
             fetcher=fetch,
             retries=self.retries,
@@ -199,9 +247,9 @@ class AkShareProvider:
                         "fallback daily-bar endpoint returned no rows"
                     ) from primary_error
                 dates = pd.to_datetime(normalized["trade_date"], errors="coerce").dt.date
-                return normalized.loc[
-                    (dates >= start_date) & (dates <= end_date)
-                ].reset_index(drop=True)
+                return normalized.loc[(dates >= start_date) & (dates <= end_date)].reset_index(
+                    drop=True
+                )
 
         return load_or_fetch(
             cache=self.cache,
@@ -227,24 +275,17 @@ class AkShareProvider:
         def fetch() -> pd.DataFrame:
             ak = self._akshare()
             primary_params = {
-                key: params[key]
-                for key in ("symbol", "period", "start_date", "end_date", "adjust")
+                key: params[key] for key in ("symbol", "period", "start_date", "end_date", "adjust")
             }
             try:
                 raw = ak.stock_zh_a_hist(timeout=self.timeout_seconds, **primary_params)
-                normalized = normalize_prices(
-                    raw, symbol, f"akshare:stock_zh_a_hist:{adjustment}"
-                )
+                normalized = normalize_prices(raw, symbol, f"akshare:stock_zh_a_hist:{adjustment}")
                 if normalized.empty:
                     raise ProviderError("primary stock endpoint returned no rows")
                 return normalized
             except Exception:  # noqa: BLE001 - fallback crosses an external provider boundary
-                raw = ak.stock_zh_a_daily(
-                    symbol=self._exchange_symbol(symbol), adjust=adjustment
-                )
-                normalized = normalize_prices(
-                    raw, symbol, f"akshare:stock_zh_a_daily:{adjustment}"
-                )
+                raw = ak.stock_zh_a_daily(symbol=self._exchange_symbol(symbol), adjust=adjustment)
+                normalized = normalize_prices(raw, symbol, f"akshare:stock_zh_a_daily:{adjustment}")
                 if normalized.empty:
                     raise ProviderError("fallback stock endpoint returned no rows") from None
                 return clip_dates(normalized, start_date, end_date)
@@ -258,9 +299,7 @@ class AkShareProvider:
             refresh=self.refresh,
         )
 
-    def get_benchmark_prices(
-        self, symbol: str, start_date: date, end_date: date
-    ) -> pd.DataFrame:
+    def get_benchmark_prices(self, symbol: str, start_date: date, end_date: date) -> pd.DataFrame:
         normalized_symbol = symbol
         if symbol.isdigit() and len(symbol) == 6:
             normalized_symbol = f"csi{symbol}"
@@ -285,18 +324,14 @@ class AkShareProvider:
             except Exception:  # noqa: BLE001 - fallback crosses an external provider boundary
                 code = normalized_symbol.removeprefix("csi")
                 fallback_symbol = (
-                    normalized_symbol
-                    if normalized_symbol.startswith(("sh", "sz"))
-                    else f"sh{code}"
+                    normalized_symbol if normalized_symbol.startswith(("sh", "sz")) else f"sh{code}"
                 )
                 raw = ak.stock_zh_index_daily(symbol=fallback_symbol)
                 normalized = normalize_prices(
                     raw, normalized_symbol, "akshare:stock_zh_index_daily"
                 )
                 if normalized.empty:
-                    raise ProviderError(
-                        "fallback benchmark endpoint returned no rows"
-                    ) from None
+                    raise ProviderError("fallback benchmark endpoint returned no rows") from None
                 return clip_dates(normalized, start_date, end_date)
 
         return load_or_fetch(

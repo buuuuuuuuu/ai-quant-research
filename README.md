@@ -177,6 +177,43 @@ CSV、五工作表 Excel、HTML 净值报告和运行清单，统一写入
 股票池仅代表显式研究样本，不代表任何时点的真实指数成分；不能将当前股票池的回测结果
 解释为无幸存者偏差的全市场策略收益。
 
+## 多因子实验室与样本外验证（M5-A）
+
+对多个已发布财务因子执行方向调整、横截面百分位标准化和权重合成，同时计算
+IC、Rank IC、分组收益、覆盖率、年度稳定性及参数扫描：
+
+```bash
+uv run ai-quant factor-lab \
+  --source local \
+  --symbols 600519 000001 601318 000858 600036 000333 600276 601888 002594 300750 \
+  --start-date 2015-01-01 \
+  --end-date 2025-12-31 \
+  --factors roe:2:desc revenue_yoy:1:desc debt_asset_ratio:1:asc \
+  --top-n-values 3 5 \
+  --rebalance-values monthly quarterly \
+  --commission-bps-values 5 10 \
+  --quantiles 5
+```
+
+每个因子的格式为 `指标代码:权重:方向`，其中负债率等低值优先指标使用 `asc`。
+单因子和多因子组合会在同一个参数网格下分别回测。所有因子截面只使用信号日
+15:00 之前实际公开的财报；下一交易日开盘执行，并保留整手、T+1、涨跌停、
+停牌和佣金/滑点/印花税约束。
+
+默认按交易日顺序分为 60% 训练集、20% 验证集和 20% 独立测试集；最优参数只按
+验证集夏普比率和超额收益排序，测试集不参与选参，并附加滚动样本外验证。
+使用 `--training-fraction`、`--validation-fraction` 和 `--walk-forward-folds` 调整验证。
+为避免意外提交大型扫描任务，默认最多允许 48 组参数，可通过 `--max-combinations`
+明确调整。缺失因子默认剔除，也可通过 `--missing-policy available` 按可用权重归一。
+
+研究结果保存到 `artifacts/factor-lab/<run_id>/`，包括因子截面、IC 时间序列、
+分组收益、因子覆盖、年度稳定性、策略扫描、训练/验证/测试分段、滚动验证、
+策略净值 CSV，以及多工作表 Excel、HTML 报告和运行清单。Web 工作台支持可视化
+选择因子权重、方向、扫描参数、查看 Rank IC 图、策略对比和历史报告下载。
+
+注意：当前股票池依然是明确给定的研究样本，并非真实历史指数成分；行业中性化、
+历史指数成分及幸存者偏差修正需要后续获取独立 Point-in-Time 历史数据。
+
 事件研究的 `diagnostics.data_sources` 和 HTML 报告会分别显示股票、基准、公告的服务
 来源、底层 Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据
 对应的同步批次。三类研究快照均保留 `provider_source`、`source_batch_id` 和 `raw_path`，

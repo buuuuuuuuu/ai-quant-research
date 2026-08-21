@@ -277,6 +277,25 @@ class BatchEventStudySpec:
 
 
 @dataclass(frozen=True, slots=True)
+class FactorComponent:
+    code: str
+    weight: float = 1.0
+    direction: str = "desc"
+
+    def __post_init__(self) -> None:
+        if not self.code.strip():
+            raise ValueError("factor component code must not be empty")
+        if self.weight <= 0:
+            raise ValueError("factor component weight must be positive")
+        if self.direction not in {"asc", "desc"}:
+            raise ValueError("factor component direction must be asc or desc")
+        object.__setattr__(self, "code", self.code.strip().lower())
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class FactorBacktestSpec:
     symbols: tuple[str, ...]
     start_date: date
@@ -292,6 +311,8 @@ class FactorBacktestSpec:
     slippage_bps: float = 5.0
     stamp_duty_bps: float = 5.0
     lot_size: int = 100
+    factors: tuple[FactorComponent, ...] = ()
+    missing_policy: str = "exclude"
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -315,6 +336,10 @@ class FactorBacktestSpec:
             raise ValueError("transaction cost basis points must be non-negative")
         if self.lot_size < 1:
             raise ValueError("lot_size must be positive")
+        if self.missing_policy not in {"exclude", "available"}:
+            raise ValueError("missing_policy must be exclude or available")
+        if len({item.code for item in self.factors}) != len(self.factors):
+            raise ValueError("factor component codes must be unique")
         object.__setattr__(self, "symbols", symbols)
         object.__setattr__(self, "factor", self.factor.strip().lower())
         object.__setattr__(
@@ -326,6 +351,88 @@ class FactorBacktestSpec:
         payload["symbols"] = list(self.symbols)
         payload["start_date"] = self.start_date.isoformat()
         payload["end_date"] = self.end_date.isoformat()
+        payload["factors"] = [item.to_dict() for item in self.factors]
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class FactorLabSpec:
+    symbols: tuple[str, ...]
+    start_date: date
+    end_date: date
+    factors: tuple[FactorComponent, ...]
+    top_n_values: tuple[int, ...] = (3,)
+    rebalance_values: tuple[str, ...] = ("quarterly",)
+    commission_bps_values: tuple[float, ...] = (5.0,)
+    quantiles: int = 5
+    benchmark_symbol: str = "csi000300"
+    adjustment: str = "qfq"
+    initial_capital: float = 1_000_000.0
+    slippage_bps: float = 5.0
+    stamp_duty_bps: float = 5.0
+    lot_size: int = 100
+    missing_policy: str = "exclude"
+    training_fraction: float = 0.6
+    validation_fraction: float = 0.2
+    walk_forward_folds: int = 3
+    max_combinations: int = 48
+
+    def __post_init__(self) -> None:
+        symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
+        if len(symbols) < 2 or any(len(item) != 6 or not item.isdigit() for item in symbols):
+            raise ValueError("factor lab requires at least two six-digit A-share symbols")
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be earlier than end_date")
+        if not self.factors:
+            raise ValueError("factor lab requires at least one factor component")
+        if len({item.code for item in self.factors}) != len(self.factors):
+            raise ValueError("factor component codes must be unique")
+        if not self.top_n_values or any(
+            item < 1 or item > len(symbols) for item in self.top_n_values
+        ):
+            raise ValueError("top_n_values must be between one and the number of symbols")
+        if not self.rebalance_values or not set(self.rebalance_values).issubset(
+            {"monthly", "quarterly"}
+        ):
+            raise ValueError("rebalance_values must contain monthly or quarterly")
+        if not self.commission_bps_values or any(item < 0 for item in self.commission_bps_values):
+            raise ValueError("commission_bps_values must contain non-negative values")
+        if not 2 <= self.quantiles <= 10:
+            raise ValueError("quantiles must be between two and ten")
+        if self.missing_policy not in {"exclude", "available"}:
+            raise ValueError("missing_policy must be exclude or available")
+        if not 0 < self.training_fraction < 1 or not 0 < self.validation_fraction < 1:
+            raise ValueError("training and validation fractions must be between zero and one")
+        if self.training_fraction + self.validation_fraction >= 1:
+            raise ValueError("training and validation fractions must leave an out-of-sample period")
+        if not 1 <= self.walk_forward_folds <= 12:
+            raise ValueError("walk_forward_folds must be between one and twelve")
+        if not 1 <= self.max_combinations <= 200:
+            raise ValueError("max_combinations must be between one and 200")
+        if self.adjustment not in {"qfq", "hfq", "none"}:
+            raise ValueError("adjustment must be qfq, hfq, or none")
+        if self.initial_capital <= 0 or self.lot_size < 1:
+            raise ValueError("initial_capital and lot_size must be positive")
+        if min(self.slippage_bps, self.stamp_duty_bps) < 0:
+            raise ValueError("transaction cost basis points must be non-negative")
+        object.__setattr__(self, "symbols", symbols)
+        object.__setattr__(self, "top_n_values", tuple(dict.fromkeys(self.top_n_values)))
+        object.__setattr__(self, "rebalance_values", tuple(dict.fromkeys(self.rebalance_values)))
+        object.__setattr__(
+            self, "commission_bps_values", tuple(dict.fromkeys(self.commission_bps_values))
+        )
+        object.__setattr__(
+            self, "benchmark_symbol", normalize_benchmark_symbol(self.benchmark_symbol)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["symbols"] = list(self.symbols)
+        payload["start_date"] = self.start_date.isoformat()
+        payload["end_date"] = self.end_date.isoformat()
+        payload["factors"] = [item.to_dict() for item in self.factors]
+        for key in ("top_n_values", "rebalance_values", "commission_bps_values"):
+            payload[key] = list(payload[key])
         return payload
 
 

@@ -16,9 +16,9 @@ async function requestJson(url, options = {}) {
 }
 
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
-const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测" };
+const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
-const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", alert_acknowledged: "确认运行告警" };
+const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", alert_acknowledged: "确认运行告警" };
 
 function operationTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
@@ -250,11 +250,62 @@ async function loadRun(runId) {
   catch (error) { $("#form-error").textContent = error.message; $("#form-error").hidden = false; }
 }
 
+function labPayload() {
+  const base = formPayload();
+  const factors = $$(".factor-component").filter((row) => row.querySelector(".factor-enabled").checked).map((row) => ({code: row.querySelector(".factor-enabled").value, weight: Number(row.querySelector(".factor-weight").value), direction: row.querySelector(".factor-direction").value}));
+  if (!factors.length) throw new Error("请至少选择一个财务因子");
+  const parseNumbers = (selector) => $(selector).value.trim().split(/[\s,，]+/).filter(Boolean).map(Number);
+  return {symbols: base.symbols, start_date: base.start_date, end_date: base.end_date, factors, top_n_values: parseNumbers("#lab-top-n"), rebalance_values: $("#lab-rebalances").value.split(" "), commission_bps_values: parseNumbers("#lab-commissions"), quantiles: Number($("#lab-quantiles").value), benchmark_symbol: base.benchmark_symbol, adjustment: base.adjustment, initial_capital: base.initial_capital, slippage_bps: base.slippage_bps, stamp_duty_bps: base.stamp_duty_bps, lot_size: base.lot_size, training_fraction: Number($("#lab-training").value), validation_fraction: Number($("#lab-validation").value)};
+}
+
+function labTable(columns, rows) {
+  if (!rows.length) return '<p class="empty-state">暂无研究结果</p>';
+  return `<table><thead><tr>${columns.map(([, title]) => `<th>${escapeHtml(title)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map(([key, , kind]) => `<td>${escapeHtml(row[key] == null ? "—" : kind === "pct" ? formatPct(row[key]) : kind === "num" ? Number(row[key]).toFixed(4) : row[key])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function drawIcChart(series) {
+  const target = $("#lab-ic-chart"), values = series.filter((row) => row.rank_ic != null).slice(-80);
+  if (!values.length) { target.innerHTML = '<p class="empty-state">暂无有效 Rank IC 截面</p>'; return; }
+  const width = 1100, height = 180, mid = 90, step = (width - 30) / values.length;
+  const bars = values.map((row, index) => {const value = Math.max(-1, Math.min(1, Number(row.rank_ic))), size = Math.abs(value) * 74; return `<rect x="${15 + index * step}" y="${value >= 0 ? mid - size : mid}" width="${Math.max(step - 2, 2)}" height="${size}" fill="${value >= 0 ? "#237a5a" : "#c65b52"}"><title>${escapeHtml(row.signal_date)} ${escapeHtml(row.factor)} Rank IC ${value.toFixed(3)}</title></rect>`;}).join("");
+  target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Rank IC 时间序列"><line x1="0" y1="${mid}" x2="${width}" y2="${mid}" stroke="#cdd5cc"/>${bars}</svg>`;
+}
+
+function renderLabRun(run) {
+  $("#lab-results").hidden = false;
+  $("#lab-selected").textContent = `验证集选择：${run.summary.selected_strategy} · ${run.summary.cross_section_count} 个截面 · ${run.summary.strategy_count} 组策略`;
+  $("#lab-actions").innerHTML = `<a href="${escapeHtml(run.report_url)}" target="_blank" rel="noreferrer">完整研究报告</a><a href="/api/v1/factor-lab-runs/${encodeURIComponent(run.run_id)}/downloads/factor_lab.xlsx">下载 Excel</a><a href="/api/v1/factor-lab-runs/${encodeURIComponent(run.run_id)}/downloads/ic_series.csv">IC 数据</a>`;
+  $("#lab-ic-table").innerHTML = labTable([["factor","因子"],["periods","截面数"],["mean_ic","平均 IC","num"],["mean_rank_ic","平均 Rank IC","num"],["ic_ir","IC IR","num"],["positive_ic_ratio","正向比例","pct"]], run.ic_summary || []);
+  $("#lab-strategy-table").innerHTML = labTable([["strategy","策略"],["total_return","总收益","pct"],["excess_return","超额收益","pct"],["max_drawdown","最大回撤","pct"],["sharpe_ratio","夏普","num"],["selected_by_validation","验证入选"]], run.strategies || []);
+  $("#lab-validation-table").innerHTML = labTable([["segment","分段"],["start_date","开始"],["end_date","结束"],["total_return","收益","pct"],["excess_return","超额","pct"],["sharpe_ratio","夏普","num"]], run.validation || []);
+  drawIcChart(run.series || []);
+}
+
+async function loadLabRun(runId) { renderLabRun(await requestJson(`/api/v1/factor-lab-runs/${encodeURIComponent(runId)}`)); }
+
+async function loadLabHistory() {
+  try {
+    const runs = await requestJson("/api/v1/factor-lab-runs");
+    $("#lab-history").innerHTML = runs.length ? runs.slice(0, 8).map((run) => `<button class="lab-history-item" data-run="${escapeHtml(run.run_id)}">${escapeHtml(operationTime(run.completed_at))} · ${escapeHtml(run.summary?.strategy_count || 0)} 组策略 · ${escapeHtml(run.summary?.selected_strategy || "")}</button>`).join("") : '<p class="empty-state">还没有因子实验记录。</p>';
+    $$(".lab-history-item").forEach((button) => button.addEventListener("click", () => loadLabRun(button.dataset.run)));
+  } catch (error) { $("#lab-history").innerHTML = `<p class="negative">${escapeHtml(error.message)}</p>`; }
+}
+
+async function submitFactorLab(event) {
+  event.preventDefault(); const button = $("#submit-factor-lab"), errorBox = $("#lab-error"); errorBox.hidden = true; button.disabled = true;
+  try {
+    const created = await requestJson("/api/v1/factor-lab", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(labPayload())});
+    for (;;) {const task = await requestJson(`/api/v1/factor-lab/${encodeURIComponent(created.task_id)}`); showTask(task); if (task.status === "succeeded") {await loadLabRun(task.run_id); await loadLabHistory(); break;} if (task.status === "failed") throw new Error(task.error || "因子研究失败"); await new Promise((resolve) => setTimeout(resolve, 900));}
+  } catch (error) {errorBox.textContent = error.message; errorBox.hidden = false;} finally {button.disabled = false;}
+}
+
 $("#backtest-form").addEventListener("submit", submitBacktest);
+$("#factor-lab-form").addEventListener("submit", submitFactorLab);
+$("#refresh-lab-history").addEventListener("click", loadLabHistory);
 $("#refresh-history").addEventListener("click", loadHistory);
 $("#refresh-operations").addEventListener("click", loadOperations);
 $("#run-health-check").addEventListener("click", checkOperations);
 $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations();
+loadOverview(); loadHistory(); loadOperations(); loadLabHistory();

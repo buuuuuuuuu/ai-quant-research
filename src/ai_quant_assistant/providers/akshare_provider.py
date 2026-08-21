@@ -9,8 +9,11 @@ from ai_quant_assistant.errors import ProviderError
 from ai_quant_assistant.providers.cache import DataFrameCache, load_or_fetch
 from ai_quant_assistant.providers.normalization import (
     clip_dates,
+    normalize_daily_bars,
     normalize_interim_announcements,
     normalize_prices,
+    normalize_security_master,
+    normalize_trading_calendar,
 )
 
 
@@ -41,6 +44,21 @@ class AkShareProvider:
     def _compact(value: date) -> str:
         return value.strftime("%Y%m%d")
 
+    @staticmethod
+    def _exchange_symbol(symbol: str) -> str:
+        if len(symbol) == 8 and symbol[:2] in {"sh", "sz", "bj"} and symbol[2:].isdigit():
+            return symbol
+        if len(symbol) != 6 or not symbol.isdigit():
+            raise ProviderError(f"unsupported A-share symbol for fallback: {symbol}")
+        prefix = (
+            "sh"
+            if symbol.startswith("6")
+            else "bj"
+            if symbol.startswith(("4", "8", "92"))
+            else "sz"
+        )
+        return f"{prefix}{symbol}"
+
     def get_interim_announcements(
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
@@ -66,14 +84,94 @@ class AkShareProvider:
             refresh=self.refresh,
         )
 
-    @staticmethod
-    def _exchange_symbol(symbol: str) -> str:
-        if len(symbol) == 8 and symbol[:2] in {"sh", "sz", "bj"} and symbol[2:].isdigit():
-            return symbol
-        if len(symbol) != 6 or not symbol.isdigit():
-            raise ProviderError(f"unsupported A-share symbol for fallback: {symbol}")
-        prefix = "sh" if symbol.startswith("6") else "bj" if symbol.startswith(("4", "8")) else "sz"
-        return f"{prefix}{symbol}"
+    def get_security_master(self) -> pd.DataFrame:
+        def fetch() -> pd.DataFrame:
+            ak = self._akshare()
+            try:
+                primary = normalize_security_master(
+                    ak.stock_info_a_code_name(),
+                    "akshare:stock_info_a_code_name",
+                )
+                if not primary.empty:
+                    return primary
+            except Exception:
+                # stock_info_a_code_name combines three exchanges. A malformed
+                # response from any one of them (notably BSE) breaks the whole call.
+                pass
+
+            fallback = normalize_security_master(
+                ak.stock_zh_a_spot_em(),
+                "akshare:stock_zh_a_spot_em",
+            )
+            if fallback.empty:
+                raise ProviderError("AkShare security master endpoints returned no rows")
+            return fallback
+
+        return load_or_fetch(
+            cache=self.cache,
+            namespace="security_master",
+            params={"market": "沪深京", "fallback": "stock_zh_a_spot_em"},
+            fetcher=fetch,
+            retries=self.retries,
+            refresh=self.refresh,
+        )
+
+    def get_trading_calendar(self) -> pd.DataFrame:
+        def fetch() -> pd.DataFrame:
+            raw = self._akshare().tool_trade_date_hist_sina()
+            return normalize_trading_calendar(raw, "akshare:tool_trade_date_hist_sina")
+
+        return load_or_fetch(
+            cache=self.cache,
+            namespace="trading_calendar",
+            params={"market": "沪深京"},
+            fetcher=fetch,
+            retries=self.retries,
+            refresh=self.refresh,
+        )
+
+    def get_daily_bars(
+        self, symbol: str, start_date: date, end_date: date, adjustment: str
+    ) -> pd.DataFrame:
+        provider_adjustment = "" if adjustment == "none" else adjustment
+        params = {
+            "symbol": symbol,
+            "period": "daily",
+            "start_date": self._compact(start_date),
+            "end_date": self._compact(end_date),
+            "adjust": provider_adjustment,
+        }
+
+        def fetch() -> pd.DataFrame:
+            ak = self._akshare()
+            try:
+                raw = ak.stock_zh_a_hist(timeout=self.timeout_seconds, **params)
+                source = f"akshare:stock_zh_a_hist:{adjustment}"
+                return normalize_daily_bars(raw, symbol, source)
+            except Exception as primary_error:  # noqa: BLE001 - provider fallback boundary
+                raw = ak.stock_zh_a_daily(
+                    symbol=self._exchange_symbol(symbol),
+                    adjust=provider_adjustment,
+                )
+                source = f"akshare:stock_zh_a_daily:{adjustment}"
+                normalized = normalize_daily_bars(raw, symbol, source)
+                if normalized.empty:
+                    raise ProviderError(
+                        "fallback daily-bar endpoint returned no rows"
+                    ) from primary_error
+                dates = pd.to_datetime(normalized["trade_date"], errors="coerce").dt.date
+                return normalized.loc[
+                    (dates >= start_date) & (dates <= end_date)
+                ].reset_index(drop=True)
+
+        return load_or_fetch(
+            cache=self.cache,
+            namespace="daily_bars",
+            params=params,
+            fetcher=fetch,
+            retries=self.retries,
+            refresh=self.refresh,
+        )
 
     def get_stock_prices(
         self, symbol: str, start_date: date, end_date: date, adjustment: str
@@ -90,7 +188,8 @@ class AkShareProvider:
         def fetch() -> pd.DataFrame:
             ak = self._akshare()
             primary_params = {
-                key: params[key] for key in ("symbol", "period", "start_date", "end_date", "adjust")
+                key: params[key]
+                for key in ("symbol", "period", "start_date", "end_date", "adjust")
             }
             try:
                 raw = ak.stock_zh_a_hist(timeout=self.timeout_seconds, **primary_params)

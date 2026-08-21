@@ -13,6 +13,7 @@ class Settings:
     duckdb_path: Path = Path("data/catalog.duckdb")
     akshare_retries: int = 3
     akshare_timeout_seconds: float = 30.0
+    data_sync_rate_limit_seconds: float = 0.2
     log_level: str = "INFO"
 
     @classmethod
@@ -28,6 +29,9 @@ class Settings:
             akshare_retries=int(os.getenv("AI_QUANT_AKSHARE_RETRIES", "3")),
             akshare_timeout_seconds=float(
                 os.getenv("AI_QUANT_AKSHARE_TIMEOUT_SECONDS", "30")
+            ),
+            data_sync_rate_limit_seconds=float(
+                os.getenv("AI_QUANT_DATA_SYNC_RATE_LIMIT_SECONDS", "0.2")
             ),
             log_level=os.getenv("AI_QUANT_LOG_LEVEL", "INFO"),
         )

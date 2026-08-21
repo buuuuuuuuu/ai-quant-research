@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v1）
+# A 股本地数据库数据字典（Schema v2）
 
 ## 公共约定
 
@@ -6,7 +6,8 @@
 - `source`：实际数据来源或 Fixture 版本，任何降级接口都必须保留实际来源。
 - `batch_id/source_batch_id`：关联一次同步批次，便于重试、质量检查和血缘追踪。
 - 时间戳使用 UTC 存储；`trade_date/list_date/delist_date` 是不含时区的业务日期。
-- 金额和成交量在进入真实同步前必须由 Provider 文档冻结单位，禁止隐式换算。
+- `stock_zh_a_hist` 的成交量按 AkShare 原始单位“手”保存，成交额按“元”保存，禁止
+  隐式换算；备用接口没有成交额时保存零并产生 `amount_available` 警告。
 
 ## schema_migrations
 
@@ -109,3 +110,50 @@
 | expected | VARCHAR | 可空 | 期望值 |
 | details | VARCHAR | 可空 | 诊断信息 |
 | checked_at | TIMESTAMP | NOT NULL | 检查时间 |
+
+## sync_partition
+
+主键为 `batch_id + partition_key`；`partition_key` 由证券、复权口径和日期区间确定。
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| batch_id | VARCHAR | PK(1) | 所属同步批次 |
+| partition_key | VARCHAR | PK(2) | 稳定分区键 |
+| security_id | VARCHAR | NOT NULL | 证券标识 |
+| adjustment | VARCHAR | none/qfq/hfq | 复权口径 |
+| start_date/end_date | DATE | start <= end | 分区请求区间 |
+| status | VARCHAR | planned/fetching/published/failed | 断点状态 |
+| attempts | INTEGER | 非负 | 已尝试次数 |
+| row_count | BIGINT | 非负 | 已发布行数 |
+| error | VARCHAR | 可空 | 最近一次错误 |
+| raw_path | VARCHAR | 可空 | 规范化 Provider 响应的 Parquet 路径 |
+| raw_sha256 | VARCHAR | 可空 | raw 文件 SHA-256 |
+| created_at/updated_at | TIMESTAMP | NOT NULL | 生命周期时间 |
+
+## adjustment_ratio
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| security_id | VARCHAR | PK(1) | 证券标识 |
+| trade_date | DATE | PK(2) | 交易日 |
+| adjustment | VARCHAR | PK(3), qfq/hfq | 复权口径 |
+| close_ratio | DOUBLE | 正数 | 调整后收盘价 / 不复权收盘价 |
+| method | VARCHAR | NOT NULL | 当前为 `derived_close_ratio` |
+| source_batch_id | VARCHAR | NOT NULL | 发布批次 |
+
+该表用于审计复权结果，不宣称是 AkShare 或交易所提供的原生复权因子。
+
+## data_coverage
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| dataset | VARCHAR | PK(1) | 当前为 `daily_bar` |
+| security_id | VARCHAR | PK(2) | 证券标识 |
+| adjustment | VARCHAR | PK(3) | 复权口径 |
+| start_date | DATE | PK(4) | 已处理区间起点 |
+| end_date | DATE | PK(5) | 已处理区间终点 |
+| source_batch_id | VARCHAR | NOT NULL | 发布批次 |
+| updated_at | TIMESTAMP | NOT NULL | 更新时间 |
+
+本地优先 Provider 会合并相邻覆盖区间；只有完整覆盖请求范围且 published 视图存在数据时
+才返回本地价格，否则回退外部 Provider。

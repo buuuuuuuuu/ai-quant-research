@@ -1,4 +1,4 @@
-.PHONY: install test lint demo api data-init data-status
+.PHONY: install test lint demo api data-init data-status data-sync
 
 install:
 	uv sync --extra dev
@@ -20,3 +20,6 @@ data-init:
 
 data-status:
 	uv run ai-quant data status
+
+data-sync:
+	uv run ai-quant data sync --start-date 2024-01-01 --symbols 600519

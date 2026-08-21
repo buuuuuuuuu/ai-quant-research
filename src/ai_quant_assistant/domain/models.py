@@ -48,6 +48,42 @@ class EventStudySpec:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class DataSyncSpec:
+    start_date: date
+    end_date: date
+    symbols: tuple[str, ...] = ()
+    adjustments: tuple[str, ...] = ("none", "qfq", "hfq")
+    symbol_limit: int | None = None
+    resume: bool = True
+
+    def __post_init__(self) -> None:
+        if self.start_date > self.end_date:
+            raise ValueError("start_date must not be later than end_date")
+        symbols = tuple(dict.fromkeys(symbol.strip() for symbol in self.symbols))
+        if any(len(symbol) != 6 or not symbol.isdigit() for symbol in symbols):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        requested = set(self.adjustments)
+        if not requested or not requested.issubset({"none", "qfq", "hfq"}):
+            raise ValueError("adjustments must contain none, qfq, or hfq")
+        if requested & {"qfq", "hfq"}:
+            requested.add("none")
+        adjustments = tuple(item for item in ("none", "qfq", "hfq") if item in requested)
+        if self.symbol_limit is not None and self.symbol_limit < 1:
+            raise ValueError("symbol_limit must be positive")
+        object.__setattr__(self, "symbols", symbols)
+        object.__setattr__(self, "adjustments", adjustments)
+
+    def request_dict(self) -> dict[str, Any]:
+        return {
+            "start_date": self.start_date.isoformat(),
+            "end_date": self.end_date.isoformat(),
+            "symbols": list(self.symbols),
+            "adjustments": list(self.adjustments),
+            "symbol_limit": self.symbol_limit,
+        }
+
+
 @dataclass(slots=True)
 class EventStudyResult:
     spec: EventStudySpec
@@ -74,4 +110,3 @@ class RunOutput:
             "artifacts": {name: str(path) for name, path in self.artifacts.items()},
             "snapshots": self.snapshot_refs,
         }
-

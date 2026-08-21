@@ -30,6 +30,9 @@ def test_api_runs_offline_golden_path(tmp_path) -> None:
     assert payload["status"] == "succeeded"
     assert [row["window"] for row in payload["summary"]] == [5, 10, 20]
     assert payload["diagnostics"]["usable_event_years"] == 14
+    assert payload["diagnostics"]["data_sources"]["stock"]["serving_sources"] == [
+        "fixture-v1:hfq"
+    ]
 
 
 def test_health_endpoint(tmp_path) -> None:
@@ -42,4 +45,3 @@ def test_health_endpoint(tmp_path) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-

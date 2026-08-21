@@ -12,6 +12,17 @@ def test_event_study_uses_first_common_trading_day_strictly_after_announcement()
     dates = pd.bdate_range("2024-01-02", periods=12)
     stock = pd.DataFrame({"date": dates, "close": [100 + 2 * i for i in range(12)]})
     benchmark = pd.DataFrame({"date": dates, "close": [100 + i for i in range(12)]})
+    stock["source"] = "local:published_daily_bar"
+    stock["provider_source"] = "akshare:stock_zh_a_daily:qfq"
+    stock["source_batch_id"] = "batch-2024"
+    stock["raw_path"] = "data/raw/600519-qfq.parquet"
+    stock["local_hit"] = True
+    stock["local_fallback_used"] = False
+    stock["local_fallback_reason"] = ""
+    benchmark["source"] = "akshare:stock_zh_index_daily"
+    benchmark["local_hit"] = False
+    benchmark["local_fallback_used"] = True
+    benchmark["local_fallback_reason"] = "dataset_not_local"
     announcements = pd.DataFrame(
         [
             {
@@ -45,6 +56,24 @@ def test_event_study_uses_first_common_trading_day_strictly_after_announcement()
     assert two_day["stock_net_return"] == pytest.approx(expected_stock)
     assert two_day["benchmark_return"] == pytest.approx(expected_benchmark)
     assert two_day["excess_return"] == pytest.approx(expected_stock - expected_benchmark)
+    stock_sources = result.diagnostics["data_sources"]["stock"]
+    benchmark_sources = result.diagnostics["data_sources"]["benchmark"]
+    assert stock_sources == {
+        "serving_sources": ["local:published_daily_bar"],
+        "provider_sources": ["akshare:stock_zh_a_daily:qfq"],
+        "local_hit": True,
+        "local_fallback_used": False,
+        "local_fallback_reasons": [],
+        "provider_fallback_used": True,
+        "provider_fallback_sources": ["akshare:stock_zh_a_daily:qfq"],
+        "source_batch_ids": ["batch-2024"],
+        "raw_paths": ["data/raw/600519-qfq.parquet"],
+    }
+    assert benchmark_sources["serving_sources"] == ["akshare:stock_zh_index_daily"]
+    assert benchmark_sources["local_hit"] is False
+    assert benchmark_sources["local_fallback_used"] is True
+    assert benchmark_sources["local_fallback_reasons"] == ["dataset_not_local"]
+    assert benchmark_sources["provider_fallback_used"] is True
 
 
 def test_normalization_keeps_original_full_report_and_drops_summary_and_revision() -> None:
@@ -79,4 +108,3 @@ def test_normalization_keeps_original_full_report_and_drops_summary_and_revision
     assert len(normalized) == 1
     assert normalized.iloc[0]["title"] == "贵州茅台2024年半年度报告"
     assert normalized.iloc[0]["report_year"] == 2024
-

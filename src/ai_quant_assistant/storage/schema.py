@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +122,58 @@ MIGRATIONS = (
             SELECT *
             FROM daily_bar
             WHERE quality_status = 'published'
+            """,
+        ),
+    ),
+    Migration(
+        version=2,
+        name="incremental_sync_and_local_coverage",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS sync_partition (
+                batch_id VARCHAR NOT NULL,
+                partition_key VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                adjustment VARCHAR NOT NULL
+                    CHECK (adjustment IN ('none', 'qfq', 'hfq')),
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'planned'
+                    CHECK (status IN ('planned', 'fetching', 'published', 'failed')),
+                attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                row_count BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                error VARCHAR,
+                raw_path VARCHAR,
+                raw_sha256 VARCHAR,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (start_date <= end_date),
+                PRIMARY KEY (batch_id, partition_key)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS adjustment_ratio (
+                security_id VARCHAR NOT NULL,
+                trade_date DATE NOT NULL,
+                adjustment VARCHAR NOT NULL CHECK (adjustment IN ('qfq', 'hfq')),
+                close_ratio DOUBLE NOT NULL CHECK (close_ratio > 0),
+                method VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                PRIMARY KEY (security_id, trade_date, adjustment)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS data_coverage (
+                dataset VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                adjustment VARCHAR NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (start_date <= end_date),
+                PRIMARY KEY (dataset, security_id, adjustment, start_date, end_date)
+            )
             """,
         ),
     ),

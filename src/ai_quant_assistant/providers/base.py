@@ -21,3 +21,14 @@ class MarketDataProvider(Protocol):
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame: ...
 
+
+class SyncDataProvider(Protocol):
+    name: str
+
+    def get_security_master(self) -> pd.DataFrame: ...
+
+    def get_trading_calendar(self) -> pd.DataFrame: ...
+
+    def get_daily_bars(
+        self, symbol: str, start_date: date, end_date: date, adjustment: str
+    ) -> pd.DataFrame: ...

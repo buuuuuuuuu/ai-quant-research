@@ -4,7 +4,7 @@ import sys
 from ai_quant_assistant.cli import main
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
-from ai_quant_assistant.storage.schema import SCHEMA_VERSION
+from ai_quant_assistant.storage.schema import MIGRATIONS, SCHEMA_VERSION
 
 
 def _database(tmp_path) -> LocalDatabase:
@@ -22,7 +22,7 @@ def test_initialize_creates_layout_and_schema_idempotently(tmp_path) -> None:
     second = database.initialize()
     status = database.status()
 
-    assert first["applied_migrations"] == [SCHEMA_VERSION]
+    assert first["applied_migrations"] == list(range(1, SCHEMA_VERSION + 1))
     assert second["applied_migrations"] == []
     assert status["initialized"] is True
     assert status["schema_version"] == SCHEMA_VERSION
@@ -45,6 +45,34 @@ def test_fixture_load_is_repeatable_and_only_publishes_validated_bars(tmp_path) 
     assert status["relations"]["daily_bar"] == 5
     assert status["relations"]["published_daily_bar"] == 5
     assert status["relations"]["dq_result"] == 1
+
+
+def test_existing_schema_v1_database_upgrades_to_v2(tmp_path) -> None:
+    database = _database(tmp_path)
+    database.layout.ensure()
+    database.path.parent.mkdir(parents=True, exist_ok=True)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for statement in MIGRATIONS[0].statements:
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES (1, ?)",
+            [MIGRATIONS[0].name],
+        )
+
+    initialized = database.initialize()
+
+    assert initialized["applied_migrations"] == [2]
+    assert database.status()["schema_version"] == 2
+    assert database.status()["relations"]["sync_partition"] == 0
 
 
 def test_cli_data_init_and_status_use_environment_paths(tmp_path, monkeypatch, capsys) -> None:

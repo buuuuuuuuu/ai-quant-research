@@ -32,7 +32,10 @@ class DataFrameCache:
         data_path, _ = self.paths(namespace, params)
         if not data_path.exists():
             return None
-        frame = pd.read_csv(data_path)
+        frame = pd.read_csv(
+            data_path,
+            dtype={"symbol": str, "security_id": str, "exchange": str},
+        )
         frame.attrs["cache_status"] = "hit"
         return frame
 
@@ -72,4 +75,3 @@ def load_or_fetch(
         cached.attrs["cache_status"] = "stale_fallback"
         return cached
     raise ProviderError(f"{namespace} failed after {retries} attempts: {error}") from error
-

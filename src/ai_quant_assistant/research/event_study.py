@@ -14,6 +14,44 @@ class EventStudyEngine:
     """Pure deterministic event-study engine with no network or storage access."""
 
     @staticmethod
+    def _values(frame: pd.DataFrame, column: str) -> list[str]:
+        if column not in frame.columns:
+            return []
+        values = frame[column].dropna().astype(str)
+        return sorted(value for value in values.unique().tolist() if value)
+
+    @classmethod
+    def _source_diagnostics(cls, frame: pd.DataFrame) -> dict[str, Any]:
+        serving_sources = cls._values(frame, "source")
+        provider_sources = cls._values(frame, "provider_source")
+        if not provider_sources:
+            provider_sources = serving_sources
+        provider_sources = [source for source in provider_sources if source != "unknown"]
+        fallback_sources = {
+            source
+            for source in provider_sources
+            if source.startswith("akshare:stock_zh_a_daily:")
+            or source == "akshare:stock_zh_index_daily"
+        }
+        local_hit = None
+        if "local_hit" in frame.columns and not frame["local_hit"].empty:
+            local_hit = bool(frame["local_hit"].astype(bool).any())
+        local_fallback_used = None
+        if "local_fallback_used" in frame.columns and not frame["local_fallback_used"].empty:
+            local_fallback_used = bool(frame["local_fallback_used"].astype(bool).any())
+        return {
+            "serving_sources": serving_sources,
+            "provider_sources": provider_sources,
+            "local_hit": local_hit,
+            "local_fallback_used": local_fallback_used,
+            "local_fallback_reasons": cls._values(frame, "local_fallback_reason"),
+            "provider_fallback_used": bool(fallback_sources),
+            "provider_fallback_sources": sorted(fallback_sources),
+            "source_batch_ids": cls._values(frame, "source_batch_id"),
+            "raw_paths": cls._values(frame, "raw_path"),
+        }
+
+    @staticmethod
     def _calendar(stock_prices: pd.DataFrame, benchmark_prices: pd.DataFrame) -> pd.DataFrame:
         required = {"date", "close"}
         for label, frame in (("stock", stock_prices), ("benchmark", benchmark_prices)):
@@ -172,6 +210,9 @@ class EventStudyEngine:
             "entry_rule": spec.entry_rule,
             "confidence_interval": "normal_approximation_95pct",
             "excess_return_method": "stock_net_return_minus_benchmark_return",
+            "data_sources": {
+                "stock": self._source_diagnostics(stock_prices),
+                "benchmark": self._source_diagnostics(benchmark_prices),
+            },
         }
         return EventStudyResult(spec=spec, events=events, summary=summary, diagnostics=diagnostics)
-

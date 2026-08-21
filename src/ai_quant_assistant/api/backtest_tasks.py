@@ -3,45 +3,38 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from threading import Lock
 from typing import Any
-from uuid import uuid4
 
 from ai_quant_assistant.domain.models import FactorBacktestSpec
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
+from ai_quant_assistant.storage.operations import ExclusiveOperationLock
+from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 
 logger = logging.getLogger(__name__)
 
 
 class BacktestTaskManager:
-    def __init__(self, service: FactorBacktestService, *, max_workers: int = 2) -> None:
+    def __init__(
+        self,
+        service: FactorBacktestService,
+        repository: OperationTaskRepository,
+        operation_lock: ExclusiveOperationLock,
+        *,
+        max_workers: int = 2,
+    ) -> None:
         self.service = service
+        self.repository = repository
+        self.operation_lock = operation_lock
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="backtest")
-        self.lock = Lock()
-        self.tasks: dict[str, dict[str, Any]] = {}
 
     def submit(self, spec: FactorBacktestSpec) -> dict[str, Any]:
-        task_id = f"task-{uuid4().hex}"
-        now = datetime.now(UTC).isoformat()
-        with self.lock:
-            self.tasks[task_id] = {
-                "task_id": task_id,
-                "status": "queued",
-                "progress": 0,
-                "message": "等待执行",
-                "created_at": now,
-                "started_at": None,
-                "completed_at": None,
-                "run_id": None,
-                "error": None,
-                "spec": spec.to_dict(),
-            }
+        task = self.repository.create("backtest", spec=spec.to_dict(), message="等待执行")
+        task_id = task["task_id"]
         self.executor.submit(self._run, task_id, spec)
         return self.get(task_id)
 
     def _update(self, task_id: str, **changes: Any) -> None:
-        with self.lock:
-            self.tasks[task_id].update(changes)
+        self.repository.update(task_id, **changes)
 
     def _run(self, task_id: str, spec: FactorBacktestSpec) -> None:
         self._update(
@@ -56,7 +49,8 @@ class BacktestTaskManager:
             self._update(task_id, progress=value, message=message)
 
         try:
-            result = self.service.run(spec, progress_callback=progress)
+            with self.operation_lock.hold():
+                result = self.service.run(spec, progress_callback=progress)
             self._update(
                 task_id,
                 status="succeeded",
@@ -76,16 +70,13 @@ class BacktestTaskManager:
             )
 
     def get(self, task_id: str) -> dict[str, Any]:
-        with self.lock:
-            task = self.tasks.get(task_id)
-            if task is None:
-                raise KeyError(task_id)
-            return dict(task)
+        task = self.repository.get(task_id)
+        if task["task_type"] != "backtest":
+            raise KeyError(task_id)
+        return task
 
     def list(self) -> list[dict[str, Any]]:
-        with self.lock:
-            tasks = [dict(task) for task in self.tasks.values()]
-        return sorted(tasks, key=lambda item: item["created_at"], reverse=True)
+        return self.repository.list(task_type="backtest")
 
     def shutdown(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=False)

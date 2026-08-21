@@ -1,0 +1,23 @@
+[Unit]
+Description=AI Quant Research Web Workbench
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/code/ai-quant-research
+EnvironmentFile=/etc/ai-quant/ai-quant.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/bin/sh -c 'test -n "$AI_QUANT_WEB_PASSWORD" && test -n "$AI_QUANT_WEB_SESSION_SECRET"'
+ExecStartPre=/usr/bin/env /root/code/ai-quant-research/.venv/bin/ai-quant data init
+ExecStart=/usr/bin/env /root/code/ai-quant-research/.venv/bin/uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

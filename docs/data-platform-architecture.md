@@ -1,11 +1,11 @@
-# A 股本地数据库架构（M0 + M1 + M2-A + M2-B）
+# A 股本地数据库架构（M0 + M1 + M2 + M3 + M4-A）
 
 ## 目标与边界
 
 本阶段把现有“每次研究临时抓取并保存快照”的能力扩展为可初始化、可迁移、可检查、
 可增量同步和可断点续跑的本地数据底座。它覆盖 AkShare 沪深京证券主数据、交易日历、
-股票日线、指数基准、四类定期公告、Point-in-Time 财务指标和显式股票池批量研究，不在
-本阶段实现定时任务、Web 界面或自动实盘交易。
+股票日线、指数基准、四类定期公告、Point-in-Time 财务指标和显式股票池批量研究。
+后续阶段已增加本地 Web 研究工作台、定时增量任务和数据库备份；仍不包含自动实盘交易。
 
 现有事件研究继续通过 `MarketDataProvider` 运行，输出与计算口径保持不变。
 `LocalFirstProvider` 只在 `data_coverage` 完整覆盖请求区间时读取本地 published 数据，
@@ -68,6 +68,12 @@ Schema v4 增加：
 - `financial_metric`、`published_financial_metric`：按版本发布的十二项标准化财务指标；
 - `financial_sync_partition`：证券×自然年可恢复财务分区、报告数、指标数和 Raw 血缘；
 - 继续复用 `sync_batch`、`data_coverage`、`dq_result`，不覆盖 v1/v2/v3 已发布数据。
+
+Schema v5 增加：
+
+- `operation_task`：回测、增量同步和备份的持久化任务、进度、参数与失败原因；
+- `database_backup`：一致性备份文件位置、字节数、SHA-256 与创建时间；
+- 任务和备份生命周期采用 `TIMESTAMPTZ`，现有 v1–v4 行情、公告和财务数据保持不变。
 
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 

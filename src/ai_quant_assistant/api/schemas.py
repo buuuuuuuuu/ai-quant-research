@@ -184,3 +184,7 @@ class FactorBacktestRequest(BaseModel):
             stamp_duty_bps=self.stamp_duty_bps,
             lot_size=self.lot_size,
         )
+
+
+class IncrementalSyncRequest(BaseModel):
+    as_of: date = Field(default_factory=date.today)

@@ -1,0 +1,14 @@
+[Unit]
+Description=Create a Consistent AI Quant DuckDB Backup
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/code/ai-quant-research
+EnvironmentFile=/etc/ai-quant/ai-quant.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env /root/code/ai-quant-research/.venv/bin/ai-quant ops backup
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

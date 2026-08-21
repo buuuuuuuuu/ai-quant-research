@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI Quant Incremental Synchronization after A-share Trading
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 18:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=5min
+Unit=ai-quant-sync.service
+
+[Install]
+WantedBy=timers.target

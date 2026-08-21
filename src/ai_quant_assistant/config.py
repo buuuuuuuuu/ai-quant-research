@@ -15,6 +15,21 @@ class Settings:
     akshare_timeout_seconds: float = 30.0
     data_sync_rate_limit_seconds: float = 0.2
     log_level: str = "INFO"
+    backup_dir: Path | None = None
+    web_username: str = "admin"
+    web_password: str = ""
+    web_session_secret: str = ""
+    web_session_secure: bool = False
+    web_session_ttl_seconds: int = 43_200
+    sync_lookback_days: int = 7
+    sync_announcement_lookback_days: int = 120
+    sync_financial_lookback_days: int = 400
+    sync_symbols: tuple[str, ...] = ()
+    sync_benchmark_symbol: str = "csi000300"
+
+    @property
+    def resolved_backup_dir(self) -> Path:
+        return self.backup_dir or self.data_dir / "backups"
 
     @staticmethod
     def _project_root() -> Path:
@@ -105,6 +120,26 @@ class Settings:
                 os.getenv("AI_QUANT_DATA_SYNC_RATE_LIMIT_SECONDS", "0.2")
             ),
             log_level=os.getenv("AI_QUANT_LOG_LEVEL", "INFO"),
+            backup_dir=Path(os.getenv("AI_QUANT_BACKUP_DIR", str(data_dir / "backups"))),
+            web_username=os.getenv("AI_QUANT_WEB_USERNAME", "admin"),
+            web_password=os.getenv("AI_QUANT_WEB_PASSWORD", ""),
+            web_session_secret=os.getenv("AI_QUANT_WEB_SESSION_SECRET", ""),
+            web_session_secure=os.getenv("AI_QUANT_WEB_SESSION_SECURE", "false").lower()
+            in {"1", "true", "yes", "on"},
+            web_session_ttl_seconds=int(os.getenv("AI_QUANT_WEB_SESSION_TTL_SECONDS", "43200")),
+            sync_lookback_days=int(os.getenv("AI_QUANT_SYNC_LOOKBACK_DAYS", "7")),
+            sync_announcement_lookback_days=int(
+                os.getenv("AI_QUANT_SYNC_ANNOUNCEMENT_LOOKBACK_DAYS", "120")
+            ),
+            sync_financial_lookback_days=int(
+                os.getenv("AI_QUANT_SYNC_FINANCIAL_LOOKBACK_DAYS", "400")
+            ),
+            sync_symbols=tuple(
+                symbol.strip()
+                for symbol in os.getenv("AI_QUANT_SYNC_SYMBOLS", "").replace(",", " ").split()
+                if symbol.strip()
+            ),
+            sync_benchmark_symbol=os.getenv("AI_QUANT_SYNC_BENCHMARK", "csi000300"),
         )
 
     def ensure_directories(self) -> None:

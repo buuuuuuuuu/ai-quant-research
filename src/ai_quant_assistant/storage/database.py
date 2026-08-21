@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Any
 
 import pandas as pd
@@ -35,13 +38,21 @@ CORE_RELATIONS = (
     "financial_sync_partition",
     "published_financial_report",
     "published_financial_metric",
+    "operation_task",
+    "database_backup",
 )
+
+_CONNECTION_LOCKS: dict[Path, RLock] = {}
+_CONNECTION_LOCKS_GUARD = Lock()
 
 
 class LocalDatabase:
     def __init__(self, path: Path, layout: DataLayout) -> None:
         self.path = path
         self.layout = layout
+        resolved_path = path.resolve()
+        with _CONNECTION_LOCKS_GUARD:
+            self.connection_lock = _CONNECTION_LOCKS.setdefault(resolved_path, RLock())
 
     @staticmethod
     def _duckdb() -> Any:
@@ -52,7 +63,7 @@ class LocalDatabase:
     def initialize(self) -> dict[str, Any]:
         directories = self.layout.ensure()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._duckdb().connect(str(self.path)) as connection:
+        with self.connect() as connection:
             applied = apply_migrations(connection)
         return {
             "status": "initialized",
@@ -63,12 +74,15 @@ class LocalDatabase:
             "directories": directories,
         }
 
-    def connect(self, *, read_only: bool = False) -> Any:
-        return self._duckdb().connect(str(self.path), read_only=read_only)
+    @contextmanager
+    def connect(self, *, read_only: bool = False) -> Iterator[Any]:
+        with self.connection_lock:
+            with self._duckdb().connect(str(self.path), read_only=read_only) as connection:
+                yield connection
 
     def load_fixture(self) -> dict[str, int]:
         self.initialize()
-        with self._duckdb().connect(str(self.path)) as connection:
+        with self.connect() as connection:
             return load_fixture_data(connection)
 
     def status(self) -> dict[str, Any]:
@@ -80,7 +94,7 @@ class LocalDatabase:
                 "directories": self.layout.status(),
                 "relations": {},
             }
-        with self._duckdb().connect(str(self.path), read_only=True) as connection:
+        with self.connect(read_only=True) as connection:
             available = {
                 str(row[0])
                 for row in connection.execute(

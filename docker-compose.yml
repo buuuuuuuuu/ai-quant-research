@@ -7,6 +7,10 @@ services:
       AI_QUANT_ARTIFACT_DIR: /app/artifacts
       AI_QUANT_CACHE_DIR: /app/data/cache
       AI_QUANT_DUCKDB_PATH: /app/data/catalog.duckdb
+      AI_QUANT_BACKUP_DIR: /app/data/backups
+      AI_QUANT_WEB_USERNAME: ${AI_QUANT_WEB_USERNAME:-admin}
+      AI_QUANT_WEB_PASSWORD: ${AI_QUANT_WEB_PASSWORD:-}
+      AI_QUANT_WEB_SESSION_SECRET: ${AI_QUANT_WEB_SESSION_SECRET:-}
     volumes:
       - ./artifacts:/app/artifacts
       - ./data:/app/data

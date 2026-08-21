@@ -1,4 +1,4 @@
-.PHONY: install test lint demo api data-init data-status data-sync data-sync-index data-sync-announcements data-sync-financial data-financial-status data-backfill batch-demo
+.PHONY: install test lint demo api data-init data-status data-sync data-sync-index data-sync-announcements data-sync-financial data-financial-status data-backfill batch-demo ops-status ops-sync ops-backup
 
 install:
 	uv sync --extra dev
@@ -41,3 +41,12 @@ data-backfill:
 
 batch-demo:
 	uv run ai-quant batch-event-study --source fixture --symbols 600519 --start-date 2012-01-01 --end-date 2025-12-31
+
+ops-status:
+	uv run ai-quant ops status
+
+ops-sync:
+	uv run ai-quant ops sync
+
+ops-backup:
+	uv run ai-quant ops backup

@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v4）
+# A 股本地数据库数据字典（Schema v5）
 
 ## 公共约定
 
@@ -309,3 +309,35 @@
 | raw_path | VARCHAR | 可空 | 财务 Raw Parquet 文件路径 |
 | raw_sha256 | VARCHAR | 可空 | 财务 Raw 文件 SHA-256 |
 | created_at/updated_at | TIMESTAMP | NOT NULL | 分区生命周期时间 |
+
+## operation_task
+
+Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。后台线程只负责执行，任务
+历史和最终状态以 DuckDB 为准；服务重启后未完成任务会明确标记为失败。
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| task_id | VARCHAR | PK | 稳定任务标识 |
+| task_type | VARCHAR | backtest/sync/backup | 任务类型 |
+| status | VARCHAR | queued/running/succeeded/failed | 持久化生命周期状态 |
+| progress | INTEGER | 0–100 | 当前执行进度 |
+| message | VARCHAR | NOT NULL | 人类可读的阶段说明 |
+| spec_json | VARCHAR | NOT NULL | 原始研究或同步参数 |
+| result_json | VARCHAR | 可空 | 完成后的结构化执行结果 |
+| run_id | VARCHAR | 可空 | 对应财务因子回测运行标识 |
+| error | VARCHAR | 可空 | 失败原因 |
+| created_at/started_at/completed_at/updated_at | TIMESTAMPTZ | 创建和更新不可空 | 带时区的任务生命周期时间 |
+
+## database_backup
+
+记录已通过 DuckDB 打开校验、SHA-256 校验和原子发布的完整数据库文件；应用不会自动
+删除既有备份。
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| backup_id | VARCHAR | PK | 稳定备份标识 |
+| database_path | VARCHAR | NOT NULL | 被备份的数据库路径 |
+| backup_path | VARCHAR | UNIQUE, NOT NULL | 一致性备份文件路径 |
+| size_bytes | BIGINT | 非负 | 备份文件大小 |
+| sha256 | VARCHAR | NOT NULL | 备份文件 SHA-256 |
+| created_at | TIMESTAMPTZ | NOT NULL | 带时区的备份创建时间 |

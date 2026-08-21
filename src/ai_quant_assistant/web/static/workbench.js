@@ -9,9 +9,73 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => 
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
+  if (response.status === 401) { window.location.assign("/login"); throw new Error("登录已过期，请重新登录"); }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.detail || `请求失败（${response.status}）`);
   return payload;
+}
+
+const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
+const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测" };
+const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
+
+function operationTime(value) {
+  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
+}
+
+function operationRow(title, description, isError = false) {
+  return `<div class="operation-row${isError ? " negative" : ""}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(description)}</span></div>`;
+}
+
+async function loadOperations() {
+  try {
+    const overview = await requestJson("/api/v1/ops/status");
+    const datasets = overview.datasets || [];
+    const tasks = overview.tasks || [];
+    const backups = overview.backups || [];
+    $("#sync-status-list").innerHTML = datasets.length ? datasets.map((item) => operationRow(`${datasetLabels[item.dataset] || item.dataset} · ${taskStatusLabels[item.status] || item.status}`, item.error || `${formatNumber(item.row_count)} 行 · ${operationTime(item.ended_at || item.started_at)}`, Boolean(item.error))).join("") : '<p class="empty-state">还没有数据同步记录。</p>';
+    $("#operations-task-list").innerHTML = tasks.length ? tasks.slice(0, 5).map((item) => operationRow(`${taskTypeLabels[item.task_type] || item.task_type} · ${taskStatusLabels[item.status] || item.status}`, item.error || `${item.progress}% · ${operationTime(item.created_at)}`, item.status === "failed")).join("") : '<p class="empty-state">还没有后台任务。</p>';
+    $("#backup-status-list").innerHTML = backups.length ? backups.slice(0, 4).map((item) => operationRow(`${(Number(item.size_bytes) / 1024 / 1024).toFixed(1)} MB · ${item.exists ? "文件正常" : "文件缺失"}`, operationTime(item.created_at), !item.exists)).join("") : '<p class="empty-state">还没有数据库备份。</p>';
+  } catch (error) {
+    const message = $("#operations-message");
+    message.textContent = error.message;
+    message.classList.add("error");
+  }
+}
+
+async function pollOperation(taskId) {
+  for (;;) {
+    const task = await requestJson(`/api/v1/ops/tasks/${encodeURIComponent(taskId)}`);
+    const message = $("#operations-message");
+    message.textContent = task.error || `${task.message} · ${task.progress}%`;
+    message.classList.toggle("error", task.status === "failed");
+    if (task.status === "succeeded" || task.status === "failed") {
+      await Promise.all([loadOperations(), loadOverview()]);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+async function runOperation(kind) {
+  const button = kind === "sync" ? $("#run-sync") : $("#run-backup");
+  const message = $("#operations-message");
+  button.disabled = true;
+  message.classList.remove("error");
+  try {
+    const options = { method: "POST" };
+    if (kind === "sync") {
+      options.headers = { "Content-Type": "application/json" };
+      options.body = JSON.stringify({ as_of: new Date().toLocaleDateString("en-CA") });
+    }
+    const task = await requestJson(`/api/v1/ops/${kind}`, options);
+    await pollOperation(task.task_id);
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadOverview() {
@@ -159,5 +223,8 @@ async function loadRun(runId) {
 
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#refresh-history").addEventListener("click", loadHistory);
+$("#refresh-operations").addEventListener("click", loadOperations);
+$("#run-sync").addEventListener("click", () => runOperation("sync"));
+$("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory();
+loadOverview(); loadHistory(); loadOperations();

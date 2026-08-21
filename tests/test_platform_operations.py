@@ -90,7 +90,7 @@ def test_v4_catalog_upgrades_without_losing_existing_market_data(tmp_path) -> No
     result = database.initialize()
     status = database.status()
 
-    assert result["applied_migrations"] == [5, 6]
+    assert result["applied_migrations"] == list(range(5, SCHEMA_VERSION + 1))
     assert status["schema_version"] == SCHEMA_VERSION
     assert status["relations"]["security_master"] == 1
     assert status["relations"]["operation_task"] == 0
@@ -320,7 +320,9 @@ def test_exclusive_operation_lock_blocks_parallel_database_mutations(tmp_path) -
             raise AssertionError("a second operation must not acquire the lock")
 
 
-def test_cli_backup_status_and_task_history_use_automatic_catalog(tmp_path, monkeypatch, capsys) -> None:
+def test_cli_backup_status_and_task_history_use_automatic_catalog(
+    tmp_path, monkeypatch, capsys
+) -> None:
     _database(tmp_path)
     monkeypatch.setenv("AI_QUANT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("AI_QUANT_DUCKDB_PATH", str(tmp_path / "data" / "catalog.duckdb"))

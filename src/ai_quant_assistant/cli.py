@@ -48,6 +48,7 @@ from ai_quant_assistant.storage.operations import (
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
+from ai_quant_assistant.storage.universe import UniverseRepository
 
 
 def _date(value: str) -> date:
@@ -99,6 +100,18 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--stamp-duty-bps", type=float, default=5.0)
     backtest.add_argument("--lot-size", type=int, default=100)
     backtest.add_argument("--artifact-dir", type=Path)
+    backtest.add_argument(
+        "--universe-mode",
+        choices=["explicit", "all_available", "historical_index", "observed_index"],
+        default="explicit",
+    )
+    backtest.add_argument("--universe-benchmark", default="csi000300")
+    backtest.add_argument("--classification-system", default="provider")
+    backtest.add_argument(
+        "--industry-neutralization", choices=["none", "within_industry_rank"], default="none"
+    )
+    backtest.add_argument("--max-industry-weight", type=float, default=1.0)
+    backtest.add_argument("--require-verified-industry", action="store_true")
 
     lab = subcommands.add_parser("factor-lab", help="运行多因子研究、IC 分析与样本外参数扫描")
     lab.add_argument("--source", choices=["local"], default="local")
@@ -126,6 +139,35 @@ def build_parser() -> argparse.ArgumentParser:
     lab.add_argument("--walk-forward-folds", type=int, default=3)
     lab.add_argument("--max-combinations", type=int, default=48)
     lab.add_argument("--artifact-dir", type=Path)
+    lab.add_argument(
+        "--universe-mode",
+        choices=["explicit", "all_available", "historical_index", "observed_index"],
+        default="explicit",
+    )
+    lab.add_argument("--universe-benchmark", default="csi000300")
+    lab.add_argument("--classification-system", default="provider")
+    lab.add_argument(
+        "--industry-neutralization", choices=["none", "within_industry_rank"], default="none"
+    )
+    lab.add_argument("--max-industry-weight", type=float, default=1.0)
+    lab.add_argument("--require-verified-industry", action="store_true")
+
+    universe = subcommands.add_parser("universe", help="构建 Point-in-Time 动态股票池")
+    universe_commands = universe.add_subparsers(dest="universe_command", required=True)
+    universe_build = universe_commands.add_parser("build", help="查看指定历史时点的股票池")
+    universe_build.add_argument("--as-of", type=_date, required=True)
+    universe_build.add_argument(
+        "--mode",
+        choices=["explicit", "all_available", "historical_index", "observed_index"],
+        default="all_available",
+    )
+    universe_build.add_argument("--symbols", nargs="+", default=[])
+    universe_build.add_argument("--benchmark", default="csi000300")
+    universe_build.add_argument("--classification-system", default="provider")
+    universe_build.add_argument("--limit", type=int)
+    universe_build.add_argument("--require-verified-industry", action="store_true")
+    universe_status = universe_commands.add_parser("status", help="检查行业和指数成分数据真实性")
+    universe_status.add_argument("--as-of", type=_date, default=date.today())
 
     data = subcommands.add_parser("data", help="初始化和检查 A 股本地数据库")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -200,6 +242,39 @@ def build_parser() -> argparse.ArgumentParser:
     financial_status.add_argument("--start-date", type=_date)
     financial_status.add_argument("--data-dir", type=Path)
     financial_status.add_argument("--duckdb-path", type=Path)
+
+    industry_sync = data_commands.add_parser(
+        "sync-industries", help="同步当前行业观察快照，不冒充历史分类"
+    )
+    industry_sync.add_argument("--symbols", nargs="+", required=True)
+    industry_sync.add_argument("--as-of", type=_date, default=date.today())
+    industry_sync.add_argument("--classification-system", default="provider")
+    industry_sync.add_argument("--refresh", action="store_true")
+    industry_sync.add_argument("--rate-limit-seconds", type=float)
+    industry_sync.add_argument("--data-dir", type=Path)
+    industry_sync.add_argument("--duckdb-path", type=Path)
+
+    constituent_sync = data_commands.add_parser(
+        "sync-constituents", help="同步当前指数成分观察快照，不伪造历史成分"
+    )
+    constituent_sync.add_argument("--benchmark", default="csi000300")
+    constituent_sync.add_argument("--as-of", type=_date, default=date.today())
+    constituent_sync.add_argument("--refresh", action="store_true")
+    constituent_sync.add_argument("--rate-limit-seconds", type=float)
+    constituent_sync.add_argument("--data-dir", type=Path)
+    constituent_sync.add_argument("--duckdb-path", type=Path)
+
+    universe_import = data_commands.add_parser(
+        "import-universe-history", help="导入有公开时间的可信历史行业或指数成分 CSV"
+    )
+    universe_import.add_argument("--dataset", choices=["industries", "constituents"], required=True)
+    universe_import.add_argument("--file", type=Path, required=True)
+    universe_import.add_argument("--as-of", type=_date, default=date.today())
+    universe_import.add_argument("--benchmark", default="csi000300")
+    universe_import.add_argument("--classification-system", default="provider")
+    universe_import.add_argument("--source-name", required=True)
+    universe_import.add_argument("--data-dir", type=Path)
+    universe_import.add_argument("--duckdb-path", type=Path)
 
     backfill = data_commands.add_parser(
         "backfill-research", help="批量回填股票、指数、公告和 Point-in-Time 财务指标"
@@ -322,7 +397,36 @@ def main() -> None:
                 "latest": database.read_latest_financial_snapshot(args.symbol, args.as_of),
                 "reports": financial_frame.to_dict(orient="records"),
             }
+        elif args.data_command == "import-universe-history":
+            import pandas as pd
+
+            frame = pd.read_csv(args.file, dtype={"symbol": str})
+            repository = UniverseRepository(database)
+            if args.dataset == "industries":
+                payload = repository.store_industries(
+                    frame,
+                    classification_system=args.classification_system,
+                    history_mode="verified_history",
+                    as_of=args.as_of,
+                    source=args.source_name,
+                )
+            else:
+                payload = repository.store_constituents(
+                    frame,
+                    benchmark_symbol=args.benchmark,
+                    history_mode="verified_history",
+                    as_of=args.as_of,
+                    source=args.source_name,
+                )
         else:
+            if (
+                args.data_command in {"sync-industries", "sync-constituents"}
+                and args.as_of != date.today()
+            ):
+                raise ValueError(
+                    "live industry and constituent snapshots can only use today's observation date; "
+                    "import independently verified historical data instead"
+                )
             provider = AkShareProvider(
                 cache_dir=(
                     settings.cache_dir if args.data_dir is None else database.layout.root / "cache"
@@ -336,7 +440,27 @@ def main() -> None:
                 if args.rate_limit_seconds is not None
                 else settings.data_sync_rate_limit_seconds
             )
-            if args.data_command == "sync":
+            if args.data_command == "sync-industries":
+                repository = UniverseRepository(database)
+                frame = provider.get_industry_snapshot(tuple(args.symbols))
+                payload = repository.store_industries(
+                    frame,
+                    classification_system=args.classification_system,
+                    history_mode="observed_snapshot",
+                    as_of=args.as_of,
+                    source="akshare:stock_individual_info_em",
+                )
+            elif args.data_command == "sync-constituents":
+                repository = UniverseRepository(database)
+                frame = provider.get_index_constituent_snapshot(args.benchmark)
+                payload = repository.store_constituents(
+                    frame,
+                    benchmark_symbol=args.benchmark,
+                    history_mode="observed_snapshot",
+                    as_of=args.as_of,
+                    source="akshare:index_stock_cons_csindex",
+                )
+            elif args.data_command == "sync":
                 service = MarketDataSyncService(
                     database=database,
                     layout=database.layout,
@@ -426,6 +550,26 @@ def main() -> None:
             and payload["status"] == "failed"
         ):
             raise SystemExit(1)
+        return
+
+    if args.command == "universe":
+        database = LocalDatabase(
+            path=settings.duckdb_path, layout=DataLayout.from_root(settings.data_dir)
+        )
+        repository = UniverseRepository(database)
+        if args.universe_command == "status":
+            payload = repository.overview(args.as_of)
+        else:
+            payload = repository.build(
+                as_of=args.as_of,
+                mode=args.mode,
+                symbols=tuple(args.symbols),
+                benchmark_symbol=args.benchmark,
+                limit=args.limit,
+                classification_system=args.classification_system,
+                require_history=args.require_verified_industry,
+            )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
 
     if args.command == "ops":
@@ -541,6 +685,12 @@ def main() -> None:
             validation_fraction=args.validation_fraction,
             walk_forward_folds=args.walk_forward_folds,
             max_combinations=args.max_combinations,
+            universe_mode=args.universe_mode,
+            universe_benchmark=args.universe_benchmark,
+            classification_system=args.classification_system,
+            industry_neutralization=args.industry_neutralization,
+            max_industry_weight=args.max_industry_weight,
+            require_verified_industry=args.require_verified_industry,
         )
         print(json.dumps(service.run(spec), ensure_ascii=False, indent=2, default=str))
         return
@@ -570,6 +720,12 @@ def main() -> None:
                 slippage_bps=args.slippage_bps,
                 stamp_duty_bps=args.stamp_duty_bps,
                 lot_size=args.lot_size,
+                universe_mode=args.universe_mode,
+                universe_benchmark=args.universe_benchmark,
+                classification_system=args.classification_system,
+                industry_neutralization=args.industry_neutralization,
+                max_industry_weight=args.max_industry_weight,
+                require_verified_industry=args.require_verified_industry,
             )
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))

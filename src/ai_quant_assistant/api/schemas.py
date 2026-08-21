@@ -142,6 +142,14 @@ class FactorBacktestRequest(BaseModel):
     slippage_bps: float = Field(default=5.0, ge=0, le=500)
     stamp_duty_bps: float = Field(default=5.0, ge=0, le=500)
     lot_size: int = Field(default=100, ge=1, le=100_000)
+    universe_mode: Literal["explicit", "all_available", "historical_index", "observed_index"] = (
+        "explicit"
+    )
+    universe_benchmark: str = "csi000300"
+    classification_system: str = "provider"
+    industry_neutralization: Literal["none", "within_industry_rank"] = "none"
+    max_industry_weight: float = Field(default=1.0, gt=0, le=1)
+    require_verified_industry: bool = False
 
     @field_validator("symbols")
     @classmethod
@@ -185,6 +193,12 @@ class FactorBacktestRequest(BaseModel):
             slippage_bps=self.slippage_bps,
             stamp_duty_bps=self.stamp_duty_bps,
             lot_size=self.lot_size,
+            universe_mode=self.universe_mode,
+            universe_benchmark=self.universe_benchmark,
+            classification_system=self.classification_system,
+            industry_neutralization=self.industry_neutralization,
+            max_industry_weight=self.max_industry_weight,
+            require_verified_industry=self.require_verified_industry,
         )
 
 
@@ -242,6 +256,14 @@ class FactorLabRequest(BaseModel):
     validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     walk_forward_folds: int = Field(default=3, ge=1, le=12)
     max_combinations: int = Field(default=48, ge=1, le=200)
+    universe_mode: Literal["explicit", "all_available", "historical_index", "observed_index"] = (
+        "explicit"
+    )
+    universe_benchmark: str = "csi000300"
+    classification_system: str = "provider"
+    industry_neutralization: Literal["none", "within_industry_rank"] = "none"
+    max_industry_weight: float = Field(default=1.0, gt=0, le=1)
+    require_verified_industry: bool = False
 
     @model_validator(mode="after")
     def validate_lab(self) -> FactorLabRequest:
@@ -279,6 +301,12 @@ class FactorLabRequest(BaseModel):
             validation_fraction=self.validation_fraction,
             walk_forward_folds=self.walk_forward_folds,
             max_combinations=self.max_combinations,
+            universe_mode=self.universe_mode,
+            universe_benchmark=self.universe_benchmark,
+            classification_system=self.classification_system,
+            industry_neutralization=self.industry_neutralization,
+            max_industry_weight=self.max_industry_weight,
+            require_verified_industry=self.require_verified_industry,
         )
 
 

@@ -203,6 +203,51 @@ class AkShareProvider:
             refresh=self.refresh,
         )
 
+    def get_industry_snapshot(self, symbols: tuple[str, ...] = ()) -> pd.DataFrame:
+        ak = self._akshare()
+        rows = []
+        for symbol in symbols:
+            try:
+                frame = ak.stock_individual_info_em(symbol=symbol)
+                key = next((name for name in ("item", "项目") if name in frame.columns), None)
+                value = next((name for name in ("value", "值") if name in frame.columns), None)
+                if key is None or value is None:
+                    continue
+                matches = frame.loc[frame[key].astype(str).str.contains("行业", na=False), value]
+                if not matches.empty and pd.notna(matches.iloc[0]):
+                    rows.append({"symbol": symbol, "industry_name": str(matches.iloc[0]).strip()})
+            except Exception:  # noqa: BLE001 - missing individual endpoint should not stop the batch
+                continue
+        if symbols and not rows:
+            raise ProviderError("industry snapshot endpoint returned no classifications")
+        return pd.DataFrame(rows, columns=["symbol", "industry_name"])
+
+    def get_index_constituent_snapshot(self, benchmark_symbol: str) -> pd.DataFrame:
+        code = benchmark_symbol.removeprefix("csi").removeprefix("sh").removeprefix("sz")
+        raw = self._akshare().index_stock_cons_csindex(symbol=code)
+        symbol_column = next(
+            (
+                name
+                for name in ("成分券代码", "成分证券代码", "证券代码", "symbol", "品种代码")
+                if name in raw.columns
+            ),
+            None,
+        )
+        if symbol_column is None:
+            raise ProviderError(f"index constituent symbol column not found: {list(raw.columns)}")
+        result = pd.DataFrame(
+            {"symbol": raw[symbol_column].astype(str).str.extract(r"(\d{6})", expand=False)}
+        )
+        weight_column = next(
+            (name for name in ("权重", "权重(%)", "weight") if name in raw.columns), None
+        )
+        if weight_column is not None:
+            result["weight"] = pd.to_numeric(raw[weight_column], errors="coerce")
+        result = result.dropna(subset=["symbol"]).drop_duplicates("symbol").reset_index(drop=True)
+        if result.empty:
+            raise ProviderError("index constituent snapshot endpoint returned no members")
+        return result
+
     def get_trading_calendar(self) -> pd.DataFrame:
         def fetch() -> pd.DataFrame:
             raw = self._akshare().tool_trade_date_hist_sina()

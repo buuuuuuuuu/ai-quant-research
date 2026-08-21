@@ -17,6 +17,7 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.reports.backtest_writer import FactorBacktestReportWriter
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.snapshots import write_json
+from ai_quant_assistant.storage.universe import UniverseRepository
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[int, str], None]
@@ -27,6 +28,71 @@ class FactorBacktestService:
         self.database = database
         self.artifact_dir = artifact_dir
         self.writer = FactorBacktestReportWriter()
+        self.universe = UniverseRepository(database)
+
+    def eligible_snapshot(
+        self, spec: FactorBacktestSpec, as_of: Any, available: set[str]
+    ) -> pd.DataFrame:
+        factors = self.factor_snapshot(spec, as_of)
+        if spec.universe_mode != "explicit":
+            definition = self.universe.build(
+                as_of=as_of,
+                mode=spec.universe_mode,
+                symbols=spec.symbols,
+                benchmark_symbol=spec.universe_benchmark,
+                classification_system=spec.classification_system,
+                require_history=spec.require_verified_industry,
+            )
+            available = available & set(definition["symbols"])
+        factors = factors.loc[factors["symbol"].isin(available)].copy()
+        industries = self.universe.industries(
+            tuple(factors["symbol"]),
+            as_of,
+            classification_system=spec.classification_system,
+            verified_only=spec.require_verified_industry,
+        )
+        if not industries.empty:
+            factors = factors.merge(
+                industries[["symbol", "industry_name", "history_mode"]], on="symbol", how="left"
+            )
+        else:
+            factors["industry_name"] = None
+            factors["history_mode"] = None
+        factors["factor_value"] = pd.to_numeric(factors["factor_value"], errors="coerce")
+        factors = factors.dropna(subset=["factor_value"])
+        if spec.industry_neutralization == "within_industry_rank":
+            factors = factors.dropna(subset=["industry_name"]).copy()
+            if factors.empty:
+                raise ValueError(
+                    "industry neutralization requires point-in-time industry classification"
+                )
+            factors["raw_factor_value"] = factors["factor_value"]
+            factors["factor_value"] = factors.groupby("industry_name")["factor_value"].rank(
+                pct=True, method="average", ascending=spec.factor_direction == "desc"
+            )
+            ascending = False
+        else:
+            ascending = spec.factor_direction == "asc"
+        factors = factors.sort_values(
+            ["factor_value", "symbol"], ascending=[ascending, True]
+        ).reset_index(drop=True)
+        factors["rank"] = range(1, len(factors) + 1)
+        if spec.max_industry_weight >= 1:
+            factors["selected"] = factors["rank"] <= spec.top_n
+            return factors
+        per_industry = max(1, int(np.floor(spec.top_n * spec.max_industry_weight)))
+        chosen: list[bool] = []
+        counts: Counter[str] = Counter()
+        total = 0
+        for row in factors.itertuples(index=False):
+            industry = "unknown" if pd.isna(row.industry_name) else str(row.industry_name)
+            allow = total < spec.top_n and counts[industry] < per_industry
+            chosen.append(allow)
+            if allow:
+                counts[industry] += 1
+                total += 1
+        factors["selected"] = chosen
+        return factors
 
     @staticmethod
     def _run_id() -> str:
@@ -431,17 +497,8 @@ class FactorBacktestService:
                     continue
                 execution_date = calendar_dates[index + 1]
                 cutoff = pd.Timestamp(current_date).replace(hour=15)
-                factors = self.factor_snapshot(spec, cutoff)
                 available = set(day.index) if not day.empty else set()
-                factors = factors.loc[factors["symbol"].isin(available)].copy()
-                factors["factor_value"] = pd.to_numeric(factors["factor_value"], errors="coerce")
-                factors = factors.dropna(subset=["factor_value"])
-                factors = factors.sort_values(
-                    ["factor_value", "symbol"],
-                    ascending=[spec.factor_direction == "asc", True],
-                ).reset_index(drop=True)
-                factors["rank"] = range(1, len(factors) + 1)
-                factors["selected"] = factors["rank"] <= spec.top_n
+                factors = self.eligible_snapshot(spec, cutoff, available)
                 selected = factors.loc[factors["selected"]]
                 for row in factors.itertuples(index=False):
                     selection_rows.append(
@@ -459,6 +516,9 @@ class FactorBacktestService:
                             "availability_source": row.availability_source,
                             "source_batch_id": row.source_batch_id,
                             "component_values": getattr(row, "component_values", ""),
+                            "industry_name": getattr(row, "industry_name", None),
+                            "industry_history_mode": getattr(row, "history_mode", None),
+                            "raw_factor_value": getattr(row, "raw_factor_value", row.factor_value),
                         }
                     )
                 pending[execution_date] = {
@@ -512,10 +572,15 @@ class FactorBacktestService:
             "factor_combination": [item.to_dict() for item in spec.factors],
             "missing_factor_policy": spec.missing_policy,
             "execution_rule": "next benchmark trading day open",
-            "universe_mode": "explicit_symbols_not_historical_index_constituents",
-            "survivorship_bias_warning": (
-                "The requested symbols are an explicit research universe, not historical index members."
-            ),
+            "universe_mode": spec.universe_mode,
+            "universe_benchmark": spec.universe_benchmark,
+            "industry_neutralization": spec.industry_neutralization,
+            "classification_system": spec.classification_system,
+            "max_industry_weight": spec.max_industry_weight,
+            "require_verified_industry": spec.require_verified_industry,
+            "survivorship_bias_warning": None
+            if spec.universe_mode == "historical_index"
+            else "The requested universe does not prove historical index membership and may have survivorship bias.",
             "local_sources": [
                 "published_daily_bar",
                 "published_financial_report",

@@ -48,7 +48,7 @@ def _services(root: Path, **settings_changes):
     return database, settings, tasks, audit, alerts, monitor, backups
 
 
-def test_v5_catalog_upgrades_to_v6_without_losing_tasks_or_backups(tmp_path) -> None:
+def test_v5_catalog_upgrades_without_losing_tasks_or_backups(tmp_path) -> None:
     directory = tmp_path / "data"
     directory.mkdir()
     database = LocalDatabase(directory / "catalog.duckdb", DataLayout.from_root(directory))
@@ -85,8 +85,8 @@ def test_v5_catalog_upgrades_to_v6_without_losing_tasks_or_backups(tmp_path) -> 
     result = database.initialize()
     status = database.status()
 
-    assert result["applied_migrations"] == [6]
-    assert status["schema_version"] == SCHEMA_VERSION == 6
+    assert result["applied_migrations"] == list(range(6, SCHEMA_VERSION + 1))
+    assert status["schema_version"] == SCHEMA_VERSION
     assert status["relations"]["operation_task"] == 1
     assert status["relations"]["database_backup"] == 1
     assert status["relations"]["operation_audit"] == 0
@@ -117,7 +117,9 @@ def test_backup_verification_checks_sha_size_and_database_schema(tmp_path) -> No
 
     assert verified["status"] == "verified"
     assert verified["schema_version"] == SCHEMA_VERSION
-    assert verified["sha256"] == hashlib.sha256(Path(created["backup_path"]).read_bytes()).hexdigest()
+    assert (
+        verified["sha256"] == hashlib.sha256(Path(created["backup_path"]).read_bytes()).hexdigest()
+    )
     assert audit.list()[0]["action"] == "backup_verified"
 
 
@@ -400,9 +402,7 @@ def test_authenticated_web_exposes_alerts_quality_audit_and_backup_verification(
         assert client.get("/api/v1/ops/audit").status_code == 401
         failed = client.post("/login", data={"username": "admin", "password": "wrong"})
         assert failed.status_code == 401
-        signed_in = client.post(
-            "/login", data={"username": "admin", "password": "a-long-password"}
-        )
+        signed_in = client.post("/login", data={"username": "admin", "password": "a-long-password"})
         assert signed_in.status_code == 303
         assert client.post("/api/v1/ops/alerts/check").status_code == 200
         assert client.get("/api/v1/ops/quality").status_code == 200
@@ -435,9 +435,7 @@ def test_web_acknowledges_existing_alert_and_records_audit(tmp_path) -> None:
     with TestClient(app) as client:
         checked = client.post("/api/v1/ops/alerts/check").json()
         alert = next(item for item in checked["alerts"] if item["alert_key"] == "task_failed:sync")
-        acknowledged = client.post(
-            f"/api/v1/ops/alerts/{alert['alert_id']}/acknowledge"
-        )
+        acknowledged = client.post(f"/api/v1/ops/alerts/{alert['alert_id']}/acknowledge")
 
         assert acknowledged.status_code == 200
         assert acknowledged.json()["status"] == "acknowledged"

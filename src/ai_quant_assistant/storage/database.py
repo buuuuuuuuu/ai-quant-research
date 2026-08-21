@@ -42,6 +42,9 @@ CORE_RELATIONS = (
     "database_backup",
     "operation_audit",
     "operation_alert",
+    "security_industry_history",
+    "index_constituent_history",
+    "universe_sync_batch",
 )
 
 _CONNECTION_LOCKS: dict[Path, RLock] = {}
@@ -171,9 +174,7 @@ class LocalDatabase:
                 """
             ).fetchall()
         overview["securities"] = (
-            securities.astype(object)
-            .where(pd.notna(securities), None)
-            .to_dict(orient="records")
+            securities.astype(object).where(pd.notna(securities), None).to_dict(orient="records")
         )
         overview["coverage"] = {
             str(dataset): {"start_date": start, "end_date": end, "rows": int(rows)}

@@ -15,13 +15,16 @@ from ai_quant_assistant.domain.models import (
     BenchmarkSyncSpec,
     DataSyncSpec,
     EventStudySpec,
+    FactorBacktestSpec,
     FinancialSyncSpec,
     ResearchBackfillSpec,
 )
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.providers.local_provider import LocalFirstProvider
+from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
+from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
@@ -62,6 +65,24 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--min-events", type=int, default=1)
     batch.add_argument("--artifact-dir", type=Path)
     batch.add_argument("--refresh", action="store_true")
+
+    backtest = subcommands.add_parser("backtest", help="运行 Point-in-Time 财务因子组合回测")
+    backtest.add_argument("--source", choices=["local"], default="local")
+    backtest.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    backtest.add_argument("--start-date", type=_date, required=True)
+    backtest.add_argument("--end-date", type=_date, default=date.today())
+    backtest.add_argument("--factor", choices=list(FINANCIAL_METRICS), default="roe")
+    backtest.add_argument("--factor-direction", choices=["asc", "desc"], default="desc")
+    backtest.add_argument("--top-n", type=int, default=3)
+    backtest.add_argument("--rebalance", choices=["monthly", "quarterly"], default="quarterly")
+    backtest.add_argument("--benchmark", default="csi000300")
+    backtest.add_argument("--adjustment", choices=["none", "qfq", "hfq"], default="qfq")
+    backtest.add_argument("--initial-capital", type=float, default=1_000_000.0)
+    backtest.add_argument("--commission-bps", type=float, default=5.0)
+    backtest.add_argument("--slippage-bps", type=float, default=5.0)
+    backtest.add_argument("--stamp-duty-bps", type=float, default=5.0)
+    backtest.add_argument("--lot-size", type=int, default=100)
+    backtest.add_argument("--artifact-dir", type=Path)
 
     data = subcommands.add_parser("data", help="初始化和检查 A 股本地数据库")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -299,6 +320,36 @@ def main() -> None:
             and payload["status"] == "failed"
         ):
             raise SystemExit(1)
+        return
+
+    if args.command == "backtest":
+        database = LocalDatabase(
+            path=settings.duckdb_path,
+            layout=DataLayout.from_root(settings.data_dir),
+        )
+        service = FactorBacktestService(
+            database=database,
+            artifact_dir=args.artifact_dir or settings.artifact_dir,
+        )
+        payload = service.run(
+            FactorBacktestSpec(
+                symbols=tuple(args.symbols),
+                start_date=args.start_date,
+                end_date=args.end_date,
+                factor=args.factor,
+                factor_direction=args.factor_direction,
+                top_n=args.top_n,
+                rebalance=args.rebalance,
+                benchmark_symbol=args.benchmark,
+                adjustment=args.adjustment,
+                initial_capital=args.initial_capital,
+                commission_bps=args.commission_bps,
+                slippage_bps=args.slippage_bps,
+                stamp_duty_bps=args.stamp_duty_bps,
+                lot_size=args.lot_size,
+            )
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
 
     artifact_dir = args.artifact_dir or settings.artifact_dir

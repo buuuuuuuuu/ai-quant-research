@@ -239,8 +239,17 @@ def test_local_first_provider_uses_coverage_then_falls_back(tmp_path) -> None:
     )
 
     assert local["source"].unique().tolist() == ["local:published_daily_bar"]
+    assert local["provider_source"].unique().tolist() == ["fixture-daily:qfq"]
+    assert local["source_batch_id"].nunique() == 1
+    assert all(Path(path).is_file() for path in local["raw_path"].unique())
+    assert local["local_hit"].unique().tolist() == [True]
+    assert local["local_fallback_used"].unique().tolist() == [False]
+    assert local["local_fallback_reason"].unique().tolist() == [""]
     assert fallback.stock_calls == 1
     assert remote["source"].tolist() == ["fallback"]
+    assert remote["local_hit"].tolist() == [False]
+    assert remote["local_fallback_used"].tolist() == [True]
+    assert remote["local_fallback_reason"].tolist() == ["coverage_incomplete"]
 
 
 def test_cli_data_sync_runs_offline_with_injected_provider(

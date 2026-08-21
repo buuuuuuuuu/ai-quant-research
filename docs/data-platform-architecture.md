@@ -77,6 +77,20 @@ DQ 并事务化发布。
 AkShare 访问仍使用现有缓存、指数退避重试与新浪备用接口。CLI 通过标准错误输出分区
 进度；`AI_QUANT_DATA_SYNC_RATE_LIMIT_SECONDS` 控制请求间隔。
 
+## 研究数据源诊断与血缘
+
+`event-study` 在 `diagnostics.data_sources` 和 HTML 报告中分别记录股票与基准的：
+
+- `serving_sources`：研究实际读取的服务层来源；
+- `provider_sources`：本地数据对应的原始 AkShare/Fixture 接口来源；
+- `local_hit/local_fallback_used`：是否命中本地覆盖、是否回退外部 Provider；
+- `provider_fallback_used`：AkShare 是否使用备用接口；
+- `source_batch_ids/raw_paths`：本地发布数据对应的同步批次和 Raw Parquet。
+
+血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建，并读取 Raw Parquet
+中的逐日 `source`。因此不需要增加 Schema 版本，已有 Schema v2 数据也能直接显示来源。
+股票快照保留上述逐行血缘字段；基准在 M1-B 尚未本地化，正常显示为外部 Provider。
+
 ## 数据质量门禁
 
 阻断级规则包括日期可解析、主键唯一、数值完整、分区范围、正价格、非负成交活动与

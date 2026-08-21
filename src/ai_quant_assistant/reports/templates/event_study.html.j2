@@ -44,6 +44,24 @@
     <div class="metric">最短窗口平均超额<b>{{ first.mean_excess_return|pct }}</b></div>
   </div>
 
+  <h2>数据来源与血缘</h2>
+  <table>
+    <thead><tr><th>数据集</th><th>服务来源</th><th>底层来源</th><th>本地命中</th><th>本地回退</th><th>Provider 备用接口</th><th>批次</th></tr></thead>
+    <tbody>
+    {% for label, item in [('股票', diagnostics.data_sources.stock), ('基准', diagnostics.data_sources.benchmark)] %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>{{ item.serving_sources|join(', ') or '-' }}</td>
+        <td>{{ item.provider_sources|join(', ') or '-' }}</td>
+        <td>{% if item.local_hit is none %}-{% elif item.local_hit %}是{% else %}否{% endif %}</td>
+        <td>{% if item.local_fallback_used is none %}-{% elif item.local_fallback_used %}是{% else %}否{% endif %}</td>
+        <td>{% if item.provider_fallback_used %}是{% else %}否{% endif %}</td>
+        <td>{{ item.source_batch_ids|join(', ') or '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
   <h2>窗口汇总</h2>
   <table>
     <thead><tr><th>窗口</th><th>样本</th><th>平均净收益</th><th>平均基准</th><th>平均超额</th><th>中位数</th><th>胜率</th><th>95% CI</th></tr></thead>
@@ -65,10 +83,10 @@
 
   <h2>事件明细</h2>
   <table>
-    <thead><tr><th>报告年度</th><th>公告日</th><th>公告日股价</th><th>入场日</th><th>入场日股价</th><th>退出日</th><th>退出日股价</th><th>窗口</th><th>股票净收益</th><th>基准收益</th><th>超额收益</th></tr></thead>
+    <thead><tr><th>报告年度</th><th>公告日</th><th>入场日</th><th>退出日</th><th>窗口</th><th>股票净收益</th><th>基准收益</th><th>超额收益</th></tr></thead>
     <tbody>
     {% for row in events %}
-      <tr><td>{{ row.report_year }}</td><td>{{ row.announcement_date|date }}</td><td>{{ row.stock_announcement_close|price }}</td><td>{{ row.entry_date|date }}</td><td>{{ row.stock_entry_close|price }}</td><td>{{ row.exit_date|date }}</td><td>{{ row.stock_exit_close|price }}</td><td>{{ row.window }}</td><td>{{ row.stock_net_return|pct }}</td><td>{{ row.benchmark_return|pct }}</td><td>{{ row.excess_return|pct }}</td></tr>
+      <tr><td>{{ row.report_year }}</td><td>{{ row.announcement_date|date }}</td><td>{{ row.entry_date|date }}</td><td>{{ row.exit_date|date }}</td><td>{{ row.window }}</td><td>{{ row.stock_net_return|pct }}</td><td>{{ row.benchmark_return|pct }}</td><td>{{ row.excess_return|pct }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -79,4 +97,3 @@
 </main>
 </body>
 </html>
-

@@ -78,6 +78,11 @@ uv run ai-quant event-study \
   --adjustment qfq
 ```
 
+事件研究的 `diagnostics.data_sources` 和 HTML 报告会显示股票、基准的服务来源、底层
+Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据对应的同步批次。
+本地股票快照还保留 `provider_source`、`source_batch_id` 和 `raw_path`，可从研究结果追溯
+到同步批次与 Raw Parquet。
+
 如果当前 `catalog.duckdb` 曾使用 `--with-fixture` 写入测试数据，正式同步前建议先归档：
 
 ```bash

@@ -34,7 +34,11 @@ def test_fixture_golden_path_writes_reproducible_artifacts(tmp_path) -> None:
     assert manifest["status"] == "succeeded"
     assert manifest["provider"] == "fixture-v1"
     assert "snapshots" in manifest
+    assert output.result.diagnostics["data_sources"]["stock"]["serving_sources"] == [
+        "fixture-v1:hfq"
+    ]
     report = output.artifacts["html_report"].read_text("utf-8")
     assert "半年报公告后超额收益" in report
+    assert "数据来源与血缘" in report
+    assert "fixture-v1:hfq" in report
     assert "不构成投资建议" in report
-

@@ -14,6 +14,44 @@ class EventStudyEngine:
     """Pure deterministic event-study engine with no network or storage access."""
 
     @staticmethod
+    def _values(frame: pd.DataFrame, column: str) -> list[str]:
+        if column not in frame.columns:
+            return []
+        values = frame[column].dropna().astype(str)
+        return sorted(value for value in values.unique().tolist() if value)
+
+    @classmethod
+    def _source_diagnostics(cls, frame: pd.DataFrame) -> dict[str, Any]:
+        serving_sources = cls._values(frame, "source")
+        provider_sources = cls._values(frame, "provider_source")
+        if not provider_sources:
+            provider_sources = serving_sources
+        provider_sources = [source for source in provider_sources if source != "unknown"]
+        fallback_sources = {
+            source
+            for source in provider_sources
+            if source.startswith("akshare:stock_zh_a_daily:")
+            or source == "akshare:stock_zh_index_daily"
+        }
+        local_hit = None
+        if "local_hit" in frame.columns and not frame["local_hit"].empty:
+            local_hit = bool(frame["local_hit"].astype(bool).any())
+        local_fallback_used = None
+        if "local_fallback_used" in frame.columns and not frame["local_fallback_used"].empty:
+            local_fallback_used = bool(frame["local_fallback_used"].astype(bool).any())
+        return {
+            "serving_sources": serving_sources,
+            "provider_sources": provider_sources,
+            "local_hit": local_hit,
+            "local_fallback_used": local_fallback_used,
+            "local_fallback_reasons": cls._values(frame, "local_fallback_reason"),
+            "provider_fallback_used": bool(fallback_sources),
+            "provider_fallback_sources": sorted(fallback_sources),
+            "source_batch_ids": cls._values(frame, "source_batch_id"),
+            "raw_paths": cls._values(frame, "raw_path"),
+        }
+
+    @staticmethod
     def _calendar(stock_prices: pd.DataFrame, benchmark_prices: pd.DataFrame) -> pd.DataFrame:
         required = {"date", "close"}
         for label, frame in (("stock", stock_prices), ("benchmark", benchmark_prices)):
@@ -79,13 +117,6 @@ class EventStudyEngine:
 
         calendar = self._calendar(stock_prices, benchmark_prices)
         calendar_dates = calendar["date"].to_numpy(dtype="datetime64[ns]")
-        stock_closes = stock_prices[["date", "close"]].copy()
-        stock_closes["date"] = pd.to_datetime(stock_closes["date"]).dt.normalize()
-        stock_closes["close"] = pd.to_numeric(stock_closes["close"], errors="coerce")
-        stock_closes = stock_closes.dropna(subset=["date", "close"])
-        stock_closes = stock_closes.drop_duplicates("date", keep="last").set_index("date")[
-            "close"
-        ]
         rows: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
         cost = spec.round_trip_cost_bps / 10_000.0
@@ -98,7 +129,6 @@ class EventStudyEngine:
 
         for announcement in normalized_announcements.to_dict(orient="records"):
             announcement_date = pd.Timestamp(announcement["announcement_date"])
-            announcement_close = stock_closes.get(announcement_date, float("nan"))
             entry_pos = int(
                 np.searchsorted(calendar_dates, announcement_date.to_datetime64(), side="right")
             )
@@ -140,7 +170,6 @@ class EventStudyEngine:
                         "entry_date": pd.Timestamp(entry["date"]),
                         "exit_date": pd.Timestamp(exit_row["date"]),
                         "window": window,
-                        "stock_announcement_close": float(announcement_close),
                         "stock_entry_close": float(entry["stock_close"]),
                         "stock_exit_close": float(exit_row["stock_close"]),
                         "benchmark_entry_close": float(entry["benchmark_close"]),
@@ -172,6 +201,9 @@ class EventStudyEngine:
             "entry_rule": spec.entry_rule,
             "confidence_interval": "normal_approximation_95pct",
             "excess_return_method": "stock_net_return_minus_benchmark_return",
+            "data_sources": {
+                "stock": self._source_diagnostics(stock_prices),
+                "benchmark": self._source_diagnostics(benchmark_prices),
+            },
         }
         return EventStudyResult(spec=spec, events=events, summary=summary, diagnostics=diagnostics)
-

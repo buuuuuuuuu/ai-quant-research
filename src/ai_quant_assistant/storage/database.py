@@ -104,14 +104,23 @@ class LocalDatabase:
     def read_published_prices(
         self, symbol: str, start_date: Any, end_date: Any, adjustment: str
     ) -> pd.DataFrame:
-        columns = ["date", "close", "symbol", "source"]
+        columns = [
+            "date",
+            "close",
+            "symbol",
+            "source",
+            "provider_source",
+            "source_batch_id",
+            "raw_path",
+        ]
         if not self.path.is_file():
             return pd.DataFrame(columns=columns)
         with self.connect(read_only=True) as connection:
             frame = connection.execute(
                 """
                 SELECT bar.trade_date AS date, bar.close, security.symbol,
-                       'local:published_daily_bar' AS source
+                       'local:published_daily_bar' AS source,
+                       bar.source_batch_id
                 FROM published_daily_bar AS bar
                 JOIN security_master AS security USING (security_id)
                 WHERE security.symbol = ?
@@ -121,9 +130,49 @@ class LocalDatabase:
                 """,
                 [symbol, adjustment, start_date, end_date],
             ).fetchdf()
+            partitions = connection.execute(
+                """
+                SELECT partition.batch_id AS source_batch_id,
+                       partition.start_date, partition.end_date, partition.raw_path
+                FROM sync_partition AS partition
+                JOIN security_master AS security USING (security_id)
+                WHERE security.symbol = ?
+                  AND partition.adjustment = ?
+                  AND partition.status = 'published'
+                  AND partition.end_date >= ?
+                  AND partition.start_date <= ?
+                ORDER BY partition.start_date, partition.end_date
+                """,
+                [symbol, adjustment, start_date, end_date],
+            ).fetchdf()
         if frame.empty:
             return pd.DataFrame(columns=columns)
         frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        frame["provider_source"] = "unknown"
+        frame["raw_path"] = ""
+        for partition in partitions.itertuples(index=False):
+            partition_start = pd.Timestamp(partition.start_date).normalize()
+            partition_end = pd.Timestamp(partition.end_date).normalize()
+            mask = (
+                (frame["source_batch_id"] == partition.source_batch_id)
+                & (frame["date"] >= partition_start)
+                & (frame["date"] <= partition_end)
+            )
+            if not mask.any() or not partition.raw_path:
+                continue
+            raw_path = Path(str(partition.raw_path))
+            frame.loc[mask, "raw_path"] = str(raw_path)
+            if not raw_path.is_file():
+                continue
+            try:
+                raw = pd.read_parquet(raw_path, columns=["trade_date", "source"])
+                raw["date"] = pd.to_datetime(raw["trade_date"]).dt.normalize()
+                source_by_date = raw.drop_duplicates("date").set_index("date")["source"]
+                frame.loc[mask, "provider_source"] = (
+                    frame.loc[mask, "date"].map(source_by_date).fillna("unknown")
+                )
+            except Exception:  # noqa: BLE001 - lineage failure must not block local reads
+                continue
         return frame[columns]
 
     def has_coverage(

@@ -45,6 +45,10 @@ CORE_RELATIONS = (
     "security_industry_history",
     "index_constituent_history",
     "universe_sync_batch",
+    "copilot_conversation",
+    "copilot_message",
+    "research_plan",
+    "research_plan_event",
 )
 
 _CONNECTION_LOCKS: dict[Path, RLock] = {}

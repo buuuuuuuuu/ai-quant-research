@@ -14,6 +14,7 @@ V1 是研究与决策支持工具，不连接券商、不自动下单，也不�
 - 5/10/20 日事件收益、基准收益、净收益、超额收益、胜率及 95% 正态近似置信区间。
 - 数据快照、SHA-256 摘要、运行清单、CSV、Excel 和 HTML 报告。
 - 财务因子选股、Point-in-Time 组合回测、多因子实验、动态股票池与行业中性化。
+- AI 自然语言研究对话、结构化计划预览、覆盖预检、显式确认和可追溯解释。
 - 单管理员登录、持久化后台任务、定时增量同步和 DuckDB 一致性备份。
 - 非 root 服务、Nginx 反向代理、备份恢复、运行告警、运维审计与自动 CI。
 - CLI、FastAPI 接口、离线端到端测试、Docker 与 systemd 部署入口。
@@ -40,9 +41,9 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1 + M2 + M3 + M4 + M5）
+## A 股本地数据库（M0 + M1 + M2 + M3 + M4 + M5 + M6）
 
-数据平台提供 DuckDB Schema v7、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v8、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -54,7 +55,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v6 数据库执行同一命令时会自动升级到 Schema v7，不删除已发布的
+已有 Schema v1–v7 数据库执行同一命令时会自动升级到 Schema v8，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 初始化并写入离线样例：
@@ -219,7 +220,7 @@ uv run ai-quant factor-lab \
 
 ## 动态股票池与行业中性化（M5-B）
 
-先将现有目录升级到 Schema v7，再查看当前已发布行情能够支持的时点股票池：
+先将现有目录升级到最新 Schema，再查看当前已发布行情能够支持的时点股票池：
 
 ```bash
 uv run ai-quant data init
@@ -257,6 +258,33 @@ uv run ai-quant factor-lab \
   --industry-neutralization within_industry_rank \
   --max-industry-weight 0.5 --require-verified-industry
 ```
+
+## AI 研究 Copilot（M6-A）
+
+启动 Web 工作台后进入“AI 研究”，用自然语言描述股票、日期、因子、调仓与股票池约束。
+系统先生成持久化的结构化计划并展示数据覆盖；只有覆盖通过、计划版本未变化且管理员点击
+“确认此计划”后，服务端才允许后台调用白名单研究工具。确认和执行是两个独立动作，模型
+不能直接运行 SQL、Python、Shell、联网抓取或修改数据库。
+
+默认使用完全离线、可复现的规则规划器：
+
+```bash
+AI_QUANT_COPILOT_PLANNER=rules uv run uvicorn \
+  ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8080
+```
+
+如需使用 OpenAI Responses API 解释更自由的自然语言，仅从环境变量读取密钥：
+
+```bash
+export AI_QUANT_COPILOT_PLANNER=openai
+export OPENAI_API_KEY='...'
+export AI_QUANT_OPENAI_MODEL=gpt-5-mini
+uv run uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8080
+```
+
+密钥不会写入 DuckDB、对话、计划、任务、日志或研究产物。AI 输出使用严格 JSON Schema，
+之后仍会经过本地参数验证、工具白名单、覆盖预检和执行前二次检查。详见
+[`docs/ai-research-copilot.md`](docs/ai-research-copilot.md)。
 
 历史文件字段、发布时间约束、快照可信边界、Web 接口及验收步骤见
 [`docs/universe-neutralization.md`](docs/universe-neutralization.md)。
@@ -373,7 +401,7 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v7 会持久化回测、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
+Schema v8 会持久化回测、Copilot、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256
 校验。Web 首页“数据同步与备份”可直接查看状态并启动任务。
 

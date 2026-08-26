@@ -316,3 +316,15 @@ class BackupRestoreRequest(BaseModel):
 
 class BackupPruneRequest(BaseModel):
     apply: bool = False
+
+
+class CopilotConversationRequest(BaseModel):
+    title: str = Field(default="新研究对话", min_length=1, max_length=120)
+
+
+class CopilotMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class CopilotConfirmRequest(BaseModel):
+    revision: int = Field(default=1, ge=1)

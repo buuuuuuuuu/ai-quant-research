@@ -13,7 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ai_quant_assistant import __version__
-from ai_quant_assistant.ai.tool_registry import require_allowed_tool
+from ai_quant_assistant.ai.copilot import CopilotService, CopilotTaskManager
+from ai_quant_assistant.ai.planner import create_planner
+from ai_quant_assistant.ai.preflight import CoveragePreflight
+from ai_quant_assistant.ai.repository import CopilotRepository
+from ai_quant_assistant.ai.tool_registry import copilot_tool_catalog, require_allowed_tool
 from ai_quant_assistant.api.auth import SESSION_COOKIE, WebAuthenticator, safe_next_path
 from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
@@ -23,6 +27,9 @@ from ai_quant_assistant.api.schemas import (
     BackupRestoreRequest,
     BatchInterimReportEventStudyRequest,
     BatchResearchRunResponse,
+    CopilotConfirmRequest,
+    CopilotConversationRequest,
+    CopilotMessageRequest,
     FactorBacktestRequest,
     FactorLabRequest,
     IncrementalSyncRequest,
@@ -138,6 +145,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_workers=1,
         task_type="factor_lab",
     )
+    copilot_repository = CopilotRepository(database)
+    copilot_service = CopilotService(
+        repository=copilot_repository,
+        planner=create_planner(resolved_settings),
+        preflight=CoveragePreflight(database),
+    )
+    copilot_tasks = CopilotTaskManager(
+        plans=copilot_repository,
+        tasks=task_repository,
+        factor_backtests=FactorBacktestService(
+            database=database, artifact_dir=resolved_settings.artifact_dir
+        ),
+        factor_lab=FactorLabService(database=database, artifact_dir=resolved_settings.artifact_dir),
+        universe=UniverseRepository(database),
+        operation_lock=operation_lock,
+    )
     web_root = Path(__file__).resolve().parents[1] / "web"
     templates = Jinja2Templates(directory=web_root / "templates")
 
@@ -146,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         task_manager.shutdown()
         factor_lab_manager.shutdown()
+        copilot_tasks.shutdown()
         operation_manager.shutdown()
 
     app = FastAPI(
@@ -167,6 +191,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.alert_repository = alert_repository
     app.state.platform_monitor = monitor
     app.state.universe_repository = UniverseRepository(database)
+    app.state.copilot_repository = copilot_repository
+    app.state.copilot_service = copilot_service
+    app.state.copilot_tasks = copilot_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -295,6 +322,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "backtests": "/api/v1/backtests",
             "factor_lab": "/api/v1/factor-lab",
             "universe": "/api/v1/universe/overview",
+            "copilot": "/api/v1/copilot/conversations",
         }
 
     @app.get("/health")
@@ -304,6 +332,112 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/data/overview")
     def data_overview() -> dict[str, Any]:
         return database.research_overview()
+
+    @app.get("/api/v1/copilot/tools")
+    def copilot_tools() -> list[dict[str, object]]:
+        return copilot_tool_catalog()
+
+    @app.post("/api/v1/copilot/conversations", status_code=201)
+    def create_copilot_conversation(request: CopilotConversationRequest) -> dict[str, Any]:
+        conversation = copilot_service.create_conversation(request.title)
+        audit_repository.record(
+            "copilot_conversation_created",
+            actor=resolved_settings.web_username,
+            object_type="copilot_conversation",
+            object_id=conversation["conversation_id"],
+        )
+        return conversation
+
+    @app.get("/api/v1/copilot/conversations")
+    def list_copilot_conversations() -> list[dict[str, Any]]:
+        return copilot_repository.list_conversations()
+
+    @app.get("/api/v1/copilot/conversations/{conversation_id}")
+    def get_copilot_conversation(conversation_id: str) -> dict[str, Any]:
+        try:
+            return copilot_service.conversation(conversation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="copilot conversation not found") from exc
+
+    @app.post("/api/v1/copilot/conversations/{conversation_id}/messages", status_code=201)
+    def create_copilot_message(
+        conversation_id: str, request: CopilotMessageRequest
+    ) -> dict[str, Any]:
+        try:
+            plan = copilot_service.propose(conversation_id, request.content)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="copilot conversation not found") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "copilot_plan_created",
+            actor=resolved_settings.web_username,
+            object_type="research_plan",
+            object_id=plan["plan_id"],
+            outcome="warning" if plan["status"] == "blocked" else "success",
+            details={"tool_name": plan["tool_name"], "status": plan["status"]},
+        )
+        return plan
+
+    @app.get("/api/v1/copilot/plans/{plan_id}")
+    def get_copilot_plan(plan_id: str) -> dict[str, Any]:
+        try:
+            plan = copilot_repository.get_plan(plan_id)
+            if plan.get("task_id"):
+                try:
+                    plan["task"] = task_repository.get(plan["task_id"])
+                except KeyError:
+                    plan["task"] = None
+            return plan
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+
+    @app.post("/api/v1/copilot/plans/{plan_id}/preflight")
+    def refresh_copilot_preflight(plan_id: str) -> dict[str, Any]:
+        try:
+            return copilot_service.refresh_preflight(plan_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/copilot/plans/{plan_id}/confirm")
+    def confirm_copilot_plan(plan_id: str, request: CopilotConfirmRequest) -> dict[str, Any]:
+        try:
+            plan = copilot_service.confirm(
+                plan_id,
+                revision=request.revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_repository.record(
+            "copilot_plan_confirmed",
+            actor=resolved_settings.web_username,
+            object_type="research_plan",
+            object_id=plan_id,
+            details={"revision": request.revision},
+        )
+        return plan
+
+    @app.post("/api/v1/copilot/plans/{plan_id}/execute", status_code=202)
+    def execute_copilot_plan(plan_id: str) -> dict[str, Any]:
+        try:
+            task = copilot_tasks.submit(plan_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="research plan not found") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_repository.record(
+            "copilot_plan_execution_requested",
+            actor=resolved_settings.web_username,
+            object_type="research_plan",
+            object_id=plan_id,
+            details={"task_id": task["task_id"]},
+        )
+        return task
 
     @app.get("/api/v1/universe/overview")
     def universe_overview(as_of: str | None = None) -> dict[str, Any]:

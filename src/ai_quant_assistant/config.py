@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -34,6 +34,11 @@ class Settings:
     alert_login_failure_threshold: int = 5
     alert_webhook_url: str = ""
     alert_webhook_timeout_seconds: float = 5.0
+    copilot_planner: str = "rules"
+    openai_api_key: str = field(default="", repr=False)
+    openai_model: str = "gpt-5-mini"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_timeout_seconds: float = 45.0
 
     @property
     def resolved_backup_dir(self) -> Path:
@@ -115,15 +120,11 @@ class Settings:
 
         return cls(
             data_dir=data_dir,
-            artifact_dir=Path(
-                os.getenv("AI_QUANT_ARTIFACT_DIR", str(project_root / "artifacts"))
-            ),
+            artifact_dir=Path(os.getenv("AI_QUANT_ARTIFACT_DIR", str(project_root / "artifacts"))),
             cache_dir=Path(os.getenv("AI_QUANT_CACHE_DIR", str(data_dir / "cache"))),
             duckdb_path=Path(explicit_duckdb_path or data_dir / "catalog.duckdb"),
             akshare_retries=int(os.getenv("AI_QUANT_AKSHARE_RETRIES", "3")),
-            akshare_timeout_seconds=float(
-                os.getenv("AI_QUANT_AKSHARE_TIMEOUT_SECONDS", "30")
-            ),
+            akshare_timeout_seconds=float(os.getenv("AI_QUANT_AKSHARE_TIMEOUT_SECONDS", "30")),
             data_sync_rate_limit_seconds=float(
                 os.getenv("AI_QUANT_DATA_SYNC_RATE_LIMIT_SECONDS", "0.2")
             ),
@@ -160,6 +161,13 @@ class Settings:
             alert_webhook_timeout_seconds=float(
                 os.getenv("AI_QUANT_ALERT_WEBHOOK_TIMEOUT_SECONDS", "5")
             ),
+            copilot_planner=os.getenv("AI_QUANT_COPILOT_PLANNER", "rules").strip().lower(),
+            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            openai_model=os.getenv("AI_QUANT_OPENAI_MODEL", "gpt-5-mini"),
+            openai_base_url=os.getenv("AI_QUANT_OPENAI_BASE_URL", "https://api.openai.com/v1")
+            .strip()
+            .rstrip("/"),
+            openai_timeout_seconds=float(os.getenv("AI_QUANT_OPENAI_TIMEOUT_SECONDS", "45")),
         )
 
     def ensure_directories(self) -> None:

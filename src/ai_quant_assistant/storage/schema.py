@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -510,6 +510,116 @@ MIGRATIONS = (
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP
             )
+            """,
+        ),
+    ),
+    Migration(
+        version=8,
+        name="ai_research_copilot_conversations_plans_and_traceability",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS copilot_conversation (
+                conversation_id VARCHAR PRIMARY KEY,
+                title VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'archived')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS copilot_message (
+                message_id VARCHAR PRIMARY KEY,
+                conversation_id VARCHAR NOT NULL,
+                role VARCHAR NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
+                content VARCHAR NOT NULL,
+                plan_id VARCHAR,
+                metadata_json VARCHAR NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS copilot_message_conversation_created_idx
+            ON copilot_message (conversation_id, created_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS research_plan (
+                plan_id VARCHAR PRIMARY KEY,
+                conversation_id VARCHAR NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+                status VARCHAR NOT NULL
+                    CHECK (status IN (
+                        'draft', 'blocked', 'confirmed', 'running',
+                        'succeeded', 'failed', 'cancelled'
+                    )),
+                question VARCHAR NOT NULL,
+                tool_name VARCHAR,
+                title VARCHAR NOT NULL,
+                rationale VARCHAR NOT NULL,
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                assumptions_json VARCHAR NOT NULL DEFAULT '[]',
+                warnings_json VARCHAR NOT NULL DEFAULT '[]',
+                preflight_json VARCHAR NOT NULL DEFAULT '{}',
+                planner VARCHAR NOT NULL,
+                model_name VARCHAR,
+                model_response_id VARCHAR,
+                prompt_version VARCHAR NOT NULL DEFAULT 'm6a-v1',
+                task_id VARCHAR,
+                run_id VARCHAR,
+                result_json VARCHAR,
+                explanation_json VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                confirmed_at TIMESTAMPTZ,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS research_plan_conversation_created_idx
+            ON research_plan (conversation_id, created_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS research_plan_event (
+                event_id VARCHAR PRIMARY KEY,
+                plan_id VARCHAR NOT NULL,
+                event_type VARCHAR NOT NULL,
+                actor VARCHAR NOT NULL,
+                details_json VARCHAR NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS research_plan_event_plan_created_idx
+            ON research_plan_event (plan_id, created_at)
+            """,
+            """
+            CREATE TABLE operation_task_v8 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL
+                    CHECK (task_type IN ('backtest', 'sync', 'backup', 'copilot')),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "INSERT INTO operation_task_v8 SELECT * FROM operation_task",
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v8 RENAME TO operation_task",
+            """
+            CREATE INDEX operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
             """,
         ),
     ),

@@ -90,6 +90,14 @@ Schema v7 增加：
 - `verified_history` 与 `observed_snapshot` 明确分离，禁止用当前快照伪造历史数据；
 - 继续保留 v1–v6 的行情、公告、财务、后台任务、备份、告警和审计。
 
+Schema v8 增加：
+
+- `copilot_conversation` / `copilot_message`：AI 研究对话与消息历史；
+- `research_plan` / `research_plan_event`：结构化计划、覆盖预检、确认、执行和证据解释；
+- `operation_task` 增加 `copilot` 后台任务类型，服务重启后仍保留任务状态；
+- 模型输出先通过严格结构验证，只有服务端白名单工具、覆盖预检和显式确认共同通过才执行；
+- 继续保留 v1–v7 的行情、财务、股票池、备份、告警和审计。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期

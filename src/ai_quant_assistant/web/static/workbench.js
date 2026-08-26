@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { run: null, activeTab: "trades" };
+const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -16,9 +16,9 @@ async function requestJson(url, options = {}) {
 }
 
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
-const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验" };
+const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
-const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", alert_acknowledged: "确认运行告警" };
+const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", alert_acknowledged: "确认运行告警" };
 
 function operationTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
@@ -310,7 +310,112 @@ async function submitFactorLab(event) {
   } catch (error) {errorBox.textContent = error.message; errorBox.hidden = false;} finally {button.disabled = false;}
 }
 
+const copilotStatusLabels = {draft:"等待确认",blocked:"预检阻断",confirmed:"已经确认",running:"正在执行",succeeded:"研究完成",failed:"执行失败"};
+
+function renderCopilotMessages(messages) {
+  const target = $("#copilot-messages");
+  target.innerHTML = messages.length ? messages.map((message) => `<div class="copilot-message ${escapeHtml(message.role)}"><span>${message.role === "user" ? "你" : message.role === "assistant" ? "研究助手" : "研究工具"}</span><p>${escapeHtml(message.content)}</p></div>`).join("") : '<p class="empty-state">输入研究问题后，计划预览会在这里出现。</p>';
+  target.scrollTop = target.scrollHeight;
+}
+
+async function loadCopilotConversations(selectLatest = false) {
+  const conversations = await requestJson("/api/v1/copilot/conversations");
+  $("#copilot-conversations").innerHTML = conversations.length ? conversations.map((item) => `<button class="copilot-conversation${item.conversation_id === state.conversationId ? " active" : ""}" data-conversation="${escapeHtml(item.conversation_id)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(operationTime(item.updated_at))}</span></button>`).join("") : '<p class="empty-state">还没有研究对话。</p>';
+  $$(".copilot-conversation").forEach((button) => button.addEventListener("click", () => loadCopilotConversation(button.dataset.conversation)));
+  if (selectLatest && conversations.length && !state.conversationId) await loadCopilotConversation(conversations[0].conversation_id);
+}
+
+async function createCopilotConversation() {
+  const conversation = await requestJson("/api/v1/copilot/conversations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({title:"新研究对话"})});
+  state.conversationId = conversation.conversation_id; state.copilotPlan = null;
+  renderCopilotMessages([]); $("#copilot-plan-preview").hidden = true;
+  await loadCopilotConversations();
+  $("#copilot-question").focus();
+  return conversation;
+}
+
+async function loadCopilotConversation(conversationId) {
+  const conversation = await requestJson(`/api/v1/copilot/conversations/${encodeURIComponent(conversationId)}`);
+  state.conversationId = conversationId; state.copilotPlan = null;
+  renderCopilotMessages(conversation.messages || []);
+  const plans = (conversation.messages || []).filter((item) => item.plan_id).map((item) => item.plan_id);
+  if (plans.length) renderCopilotPlan(await requestJson(`/api/v1/copilot/plans/${encodeURIComponent(plans.at(-1))}`));
+  else $("#copilot-plan-preview").hidden = true;
+  await loadCopilotConversations();
+}
+
+function preflightHtml(preflight) {
+  if (!preflight || !preflight.checks) return '<p class="negative">没有可用预检结果</p>';
+  const rows = preflight.checks.map((check) => operationRow(`${check.status === "passed" ? "通过" : "缺失"} · ${check.dataset}`, check.rows != null ? `${formatNumber(check.rows)} 行` : check.available != null ? `${check.available}/${check.requested} 项` : check.history_mode || "已检查", check.status !== "passed"));
+  (preflight.blockers || []).forEach((item) => rows.push(operationRow("阻断原因", item, true)));
+  return rows.join("");
+}
+
+function renderCopilotPlan(plan) {
+  state.copilotPlan = plan;
+  $("#copilot-plan-preview").hidden = false;
+  $("#copilot-plan-status").textContent = copilotStatusLabels[plan.status] || plan.status;
+  $("#copilot-plan-status").className = `plan-status ${plan.status}`;
+  $("#copilot-plan-title").textContent = plan.title;
+  $("#copilot-tool").textContent = plan.tool_name || "未授权任何工具";
+  $("#copilot-rationale").textContent = plan.rationale;
+  $("#copilot-spec").textContent = JSON.stringify(plan.spec || {}, null, 2);
+  $("#copilot-preflight").innerHTML = preflightHtml(plan.preflight);
+  const notices = [...(plan.assumptions || []), ...(plan.warnings || []), ...((plan.preflight || {}).warnings || [])];
+  $("#copilot-warnings").innerHTML = notices.map((item) => `<p>${escapeHtml(item)}</p>`).join("");
+  $("#copilot-confirm").disabled = plan.status !== "draft" || !plan.preflight?.ready;
+  $("#copilot-execute").disabled = plan.status !== "confirmed";
+  $("#copilot-refresh").disabled = !["draft","blocked"].includes(plan.status) || !plan.tool_name;
+  if (plan.task) showCopilotTask(plan.task);
+  if (plan.explanation) renderCopilotExplanation(plan.explanation);
+  else $("#copilot-explanation").hidden = true;
+}
+
+function showCopilotTask(task) {
+  $("#copilot-task").hidden = false;
+  $("#copilot-task-message").textContent = task.error || task.message;
+  $("#copilot-task-progress").textContent = `${task.progress}%`;
+  $("#copilot-task-bar").style.width = `${task.progress}%`;
+}
+
+function renderCopilotExplanation(explanation) {
+  const target = $("#copilot-explanation"); target.hidden = false;
+  target.innerHTML = `<h4>可追溯结果解释</h4><p class="copilot-conclusion">${escapeHtml(explanation.conclusion)}</p><h5>证据与产物</h5><pre>${escapeHtml(JSON.stringify(explanation.evidence || [], null, 2))}</pre><h5>限制</h5>${(explanation.limitations || []).map((item) => `<p>· ${escapeHtml(item)}</p>`).join("")}`;
+}
+
+async function submitCopilotQuestion(event) {
+  event.preventDefault(); const error = $("#copilot-error"), button = $("#copilot-plan"); error.hidden = true; button.disabled = true;
+  try {
+    if (!state.conversationId) await createCopilotConversation();
+    const plan = await requestJson(`/api/v1/copilot/conversations/${encodeURIComponent(state.conversationId)}/messages`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({content:$("#copilot-question").value})});
+    $("#copilot-question").value = ""; renderCopilotPlan(plan);
+    const conversation = await requestJson(`/api/v1/copilot/conversations/${encodeURIComponent(state.conversationId)}`); renderCopilotMessages(conversation.messages || []); await loadCopilotConversations();
+  } catch (exc) {error.textContent = exc.message; error.hidden = false;} finally {button.disabled = false;}
+}
+
+async function refreshCopilotPreflight() {
+  try {renderCopilotPlan(await requestJson(`/api/v1/copilot/plans/${encodeURIComponent(state.copilotPlan.plan_id)}/preflight`, {method:"POST"}));}
+  catch (exc) {$("#copilot-error").textContent = exc.message; $("#copilot-error").hidden = false;}
+}
+
+async function confirmCopilotPlan() {
+  try {renderCopilotPlan(await requestJson(`/api/v1/copilot/plans/${encodeURIComponent(state.copilotPlan.plan_id)}/confirm`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({revision:state.copilotPlan.revision})}));}
+  catch (exc) {$("#copilot-error").textContent = exc.message; $("#copilot-error").hidden = false;}
+}
+
+async function executeCopilotPlan() {
+  try {
+    const task = await requestJson(`/api/v1/copilot/plans/${encodeURIComponent(state.copilotPlan.plan_id)}/execute`, {method:"POST"}); showCopilotTask(task); $("#copilot-execute").disabled = true;
+    for (;;) {const plan = await requestJson(`/api/v1/copilot/plans/${encodeURIComponent(state.copilotPlan.plan_id)}`); renderCopilotPlan(plan); if (["succeeded","failed"].includes(plan.status)) {if (plan.status === "failed") throw new Error(plan.error || "研究执行失败"); break;} await new Promise((resolve) => setTimeout(resolve, 900));}
+  } catch (exc) {$("#copilot-error").textContent = exc.message; $("#copilot-error").hidden = false;}
+}
+
 $("#backtest-form").addEventListener("submit", submitBacktest);
+$("#copilot-form").addEventListener("submit", submitCopilotQuestion);
+$("#copilot-new").addEventListener("click", createCopilotConversation);
+$("#copilot-refresh").addEventListener("click", refreshCopilotPreflight);
+$("#copilot-confirm").addEventListener("click", confirmCopilotPlan);
+$("#copilot-execute").addEventListener("click", executeCopilotPlan);
 $("#factor-lab-form").addEventListener("submit", submitFactorLab);
 $("#refresh-lab-history").addEventListener("click", loadLabHistory);
 $("#refresh-universe").addEventListener("click", loadUniverse);
@@ -320,4 +425,4 @@ $("#run-health-check").addEventListener("click", checkOperations);
 $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse();
+loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true);

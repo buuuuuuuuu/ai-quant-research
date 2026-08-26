@@ -15,6 +15,7 @@
     </a>
     <nav aria-label="工具导航">
       <a href="#copilot">AI 研究</a>
+      <a id="open-data-explorer" href="#data-explorer">数据浏览</a>
       <a href="#operations">平台运维</a>
       <a href="#universe">股票池</a>
       <a href="#factor-lab">因子实验室</a>
@@ -75,13 +76,56 @@
         <code id="database-path">正在读取数据库位置…</code>
       </div>
       <div class="metric-strip">
-        <article><span>研究股票</span><strong id="metric-securities">—</strong><small>只</small></article>
-        <article><span>已发布行情</span><strong id="metric-prices">—</strong><small>行</small></article>
-        <article><span>财务指标</span><strong id="metric-financials">—</strong><small>项</small></article>
-        <article><span>定期公告</span><strong id="metric-announcements">—</strong><small>条</small></article>
+        <article><button type="button" data-explorer-dataset="prices"><span>股票行情</span><strong id="metric-prices">—</strong><small>行 · 查看详情 ↗</small></button></article>
+        <article><button type="button" data-explorer-dataset="benchmarks"><span>指数基准</span><strong id="metric-benchmarks">—</strong><small>行 · 查看详情 ↗</small></button></article>
+        <article><button type="button" data-explorer-dataset="financials"><span>财务指标</span><strong id="metric-financials">—</strong><small>项 · 查看详情 ↗</small></button></article>
+        <article><button type="button" data-explorer-dataset="announcements"><span>定期公告</span><strong id="metric-announcements">—</strong><small>条 · 查看详情 ↗</small></button></article>
       </div>
       <div id="coverage-list" class="coverage-list" aria-live="polite"></div>
     </section>
+
+    <section id="data-explorer" class="data-explorer" aria-labelledby="data-explorer-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">DATA EXPLORER · EVIDENCE FIRST</p><h2 id="data-explorer-title">本地数据明细</h2><p class="muted">先选数据集，再进入单只股票或指数。每条记录保留质量状态、供应商、同步批次与原始文件。</p></div>
+        <button id="close-data-explorer" class="secondary-button" type="button">收起明细</button>
+      </div>
+      <div class="explorer-tabs" role="tablist" aria-label="数据集">
+        <button type="button" data-explorer-dataset="prices" class="active">股票行情</button>
+        <button type="button" data-explorer-dataset="benchmarks">指数基准</button>
+        <button type="button" data-explorer-dataset="announcements">定期公告</button>
+        <button type="button" data-explorer-dataset="financials">财务指标</button>
+      </div>
+      <div class="explorer-layout">
+        <aside class="panel explorer-entities">
+          <label class="field"><span>股票代码或名称</span><input id="explorer-search" type="search" placeholder="例如 600519 或 贵州茅台"></label>
+          <div id="explorer-entity-list"><p class="empty-state">请选择一个数据集。</p></div>
+          <div id="explorer-entity-pages" class="explorer-pagination"></div>
+        </aside>
+        <div class="explorer-detail">
+          <article id="explorer-identity" class="panel explorer-identity"><p class="empty-state">从左侧选择一只股票或一个指数查看详细信息。</p></article>
+          <form id="explorer-filters" class="panel explorer-filters">
+            <label class="field"><span>开始日期</span><input id="explorer-start" type="date"></label>
+            <label class="field"><span>结束日期</span><input id="explorer-end" type="date"></label>
+            <label id="explorer-adjustment-field" class="field"><span>复权口径</span><select id="explorer-adjustment"><option value="qfq">前复权</option><option value="none">不复权</option><option value="hfq">后复权</option></select></label>
+            <label id="explorer-report-field" class="field" hidden><span>报告类型</span><select id="explorer-report-type"><option value="">全部</option><option value="q1">一季报</option><option value="interim">中报</option><option value="q3">三季报</option><option value="annual">年报</option></select></label>
+            <label id="explorer-metric-field" class="field" hidden><span>财务指标</span><select id="explorer-metric-code"><option value="">全部指标</option></select></label>
+            <button class="primary-button" type="submit"><span>应用筛选</span><b>↗</b></button>
+          </form>
+          <article class="panel explorer-records">
+            <div class="explorer-records-head"><div><h3 id="explorer-record-title">记录明细</h3><p id="explorer-notice" class="muted"></p></div><a id="explorer-download" class="secondary-button" href="#" download>下载本页 CSV</a></div>
+            <div id="explorer-chart" class="explorer-chart"></div>
+            <div id="explorer-table" class="table-shell"><p class="empty-state">尚未选择数据。</p></div>
+            <div id="explorer-pages" class="explorer-pagination"></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <dialog id="lineage-dialog" class="lineage-dialog">
+      <form method="dialog"><button aria-label="关闭血缘详情">×</button></form>
+      <p class="eyebrow">RECORD LINEAGE</p><h3>记录质量与数据血缘</h3>
+      <div id="lineage-content"><p class="empty-state">正在读取…</p></div>
+    </dialog>
 
     <section id="universe" class="universe-section"><div class="section-heading"><div><p class="eyebrow">POINT-IN-TIME UNIVERSE</p><h2>股票池与行业数据</h2><p class="muted">真实历史成分与当前观察快照分开标记，不使用当前数据伪造过去。</p></div><button id="refresh-universe" class="icon-button" type="button" aria-label="刷新股票池状态">↻</button></div><div class="universe-grid"><article class="panel universe-panel"><h3>行业分类覆盖</h3><div id="universe-industries"><p class="empty-state">正在读取行业数据…</p></div></article><article class="panel universe-panel"><h3>指数成分可信度</h3><div id="universe-indexes"><p class="empty-state">正在读取指数成分…</p></div></article><article class="panel universe-panel"><h3>可用股票池</h3><div id="universe-coverage"><p class="empty-state">正在计算股票覆盖…</p></div></article></div></section>
 

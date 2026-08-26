@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -8,7 +10,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -47,6 +49,7 @@ from ai_quant_assistant.research.batch_service import BatchInterimReportResearch
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.research.service import InterimReportResearchService
+from ai_quant_assistant.storage.data_explorer import DataExplorer
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.monitoring import (
@@ -146,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         task_type="factor_lab",
     )
     copilot_repository = CopilotRepository(database)
+    data_explorer = DataExplorer(database)
     copilot_service = CopilotService(
         repository=copilot_repository,
         planner=create_planner(resolved_settings),
@@ -194,6 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.copilot_repository = copilot_repository
     app.state.copilot_service = copilot_service
     app.state.copilot_tasks = copilot_tasks
+    app.state.data_explorer = data_explorer
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -332,6 +337,185 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/data/overview")
     def data_overview() -> dict[str, Any]:
         return database.research_overview()
+
+    def explorer_response(payload: dict[str, Any], output: str, filename: str) -> Any:
+        if output != "csv":
+            return payload
+        rows = payload.get("items", [])
+        stream = io.StringIO()
+        columns = list(rows[0]) if rows else []
+        writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
+        if columns:
+            writer.writeheader()
+            safe_rows = []
+            for row in rows:
+                safe_rows.append(
+                    {
+                        key: f"'{value}"
+                        if isinstance(value, str)
+                        and value.startswith(("=", "+", "-", "@", "\t", "\r"))
+                        else value
+                        for key, value in row.items()
+                    }
+                )
+            writer.writerows(safe_rows)
+        safe_filename = "".join(char for char in filename if char.isalnum() or char in "-_")
+        return Response(
+            "\ufeff" + stream.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{safe_filename}.csv"'},
+        )
+
+    @app.get("/api/v1/data/datasets")
+    def data_datasets() -> dict[str, Any]:
+        return data_explorer.datasets()
+
+    @app.get("/api/v1/data/securities")
+    def data_securities(
+        query: str = "", dataset: str = "all", page: int = 1, page_size: int = 50
+    ) -> dict[str, Any]:
+        try:
+            return data_explorer.securities(
+                query=query, dataset=dataset, page=page, page_size=page_size
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/data/securities/{symbol}")
+    def data_security(symbol: str) -> dict[str, Any]:
+        try:
+            return data_explorer.security(symbol)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="security not found") from exc
+
+    @app.get("/api/v1/data/securities/{symbol}/prices")
+    def data_security_prices(
+        symbol: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        adjustment: str = "qfq",
+        page: int = 1,
+        page_size: int = 50,
+        order: str = "desc",
+        output: str = "json",
+    ) -> Any:
+        try:
+            payload = data_explorer.prices(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+                adjustment=adjustment,
+                page=page,
+                page_size=page_size,
+                order=order,
+            )
+            return explorer_response(payload, output, f"{symbol}-{adjustment}-prices")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/data/securities/{symbol}/announcements")
+    def data_security_announcements(
+        symbol: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        report_type: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        output: str = "json",
+    ) -> Any:
+        try:
+            payload = data_explorer.announcements(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+                report_type=report_type,
+                page=page,
+                page_size=page_size,
+            )
+            return explorer_response(payload, output, f"{symbol}-announcements")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/data/securities/{symbol}/financial-reports")
+    def data_security_financial_reports(
+        symbol: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        report_type: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        output: str = "json",
+    ) -> Any:
+        try:
+            payload = data_explorer.financial_reports(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+                report_type=report_type,
+                page=page,
+                page_size=page_size,
+            )
+            return explorer_response(payload, output, f"{symbol}-financial-reports")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/data/securities/{symbol}/financial-metrics")
+    def data_security_financial_metrics(
+        symbol: str,
+        report_id: str | None = None,
+        metric_code: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        output: str = "json",
+    ) -> Any:
+        payload = data_explorer.financial_metrics(
+            symbol,
+            report_id=report_id,
+            metric_code=metric_code,
+            start_date=start_date,
+            end_date=end_date,
+            page=page,
+            page_size=page_size,
+        )
+        return explorer_response(payload, output, f"{symbol}-financial-metrics")
+
+    @app.get("/api/v1/data/benchmarks")
+    def data_benchmarks(page: int = 1, page_size: int = 50) -> dict[str, Any]:
+        return data_explorer.benchmarks(page=page, page_size=page_size)
+
+    @app.get("/api/v1/data/benchmarks/{symbol}/prices")
+    def data_benchmark_prices(
+        symbol: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        order: str = "desc",
+        output: str = "json",
+    ) -> Any:
+        try:
+            payload = data_explorer.benchmark_prices(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+                page=page,
+                page_size=page_size,
+                order=order,
+            )
+            return explorer_response(payload, output, f"{symbol}-benchmark-prices")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/data/lineage/{dataset}/{record_id}")
+    def data_lineage(dataset: str, record_id: str) -> dict[str, Any]:
+        try:
+            return data_explorer.lineage(dataset, record_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="data record not found") from exc
 
     @app.get("/api/v1/copilot/tools")
     def copilot_tools() -> list[dict[str, object]]:

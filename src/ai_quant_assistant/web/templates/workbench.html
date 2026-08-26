@@ -14,6 +14,7 @@
       <span><b>澄明</b><small>A 股研究工作台</small></span>
     </a>
     <nav aria-label="工具导航">
+      <a href="#copilot">AI 研究</a>
       <a href="#operations">平台运维</a>
       <a href="#universe">股票池</a>
       <a href="#factor-lab">因子实验室</a>
@@ -38,6 +39,33 @@
         <span>研究纪律 01</span>
         <strong>信号日 15:00 前公开</strong>
         <p>财报修订只在真正公开后生效，下一交易日开盘执行。</p>
+      </div>
+    </section>
+
+    <section id="copilot" class="copilot-section" aria-labelledby="copilot-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">AI RESEARCH COPILOT</p><h2 id="copilot-title">先看计划，再做研究</h2><p class="muted">自然语言只生成结构化计划；数据覆盖通过且由你确认后，白名单工具才会运行。</p></div>
+        <button id="copilot-new" class="secondary-button" type="button">新建对话</button>
+      </div>
+      <div class="copilot-grid">
+        <aside class="panel copilot-history-panel"><h3>研究对话</h3><div id="copilot-conversations"><p class="empty-state">正在读取对话…</p></div></aside>
+        <div class="panel copilot-chat-panel">
+          <div id="copilot-messages" class="copilot-messages"><p class="empty-state">输入一个研究问题开始。例如：用 ROE 和低负债率研究 10 只股票，2018-01-01 到 2025-12-31，做多因子 Rank IC 和样本外验证。</p></div>
+          <form id="copilot-form" class="copilot-composer">
+            <textarea id="copilot-question" rows="3" maxlength="4000" placeholder="描述研究目标、股票、日期、因子、股票池与约束……" required></textarea>
+            <button id="copilot-plan" class="primary-button" type="submit"><span>生成研究计划</span><b>↗</b></button>
+          </form>
+          <div id="copilot-error" class="error-message" hidden></div>
+          <article id="copilot-plan-preview" class="copilot-plan" hidden>
+            <div class="copilot-plan-head"><div><span id="copilot-plan-status" class="plan-status"></span><h3 id="copilot-plan-title"></h3></div><code id="copilot-tool"></code></div>
+            <p id="copilot-rationale" class="muted"></p>
+            <div class="copilot-plan-columns"><div><h4>结构化参数</h4><pre id="copilot-spec"></pre></div><div><h4>数据覆盖预检</h4><div id="copilot-preflight"></div></div></div>
+            <div id="copilot-warnings" class="copilot-warnings"></div>
+            <div class="copilot-actions"><button id="copilot-refresh" class="secondary-button" type="button">重新预检</button><button id="copilot-confirm" class="secondary-button" type="button">确认此计划</button><button id="copilot-execute" class="primary-button" type="button" disabled><span>执行已确认计划</span><b>↗</b></button></div>
+            <div id="copilot-task" class="copilot-task" hidden><div><span id="copilot-task-message"></span><strong id="copilot-task-progress">0%</strong></div><div class="progress-track"><i id="copilot-task-bar"></i></div></div>
+            <div id="copilot-explanation" class="copilot-explanation" hidden></div>
+          </article>
+        </div>
       </div>
     </section>
 

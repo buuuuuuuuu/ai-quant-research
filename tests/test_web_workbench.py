@@ -60,11 +60,13 @@ def test_workbench_home_and_static_assets_are_served(tmp_path) -> None:
     assert home.status_code == 200
     assert "澄明 · A 股研究工作台" in home.text
     assert "配置财务因子回测" in home.text
+    assert "AI RESEARCH COPILOT" in home.text
     assert home.headers["content-type"].startswith("text/html")
     assert stylesheet.status_code == 200
     assert "--forest" in stylesheet.text
     assert javascript.status_code == 200
     assert "pollTask" in javascript.text
+    assert "confirmCopilotPlan" in javascript.text
     assert metadata.json()["workbench"] == "/"
 
 

@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v7）
+# A 股本地数据库数据字典（Schema v8）
 
 ## 公共约定
 
@@ -423,3 +423,13 @@ Schema v7 按证券和分类体系保存行业分类变更；只允许同时满�
 | source | VARCHAR | NOT NULL | AkShare 接口或显式声明的可信历史来源 |
 | error | VARCHAR | 可空 | 失败原因 |
 | created_at/completed_at | TIMESTAMP | 创建时间不可空 | 开始与完成时间 |
+
+## AI 研究对话与计划（Schema v8）
+
+`copilot_conversation` 和 `copilot_message` 保存对话标题、角色、正文、关联计划与创建时间；
+消息正文不可作为代码执行。`research_plan` 保存计划版本、状态、白名单工具名、严格验证后的
+参数、假设、风险、覆盖预检、规划器/模型标识、后台任务、研究运行、结果、解释和错误。
+`research_plan_event` 追加记录 created、preflighted、confirmed、started、succeeded/failed
+等状态事件及操作者。`operation_task.task_type` 在保留原数据的迁移中增加 `copilot`。
+
+任何 API 密钥均不属于上述表结构，也不允许进入 `metadata_json`、`spec_json` 或审计详情。

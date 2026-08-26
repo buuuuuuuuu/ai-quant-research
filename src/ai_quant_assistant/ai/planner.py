@@ -84,6 +84,7 @@ def validate_draft(draft: dict[str, Any]) -> dict[str, Any]:
         )
     normalized.setdefault("title", "研究计划")
     normalized.setdefault("rationale", "根据研究问题生成的结构化计划。")
+    normalized.setdefault("tool_name", None)
     normalized.setdefault("spec", {})
     normalized.setdefault("assumptions", [])
     normalized.setdefault("warnings", [])

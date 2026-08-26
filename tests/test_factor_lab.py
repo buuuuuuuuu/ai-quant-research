@@ -291,4 +291,8 @@ def test_workbench_exposes_visual_factor_lab_and_discloses_research_bias(tmp_pat
     assert "验证集挑选参数" in home.text
     assert "幸存者偏差" in home.text
     assert "lab-top-n" in home.text
+    assert "股票池与行业数据" in home.text
+    assert "lab-universe-mode" in home.text
+    assert "可信历史指数成分" in home.text
     assert metadata.json()["factor_lab"] == "/api/v1/factor-lab"
+    assert metadata.json()["universe"] == "/api/v1/universe/overview"

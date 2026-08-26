@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,6 +442,75 @@ MIGRATIONS = (
             """,
             "ALTER TABLE database_backup ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
             "ALTER TABLE database_backup ADD COLUMN IF NOT EXISTS deletion_reason VARCHAR",
+        ),
+    ),
+    Migration(
+        version=7,
+        name="point_in_time_industries_constituents_and_dynamic_universe",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS security_industry_history (
+                record_id VARCHAR PRIMARY KEY,
+                security_id VARCHAR NOT NULL,
+                classification_system VARCHAR NOT NULL,
+                industry_code VARCHAR,
+                industry_name VARCHAR NOT NULL,
+                effective_from DATE NOT NULL,
+                effective_until DATE,
+                published_at TIMESTAMP NOT NULL,
+                knowledge_time TIMESTAMP NOT NULL,
+                history_mode VARCHAR NOT NULL
+                    CHECK (history_mode IN ('verified_history', 'observed_snapshot')),
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                observed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (effective_until IS NULL OR effective_until >= effective_from)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS security_industry_history_lookup_idx
+            ON security_industry_history (security_id, classification_system, effective_from)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS index_constituent_history (
+                record_id VARCHAR PRIMARY KEY,
+                benchmark_symbol VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                effective_from DATE NOT NULL,
+                effective_until DATE,
+                published_at TIMESTAMP NOT NULL,
+                knowledge_time TIMESTAMP NOT NULL,
+                history_mode VARCHAR NOT NULL
+                    CHECK (history_mode IN ('verified_history', 'observed_snapshot')),
+                weight DOUBLE,
+                source VARCHAR NOT NULL,
+                source_batch_id VARCHAR NOT NULL,
+                observed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (effective_until IS NULL OR effective_until >= effective_from),
+                CHECK (weight IS NULL OR weight >= 0)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS index_constituent_history_lookup_idx
+            ON index_constituent_history (benchmark_symbol, security_id, effective_from)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS universe_sync_batch (
+                batch_id VARCHAR PRIMARY KEY,
+                dataset VARCHAR NOT NULL
+                    CHECK (dataset IN ('industry_classification', 'index_constituents')),
+                target VARCHAR NOT NULL,
+                history_mode VARCHAR NOT NULL
+                    CHECK (history_mode IN ('verified_history', 'observed_snapshot')),
+                as_of DATE NOT NULL,
+                status VARCHAR NOT NULL CHECK (status IN ('running', 'published', 'failed')),
+                row_count BIGINT NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                source VARCHAR NOT NULL,
+                error VARCHAR,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+            """,
         ),
     ),
 )

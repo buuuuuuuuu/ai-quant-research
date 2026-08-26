@@ -127,6 +127,17 @@ async function loadOverview() {
   }
 }
 
+async function loadUniverse() {
+  try {
+    const asOf = $("#end-date")?.value || new Date().toLocaleDateString("en-CA");
+    const [overview, universe] = await Promise.all([requestJson(`/api/v1/universe/overview?as_of=${encodeURIComponent(asOf)}`), requestJson(`/api/v1/universe/build?as_of=${encodeURIComponent(asOf)}&mode=all_available`)]);
+    const trust = (value) => value === "verified_history" ? "可信历史" : "观察快照，不能回填过去";
+    $("#universe-industries").innerHTML = (overview.classification_systems || []).length ? overview.classification_systems.map((item) => operationRow(`${item.classification_system} · ${trust(item.history_mode)}`, `${formatNumber(item.securities)} 只 · ${formatNumber(item.rows)} 条记录`)).join("") : '<p class="empty-state">暂无行业分类，请先同步或导入可信历史。</p>';
+    $("#universe-indexes").innerHTML = (overview.indexes || []).length ? overview.indexes.map((item) => operationRow(`${item.benchmark_symbol} · ${trust(item.history_mode)}`, `${formatNumber(item.securities)} 只 · ${formatNumber(item.rows)} 条记录`)).join("") : '<p class="empty-state">暂无指数成分；不会使用当前成分冒充历史。</p>';
+    $("#universe-coverage").innerHTML = operationRow(`${formatNumber(universe.security_count)} 只可用股票`, `行业覆盖 ${formatPct(universe.industry_coverage)} · ${asOf}`) + Object.entries(universe.industries || {}).map(([industry,count]) => operationRow(industry, `${formatNumber(count)} 只`)).join("");
+  } catch (error) { $("#universe-coverage").innerHTML = `<p class="negative">${escapeHtml(error.message)}</p>`; }
+}
+
 function historyCard(run) {
   const total = Number(run.metrics?.total_return || 0);
   const label = `${run.spec?.factor || "factor"} · ${run.spec?.rebalance === "monthly" ? "月度" : "季度"} · Top ${run.spec?.top_n || "—"}`;
@@ -255,7 +266,7 @@ function labPayload() {
   const factors = $$(".factor-component").filter((row) => row.querySelector(".factor-enabled").checked).map((row) => ({code: row.querySelector(".factor-enabled").value, weight: Number(row.querySelector(".factor-weight").value), direction: row.querySelector(".factor-direction").value}));
   if (!factors.length) throw new Error("请至少选择一个财务因子");
   const parseNumbers = (selector) => $(selector).value.trim().split(/[\s,，]+/).filter(Boolean).map(Number);
-  return {symbols: base.symbols, start_date: base.start_date, end_date: base.end_date, factors, top_n_values: parseNumbers("#lab-top-n"), rebalance_values: $("#lab-rebalances").value.split(" "), commission_bps_values: parseNumbers("#lab-commissions"), quantiles: Number($("#lab-quantiles").value), benchmark_symbol: base.benchmark_symbol, adjustment: base.adjustment, initial_capital: base.initial_capital, slippage_bps: base.slippage_bps, stamp_duty_bps: base.stamp_duty_bps, lot_size: base.lot_size, training_fraction: Number($("#lab-training").value), validation_fraction: Number($("#lab-validation").value)};
+  return {symbols: base.symbols, start_date: base.start_date, end_date: base.end_date, factors, top_n_values: parseNumbers("#lab-top-n"), rebalance_values: $("#lab-rebalances").value.split(" "), commission_bps_values: parseNumbers("#lab-commissions"), quantiles: Number($("#lab-quantiles").value), benchmark_symbol: base.benchmark_symbol, adjustment: base.adjustment, initial_capital: base.initial_capital, slippage_bps: base.slippage_bps, stamp_duty_bps: base.stamp_duty_bps, lot_size: base.lot_size, training_fraction: Number($("#lab-training").value), validation_fraction: Number($("#lab-validation").value), universe_mode: $("#lab-universe-mode").value, universe_benchmark: base.benchmark_symbol, industry_neutralization: $("#lab-industry-neutralization").value, max_industry_weight: Number($("#lab-max-industry-weight").value), require_verified_industry: $("#lab-require-verified").value === "true"};
 }
 
 function labTable(columns, rows) {
@@ -302,10 +313,11 @@ async function submitFactorLab(event) {
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#factor-lab-form").addEventListener("submit", submitFactorLab);
 $("#refresh-lab-history").addEventListener("click", loadLabHistory);
+$("#refresh-universe").addEventListener("click", loadUniverse);
 $("#refresh-history").addEventListener("click", loadHistory);
 $("#refresh-operations").addEventListener("click", loadOperations);
 $("#run-health-check").addEventListener("click", checkOperations);
 $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations(); loadLabHistory();
+loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse();

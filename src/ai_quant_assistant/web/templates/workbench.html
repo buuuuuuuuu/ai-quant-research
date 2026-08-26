@@ -15,6 +15,7 @@
     </a>
     <nav aria-label="工具导航">
       <a href="#operations">平台运维</a>
+      <a href="#universe">股票池</a>
       <a href="#factor-lab">因子实验室</a>
       <a href="#backtest">新建回测</a>
       <a href="#results">研究结果</a>
@@ -53,6 +54,8 @@
       </div>
       <div id="coverage-list" class="coverage-list" aria-live="polite"></div>
     </section>
+
+    <section id="universe" class="universe-section"><div class="section-heading"><div><p class="eyebrow">POINT-IN-TIME UNIVERSE</p><h2>股票池与行业数据</h2><p class="muted">真实历史成分与当前观察快照分开标记，不使用当前数据伪造过去。</p></div><button id="refresh-universe" class="icon-button" type="button" aria-label="刷新股票池状态">↻</button></div><div class="universe-grid"><article class="panel universe-panel"><h3>行业分类覆盖</h3><div id="universe-industries"><p class="empty-state">正在读取行业数据…</p></div></article><article class="panel universe-panel"><h3>指数成分可信度</h3><div id="universe-indexes"><p class="empty-state">正在读取指数成分…</p></div></article><article class="panel universe-panel"><h3>可用股票池</h3><div id="universe-coverage"><p class="empty-state">正在计算股票覆盖…</p></div></article></div></section>
 
     <section id="operations" class="operations-section" aria-labelledby="operations-title">
       <div class="section-heading">
@@ -139,6 +142,10 @@
           <label class="field"><span>因子分组数量</span><input id="lab-quantiles" type="number" min="2" max="10" value="5"></label>
           <label class="field"><span>训练集比例</span><input id="lab-training" type="number" min="0.1" max="0.8" step="0.05" value="0.6"></label>
           <label class="field"><span>验证集比例</span><input id="lab-validation" type="number" min="0.05" max="0.5" step="0.05" value="0.2"></label>
+          <label class="field"><span>股票池模式</span><select id="lab-universe-mode"><option value="explicit">显式研究股票</option><option value="all_available">全部可用股票</option><option value="historical_index">可信历史指数成分</option><option value="observed_index">首次观察指数快照</option></select></label>
+          <label class="field"><span>行业中性化</span><select id="lab-industry-neutralization"><option value="none">不做中性化</option><option value="within_industry_rank">行业内因子排名</option></select></label>
+          <label class="field"><span>单行业持仓上限</span><input id="lab-max-industry-weight" type="number" value="1" min="0.05" max="1" step="0.05"></label>
+          <label class="field"><span>历史分类要求</span><select id="lab-require-verified"><option value="false">允许真实观察快照</option><option value="true">只接受可信历史分类</option></select></label>
         </div>
         <div class="form-footer"><p>财报在调仓时点之前公开；显式股票池仍可能存在幸存者偏差。</p><button id="submit-factor-lab" class="primary-button" type="submit"><span>开始因子研究</span><b>↗</b></button></div>
         <div id="lab-error" class="error-message" role="alert" hidden></div>

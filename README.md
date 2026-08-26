@@ -13,7 +13,7 @@ V1 是研究与决策支持工具，不连接券商、不自动下单，也不�
 - 严格使用公告日之后的第一个共同交易日收盘价作为入场价，避免公告时间不明确导致的前视偏差。
 - 5/10/20 日事件收益、基准收益、净收益、超额收益、胜率及 95% 正态近似置信区间。
 - 数据快照、SHA-256 摘要、运行清单、CSV、Excel 和 HTML 报告。
-- 财务因子选股、Point-in-Time 组合回测与 Web 研究工作台。
+- 财务因子选股、Point-in-Time 组合回测、多因子实验、动态股票池与行业中性化。
 - 单管理员登录、持久化后台任务、定时增量同步和 DuckDB 一致性备份。
 - 非 root 服务、Nginx 反向代理、备份恢复、运行告警、运维审计与自动 CI。
 - CLI、FastAPI 接口、离线端到端测试、Docker 与 systemd 部署入口。
@@ -40,9 +40,9 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1 + M2 + M3 + M4）
+## A 股本地数据库（M0 + M1 + M2 + M3 + M4 + M5）
 
-数据平台提供 DuckDB Schema v6、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v7、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -54,8 +54,8 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1/v2/v3/v4/v5 数据库执行同一命令时会自动升级到 Schema v6，不删除已发布的
-股票日线、指数、历史公告或财务报告。
+已有 Schema v1–v6 数据库执行同一命令时会自动升级到 Schema v7，不删除已发布的
+股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 初始化并写入离线样例：
 
@@ -174,8 +174,9 @@ uv run ai-quant backtest \
 CSV、五工作表 Excel、HTML 净值报告和运行清单，统一写入
 `artifacts/backtests/<run_id>/`。
 
-股票池仅代表显式研究样本，不代表任何时点的真实指数成分；不能将当前股票池的回测结果
-解释为无幸存者偏差的全市场策略收益。
+默认股票池仍然仅代表显式研究样本。导入带有真实生效与发布时间的指数历史成分后，可以
+使用 `--universe-mode historical_index` 在每个信号日动态过滤真实历史成员；未提供可信
+历史时该模式直接拒绝执行，不会把当前指数快照冒充过去的成分。
 
 ## 多因子实验室与样本外验证（M5-A）
 
@@ -211,8 +212,54 @@ uv run ai-quant factor-lab \
 策略净值 CSV，以及多工作表 Excel、HTML 报告和运行清单。Web 工作台支持可视化
 选择因子权重、方向、扫描参数、查看 Rank IC 图、策略对比和历史报告下载。
 
-注意：当前股票池依然是明确给定的研究样本，并非真实历史指数成分；行业中性化、
-历史指数成分及幸存者偏差修正需要后续获取独立 Point-in-Time 历史数据。
+因子实验也支持 `--universe-mode historical_index`、
+`--industry-neutralization within_industry_rank`、`--max-industry-weight 0.4` 和
+`--require-verified-industry`；这些选项依赖真实 Point-in-Time 历史记录，不会用当前快照
+伪造历史分类或指数成分。
+
+## 动态股票池与行业中性化（M5-B）
+
+先将现有目录升级到 Schema v7，再查看当前已发布行情能够支持的时点股票池：
+
+```bash
+uv run ai-quant data init
+uv run ai-quant universe status
+uv run ai-quant universe build --as-of 2025-12-31 --mode all_available
+```
+
+同步今日行业分类和沪深 300 成分，只会产生 `observed_snapshot` 当前观察记录：
+
+```bash
+uv run ai-quant data sync-industries --symbols 600519 000001 300750
+uv run ai-quant data sync-constituents --benchmark csi000300
+```
+
+要对过去进行可信历史指数或行业中性研究，必须导入能独立证明 `effective_from` 与
+`published_at` 的历史文件：
+
+```bash
+uv run ai-quant data import-universe-history \
+  --dataset industries --file industry-history.csv --source-name official:industry-history
+
+uv run ai-quant data import-universe-history \
+  --dataset constituents --benchmark csi000300 \
+  --file index-history.csv --source-name official:index-history
+
+uv run ai-quant universe build \
+  --as-of 2024-06-30 --mode historical_index --benchmark csi000300
+
+uv run ai-quant factor-lab \
+  --source local --symbols 600519 000001 300750 \
+  --start-date 2020-01-01 --end-date 2025-12-31 \
+  --factors roe:2:desc revenue_yoy:1:desc \
+  --top-n-values 2 --rebalance-values quarterly \
+  --commission-bps-values 5 --universe-mode historical_index \
+  --industry-neutralization within_industry_rank \
+  --max-industry-weight 0.5 --require-verified-industry
+```
+
+历史文件字段、发布时间约束、快照可信边界、Web 接口及验收步骤见
+[`docs/universe-neutralization.md`](docs/universe-neutralization.md)。
 
 事件研究的 `diagnostics.data_sources` 和 HTML 报告会分别显示股票、基准、公告的服务
 来源、底层 Provider 来源、本地命中、本地覆盖回退、AkShare 备用接口，以及本地数据
@@ -326,7 +373,7 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v6 会持久化回测、增量同步、数据库备份任务、运行告警和管理员审计。同步按现有覆盖区间依次更新股票、
+Schema v7 会持久化回测、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256
 校验。Web 首页“数据同步与备份”可直接查看状态并启动任务。
 

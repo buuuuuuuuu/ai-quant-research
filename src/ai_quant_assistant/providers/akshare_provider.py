@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from ai_quant_assistant.providers.normalization import (
     normalize_security_master,
     normalize_trading_calendar,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AkShareProvider:
@@ -202,6 +205,126 @@ class AkShareProvider:
             retries=self.retries,
             refresh=self.refresh,
         )
+
+    @staticmethod
+    def _industry_name(frame: pd.DataFrame) -> str:
+        if frame.empty:
+            raise ProviderError("endpoint returned no company information")
+        for column in ("所属行业", "行业", "所属证监会行业", "industry_name", "industry"):
+            if column in frame.columns:
+                candidates = frame[column]
+                break
+        else:
+            key = next(
+                (name for name in ("item", "项目", "指标", "字段") if name in frame.columns), None
+            )
+            value = next((name for name in ("value", "值", "内容") if name in frame.columns), None)
+            if key is None or value is None:
+                raise ProviderError(f"industry columns not found: {list(frame.columns)}")
+            matches = (
+                frame[key].astype(str).str.contains(r"行业|industry|ind_name", case=False, na=False)
+            )
+            candidates = frame.loc[matches, value]
+        for candidate in candidates:
+            if pd.notna(candidate):
+                industry = str(candidate).strip()
+                if industry and industry.lower() not in {"-", "--", "none", "null", "nan"}:
+                    return industry
+        raise ProviderError("company information contains no usable industry classification")
+
+    def get_industry_snapshot(self, symbols: tuple[str, ...] = ()) -> pd.DataFrame:
+        ak = self._akshare()
+        rows: list[dict[str, str]] = []
+        failures: list[dict[str, object]] = []
+        fallback_count = 0
+        for symbol in symbols:
+            attempts: list[dict[str, str]] = []
+            endpoints = (
+                (
+                    "akshare:stock_individual_info_em",
+                    lambda symbol=symbol: ak.stock_individual_info_em(
+                        symbol=symbol, timeout=self.timeout_seconds
+                    ),
+                ),
+                (
+                    "akshare:stock_profile_cninfo",
+                    lambda symbol=symbol: ak.stock_profile_cninfo(symbol=symbol),
+                ),
+                (
+                    "akshare:stock_individual_basic_info_xq",
+                    lambda symbol=symbol: ak.stock_individual_basic_info_xq(
+                        symbol=self._exchange_symbol(symbol).upper(),
+                        timeout=self.timeout_seconds,
+                    ),
+                ),
+            )
+            for index, (source, fetch) in enumerate(endpoints):
+                try:
+                    industry = self._industry_name(fetch())
+                    rows.append({"symbol": symbol, "industry_name": industry, "source": source})
+                    if index:
+                        fallback_count += 1
+                        logger.info("industry snapshot %s used fallback %s", symbol, source)
+                    break
+                except Exception as exc:  # noqa: BLE001 - external provider boundary
+                    attempts.append(
+                        {"source": source, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+            else:
+                failures.append({"symbol": symbol, "attempts": attempts})
+                logger.warning(
+                    "industry snapshot %s failed across all providers: %s",
+                    symbol,
+                    "; ".join(
+                        f"{item['source']}={item['error_type']}: {item['error']}"
+                        for item in attempts
+                    ),
+                )
+        if symbols and not rows:
+            detail = "; ".join(
+                f"{item['source']}={item['error_type']}: {item['error']}"
+                for item in failures[0]["attempts"]
+            )
+            raise ProviderError(
+                f"industry snapshot endpoints returned no classifications for "
+                f"{len(failures)}/{len(symbols)} symbols; {failures[0]['symbol']}: {detail}"
+            )
+        frame = pd.DataFrame(rows, columns=["symbol", "industry_name", "source"])
+        frame.attrs["diagnostics"] = {
+            "requested_symbols": len(symbols),
+            "successful_symbols": len(rows),
+            "failed_symbols": failures,
+            "provider_sources": sorted({item["source"] for item in rows}),
+            "provider_fallback_used": fallback_count > 0,
+            "provider_fallback_count": fallback_count,
+        }
+        return frame
+
+    def get_index_constituent_snapshot(self, benchmark_symbol: str) -> pd.DataFrame:
+        code = benchmark_symbol.removeprefix("csi").removeprefix("sh").removeprefix("sz")
+        raw = self._akshare().index_stock_cons_csindex(symbol=code)
+        symbol_column = next(
+            (
+                name
+                for name in ("成分券代码", "成分证券代码", "证券代码", "symbol", "品种代码")
+                if name in raw.columns
+            ),
+            None,
+        )
+        if symbol_column is None:
+            raise ProviderError(f"index constituent symbol column not found: {list(raw.columns)}")
+        result = pd.DataFrame(
+            {"symbol": raw[symbol_column].astype(str).str.extract(r"(\d{6})", expand=False)}
+        )
+        weight_column = next(
+            (name for name in ("权重", "权重(%)", "weight") if name in raw.columns), None
+        )
+        if weight_column is not None:
+            result["weight"] = pd.to_numeric(raw[weight_column], errors="coerce")
+        result = result.dropna(subset=["symbol"]).drop_duplicates("symbol").reset_index(drop=True)
+        if result.empty:
+            raise ProviderError("index constituent snapshot endpoint returned no members")
+        return result
 
     def get_trading_calendar(self) -> pd.DataFrame:
         def fetch() -> pd.DataFrame:

@@ -73,6 +73,12 @@ class FactorLabService:
             slippage_bps=spec.slippage_bps,
             stamp_duty_bps=spec.stamp_duty_bps,
             lot_size=spec.lot_size,
+            universe_mode=spec.universe_mode,
+            universe_benchmark=spec.universe_benchmark,
+            classification_system=spec.classification_system,
+            industry_neutralization=spec.industry_neutralization,
+            max_industry_weight=spec.max_industry_weight,
+            require_verified_industry=spec.require_verified_industry,
         )
 
     def _cross_sections(
@@ -112,8 +118,8 @@ class FactorLabService:
             exit_bars = by_day.get(exit_day, pd.DataFrame())
             active = set(day_bars.index)
             cutoff = pd.Timestamp(signal_day).replace(hour=15)
-            composite = self.backtests.factor_snapshot(backtest_spec, cutoff)
-            composite = composite.loc[composite["symbol"].isin(active)].copy()
+            composite = self.backtests.eligible_snapshot(backtest_spec, cutoff, active)
+            active = set(composite["symbol"])
             snapshots = {
                 item.code: self.database.read_factor_snapshot(spec.symbols, item.code, cutoff)
                 for item in spec.factors
@@ -133,8 +139,7 @@ class FactorLabService:
                         "coverage": count / len(active) if active else 0.0,
                     }
                 )
-            ranked = composite.sort_values(["factor_value", "symbol"], ascending=[False, True])
-            selected = set(ranked.head(spec.top_n_values[0])["symbol"])
+            selected = set(composite.loc[composite["selected"], "symbol"])
             union = previous_selected | selected
             turnover = len(previous_selected ^ selected) / len(union) if union else 0.0
             previous_selected = selected
@@ -158,6 +163,8 @@ class FactorLabService:
                     "forward_return": float(exit_row.open) / float(entry.open) - 1.0,
                     "published_at": row.published_at,
                     "report_period_end": row.report_period_end,
+                    "industry_name": getattr(row, "industry_name", None),
+                    "industry_history_mode": getattr(row, "history_mode", None),
                     "selected": row.symbol in selected,
                     "selection_turnover": turnover,
                 }
@@ -427,8 +434,15 @@ class FactorLabService:
             "forward_return_rule": "next trading day open to next rebalance execution open",
             "model_selection_rule": "validation-period Sharpe ratio, then validation excess return",
             "test_period_used_for_selection": False,
-            "universe_mode": "explicit_symbols_not_historical_index_constituents",
-            "survivorship_bias_warning": "The requested symbols are an explicit research universe, not historical index members.",
+            "universe_mode": spec.universe_mode,
+            "universe_benchmark": spec.universe_benchmark,
+            "industry_neutralization": spec.industry_neutralization,
+            "classification_system": spec.classification_system,
+            "max_industry_weight": spec.max_industry_weight,
+            "require_verified_industry": spec.require_verified_industry,
+            "survivorship_bias_warning": None
+            if spec.universe_mode == "historical_index"
+            else "The requested universe does not prove historical index membership and may have survivorship bias.",
             "missing_factor_policy": spec.missing_policy,
             "combinations": len(combinations),
             "segments": segments,

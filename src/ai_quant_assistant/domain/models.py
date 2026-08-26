@@ -313,6 +313,12 @@ class FactorBacktestSpec:
     lot_size: int = 100
     factors: tuple[FactorComponent, ...] = ()
     missing_policy: str = "exclude"
+    universe_mode: str = "explicit"
+    universe_benchmark: str = "csi000300"
+    classification_system: str = "provider"
+    industry_neutralization: str = "none"
+    max_industry_weight: float = 1.0
+    require_verified_industry: bool = False
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -340,10 +346,26 @@ class FactorBacktestSpec:
             raise ValueError("missing_policy must be exclude or available")
         if len({item.code for item in self.factors}) != len(self.factors):
             raise ValueError("factor component codes must be unique")
+        if self.universe_mode not in {
+            "explicit",
+            "all_available",
+            "historical_index",
+            "observed_index",
+        }:
+            raise ValueError("unsupported universe mode")
+        if self.industry_neutralization not in {"none", "within_industry_rank"}:
+            raise ValueError("unsupported industry neutralization")
+        if not 0 < self.max_industry_weight <= 1:
+            raise ValueError("max_industry_weight must be greater than zero and at most one")
+        if not self.classification_system.strip():
+            raise ValueError("classification_system must not be empty")
         object.__setattr__(self, "symbols", symbols)
         object.__setattr__(self, "factor", self.factor.strip().lower())
         object.__setattr__(
             self, "benchmark_symbol", normalize_benchmark_symbol(self.benchmark_symbol)
+        )
+        object.__setattr__(
+            self, "universe_benchmark", normalize_benchmark_symbol(self.universe_benchmark)
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -376,6 +398,12 @@ class FactorLabSpec:
     validation_fraction: float = 0.2
     walk_forward_folds: int = 3
     max_combinations: int = 48
+    universe_mode: str = "explicit"
+    universe_benchmark: str = "csi000300"
+    classification_system: str = "provider"
+    industry_neutralization: str = "none"
+    max_industry_weight: float = 1.0
+    require_verified_industry: bool = False
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -415,6 +443,19 @@ class FactorLabSpec:
             raise ValueError("initial_capital and lot_size must be positive")
         if min(self.slippage_bps, self.stamp_duty_bps) < 0:
             raise ValueError("transaction cost basis points must be non-negative")
+        if self.universe_mode not in {
+            "explicit",
+            "all_available",
+            "historical_index",
+            "observed_index",
+        }:
+            raise ValueError("unsupported universe mode")
+        if self.industry_neutralization not in {"none", "within_industry_rank"}:
+            raise ValueError("unsupported industry neutralization")
+        if not 0 < self.max_industry_weight <= 1:
+            raise ValueError("max_industry_weight must be greater than zero and at most one")
+        if not self.classification_system.strip():
+            raise ValueError("classification_system must not be empty")
         object.__setattr__(self, "symbols", symbols)
         object.__setattr__(self, "top_n_values", tuple(dict.fromkeys(self.top_n_values)))
         object.__setattr__(self, "rebalance_values", tuple(dict.fromkeys(self.rebalance_values)))
@@ -423,6 +464,9 @@ class FactorLabSpec:
         )
         object.__setattr__(
             self, "benchmark_symbol", normalize_benchmark_symbol(self.benchmark_symbol)
+        )
+        object.__setattr__(
+            self, "universe_benchmark", normalize_benchmark_symbol(self.universe_benchmark)
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
@@ -53,6 +54,7 @@ from ai_quant_assistant.storage.operations import (
     OperationsDashboard,
 )
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
+from ai_quant_assistant.storage.universe import UniverseRepository
 
 
 def _provider(source: str, settings: Settings) -> MarketDataProvider:
@@ -164,6 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.audit_repository = audit_repository
     app.state.alert_repository = alert_repository
     app.state.platform_monitor = monitor
+    app.state.universe_repository = UniverseRepository(database)
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -291,6 +294,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "workbench": "/",
             "backtests": "/api/v1/backtests",
             "factor_lab": "/api/v1/factor-lab",
+            "universe": "/api/v1/universe/overview",
         }
 
     @app.get("/health")
@@ -300,6 +304,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/data/overview")
     def data_overview() -> dict[str, Any]:
         return database.research_overview()
+
+    @app.get("/api/v1/universe/overview")
+    def universe_overview(as_of: str | None = None) -> dict[str, Any]:
+        try:
+            return app.state.universe_repository.overview(as_of or datetime.now().isoformat())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/universe/build")
+    def build_universe(
+        as_of: str,
+        mode: str = "all_available",
+        benchmark_symbol: str = "csi000300",
+        symbols: str = "",
+        limit: int | None = None,
+        classification_system: str = "provider",
+        require_verified_industry: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            parsed = tuple(
+                item.strip() for item in symbols.replace(",", " ").split() if item.strip()
+            )
+            return app.state.universe_repository.build(
+                as_of=as_of,
+                mode=mode,
+                symbols=parsed,
+                benchmark_symbol=benchmark_symbol,
+                limit=limit,
+                classification_system=classification_system,
+                require_history=require_verified_industry,
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/v1/ops/status")
     def operations_status() -> dict[str, Any]:

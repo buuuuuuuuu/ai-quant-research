@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v6）
+# A 股本地数据库数据字典（Schema v7）
 
 ## 公共约定
 
@@ -370,3 +370,56 @@ Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。�
 | details_json | VARCHAR | NOT NULL | 阈值、时间和失败原因等详情 |
 | first_seen_at/last_seen_at | TIMESTAMPTZ | NOT NULL | 首次与最近检测时间 |
 | acknowledged_at/resolved_at/notified_at | TIMESTAMPTZ | 可空 | 确认、恢复和 Webhook 通知时间 |
+
+## security_industry_history
+
+Schema v7 按证券和分类体系保存行业分类变更；只允许同时满足生效区间、真实公开时间
+和系统可知时间的记录进入 Point-in-Time 因子截面。
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| record_id | VARCHAR | PK | 证券、分类、生效与公开时间共同确定的稳定标识 |
+| security_id | VARCHAR | NOT NULL | 证券标识 |
+| classification_system | VARCHAR | NOT NULL | 行业分类体系，默认为 `provider` |
+| industry_code/industry_name | VARCHAR | 名称不可空 | 行业编码及名称 |
+| effective_from/effective_until | DATE | 起始不可空 | 分类生效区间，结束日包含当天 |
+| published_at | TIMESTAMP | NOT NULL | 该分类变动实际公开时间 |
+| knowledge_time | TIMESTAMP | NOT NULL | 系统实际可知时间，不早于 `published_at` |
+| history_mode | VARCHAR | verified_history/observed_snapshot | 可信历史或首次观察快照 |
+| source/source_batch_id | VARCHAR | NOT NULL | 来源与对应股票池同步批次 |
+| observed_at | TIMESTAMP | NOT NULL | 实际写入时间 |
+
+## index_constituent_history
+
+只在 `effective_from <= as_of <= effective_until`、真实公开时间和可知时间均严格早于
+研究时点，并且证券已经上市且尚未退市时，才认为证券属于对应时点的指数成分。
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| record_id | VARCHAR | PK | 指数、证券、生效与公开时间共同确定的稳定标识 |
+| benchmark_symbol | VARCHAR | NOT NULL | 标准指数代码，如 `csi000300` |
+| security_id | VARCHAR | NOT NULL | 证券标识 |
+| effective_from/effective_until | DATE | 起始不可空 | 历史成员纳入和剔除区间 |
+| published_at/knowledge_time | TIMESTAMP | NOT NULL | 真实公开时间与系统可知时间 |
+| history_mode | VARCHAR | verified_history/observed_snapshot | 可信历史或观察快照 |
+| weight | DOUBLE | 可空 | 实际提供的指数权重，不推算缺失值 |
+| source/source_batch_id | VARCHAR | NOT NULL | 真实来源与股票池同步批次 |
+| observed_at | TIMESTAMP | NOT NULL | 实际写入时间 |
+
+`historical_index` 只读取 `verified_history`；`observed_index` 可读取观察快照，但必须
+保留幸存者偏差警告，且不能使用首次观察之前的记录。
+
+## universe_sync_batch
+
+| 字段 | 类型 | 约束 | 含义 |
+|---|---|---|---|
+| batch_id | VARCHAR | PK | 行业/指数成分同步或导入批次 |
+| dataset | VARCHAR | industry_classification/index_constituents | 股票池数据集 |
+| target | VARCHAR | NOT NULL | 分类体系或标准指数代码 |
+| history_mode | VARCHAR | verified_history/observed_snapshot | 输入数据可信级别 |
+| as_of | DATE | NOT NULL | 本次导入或实际观察日期 |
+| status | VARCHAR | running/published/failed | 批次生命周期 |
+| row_count | BIGINT | 非负 | 成功写入的本地证券行数 |
+| source | VARCHAR | NOT NULL | AkShare 接口或显式声明的可信历史来源 |
+| error | VARCHAR | 可空 | 失败原因 |
+| created_at/completed_at | TIMESTAMP | 创建时间不可空 | 开始与完成时间 |

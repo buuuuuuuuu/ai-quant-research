@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1 };
+const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, screenRun: null };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -18,7 +18,7 @@ async function requestJson(url, options = {}) {
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
 const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
-const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", alert_acknowledged: "确认运行告警" };
+const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", point_in_time_screen_succeeded: "完成条件选股", screen_watchlist_saved: "保存候选股票池", alert_acknowledged: "确认运行告警" };
 
 function operationTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
@@ -410,6 +410,91 @@ async function executeCopilotPlan() {
   } catch (exc) {$("#copilot-error").textContent = exc.message; $("#copilot-error").hidden = false;}
 }
 
+const screenFields = JSON.parse($("#screen-field-data").textContent || "[]");
+const screenFieldMap = Object.fromEntries(screenFields.map((item) => [item.code, item]));
+const screenOperatorLabels = {gt:">",gte:"≥",lt:"<",lte:"≤",between:"区间"};
+
+function screenFieldOptions(selected) {
+  return screenFields.map((item) => `<option value="${escapeHtml(item.code)}" ${item.code===selected?"selected":""}>${escapeHtml(item.label)} · ${escapeHtml(item.code)}</option>`).join("");
+}
+
+function addScreenCondition(defaults={field:"roe",operator:"gte",value:12,upper_value:null}) {
+  if ($$(".screen-condition").length >= 12) return;
+  const row=document.createElement("div"); row.className="screen-condition";
+  row.innerHTML=`<label class="field"><span>字段</span><select class="screen-condition-field">${screenFieldOptions(defaults.field)}</select></label><label class="field"><span>关系</span><select class="screen-condition-operator">${Object.entries(screenOperatorLabels).map(([value,label])=>`<option value="${value}" ${value===defaults.operator?"selected":""}>${label}</option>`).join("")}</select></label><label class="field"><span>阈值</span><input class="screen-condition-value" type="number" step="any" value="${escapeHtml(defaults.value)}" required></label><label class="field screen-upper-field" ${defaults.operator!=="between"?"hidden":""}><span>上限</span><input class="screen-condition-upper" type="number" step="any" value="${defaults.upper_value??""}"></label><button class="screen-condition-remove" type="button" aria-label="删除条件">×</button>`;
+  row.querySelector(".screen-condition-operator").addEventListener("change",(event)=>{const between=event.target.value==="between";row.querySelector(".screen-upper-field").hidden=!between;row.querySelector(".screen-condition-upper").required=between;});
+  row.querySelector(".screen-condition-remove").addEventListener("click",()=>{if($$(".screen-condition").length>1)row.remove();});
+  $("#screen-conditions").append(row);
+}
+
+function splitScreenList(selector) {
+  return $(selector).value.split(/[\s,，;；]+/).map((item)=>item.trim()).filter(Boolean);
+}
+
+function screenPayload() {
+  const conditions=$$(".screen-condition").map((row)=>{const operator=row.querySelector(".screen-condition-operator").value;return {field:row.querySelector(".screen-condition-field").value,operator,value:Number(row.querySelector(".screen-condition-value").value),upper_value:operator==="between"?Number(row.querySelector(".screen-condition-upper").value):null};});
+  const topN=$("#screen-top-n").value.trim();
+  return {name:$("#screen-name").value.trim(),as_of:$("#screen-as-of").value,conditions,symbols:splitScreenList("#screen-symbols"),universe_mode:$("#screen-universe-mode").value,benchmark_symbol:$("#screen-benchmark").value.trim(),classification_system:"provider",include_industries:splitScreenList("#screen-include-industries"),exclude_industries:splitScreenList("#screen-exclude-industries"),require_verified_industry:$("#screen-require-industry").value==="true",missing_policy:$("#screen-missing-policy").value,sort_by:$("#screen-sort-by").value,sort_direction:$("#screen-sort-direction").value,top_n:topN?Number(topN):null};
+}
+
+function renderScreenPreflight(payload) {
+  const target=$("#screen-preflight-result"), rows=[];
+  rows.push(operationRow(payload.ready?"可以执行":"预检阻断",`${formatNumber(payload.candidate_count)} 只候选 · 行业覆盖 ${formatPct(payload.industry_coverage)}`,!payload.ready));
+  Object.entries(payload.field_coverage||{}).forEach(([field,count])=>rows.push(operationRow(screenFieldMap[field]?.label||field,`${formatNumber(count)} / ${formatNumber(payload.candidate_count)} 只有可用值`,count===0)));
+  (payload.blockers||[]).forEach((item)=>rows.push(operationRow("阻断原因",item,true)));
+  (payload.warnings||[]).forEach((item)=>rows.push(operationRow("数据边界",item,false)));
+  target.innerHTML=rows.join("");
+}
+
+async function preflightScreen() {
+  const button=$("#screen-preflight");button.disabled=true;$("#screen-error").textContent="";
+  try {const payload=await requestJson("/api/v1/screens/preflight",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(screenPayload())});renderScreenPreflight(payload);return payload;}
+  catch(error){$("#screen-error").textContent=error.message;throw error;}finally{button.disabled=false;}
+}
+
+function screenValue(item,field) {
+  const value=item.values?.[field];
+  if(value==null)return "缺失";
+  const unit=screenFieldMap[field]?.unit||"";
+  return `${Number(value).toLocaleString("zh-CN",{maximumFractionDigits:4})}${unit==="PERCENT"?"%":""}`;
+}
+
+function renderScreenRun(run) {
+  state.screenRun=run;const conditions=run.spec.conditions.map((item)=>item.field), selected=run.items.filter((item)=>item.selected);
+  $("#screen-results").hidden=false;$("#screen-result-title").textContent=`${run.name} · ${run.spec.as_of}`;$("#screen-result-summary").textContent=`候选 ${formatNumber(run.candidate_count)} 只，最终入选 ${formatNumber(run.selected_count)} 只；筛选记录 ${run.run_id}`;
+  $("#screen-download").href=`/api/v1/screens/runs/${encodeURIComponent(run.run_id)}/results.csv`;
+  $("#screen-watchlist-name").value=`${run.name} · ${run.spec.as_of}`;
+  $("#screen-warnings").innerHTML=(run.diagnostics.warnings||[]).map((item)=>`<p>· ${escapeHtml(item)}</p>`).join("");
+  $("#screen-table").innerHTML=run.items.length?`<table><thead><tr><th>结果</th><th>股票</th><th>行业</th><th>条件值</th><th>通过 / 淘汰原因</th><th>报告期</th><th>实际公开时间</th></tr></thead><tbody>${run.items.map((item)=>{const evidence=item.evidence?.financial||{};return `<tr><td><span class="screen-result-pill ${item.selected?"pass":"fail"}">${item.selected?`入选 #${item.rank}`:"未入选"}</span></td><td>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</td><td>${escapeHtml(item.industry||"缺失")}</td><td class="screen-fields-cell">${conditions.map((field)=>`${escapeHtml(screenFieldMap[field]?.label||field)}：${escapeHtml(screenValue(item,field))}`).join("<br>")}</td><td class="screen-evaluations">${item.evaluations.map((entry)=>`${entry.status==="passed"?"✓":"×"} ${escapeHtml(entry.label)}：${escapeHtml(entry.status==="missing"?"缺失":entry.actual)}`).join("<br>")}</td><td>${escapeHtml(String(evidence.report_period_end||"—").replace("T00:00:00",""))}</td><td>${escapeHtml(evidence.published_at||"—")}</td></tr>`;}).join("")}</tbody></table>`:'<p class="empty-state">没有可展示的候选记录。</p>';
+  $("#screen-to-copilot").disabled=!selected.length;$("#screen-to-backtest").disabled=!selected.length;$("#screen-to-lab").disabled=selected.length<2;$("#screen-save-watchlist").disabled=!selected.length;
+  $("#screen-results").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+async function runScreen(event) {
+  event.preventDefault();const button=$("#screen-run");button.disabled=true;$("#screen-error").textContent="";
+  try {const check=await preflightScreen();if(!check.ready)throw new Error((check.blockers||[]).join("；")||"覆盖预检未通过");const run=await requestJson("/api/v1/screens/runs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(screenPayload())});renderScreenRun(run);await loadScreenHistory();}
+  catch(error){$("#screen-error").textContent=error.message;}finally{button.disabled=false;}
+}
+
+async function loadScreenHistory() {
+  const target=$("#screen-history");
+  try {const runs=await requestJson("/api/v1/screens/runs?limit=10");target.innerHTML=runs.length?runs.map((run)=>`<button class="screen-history-item" type="button" data-run-id="${escapeHtml(run.run_id)}"><strong>${escapeHtml(run.name)}</strong><span>${escapeHtml(String(run.as_of).replace("T00:00:00",""))} · ${formatNumber(run.selected_count)}/${formatNumber(run.candidate_count)} 只 · ${escapeHtml(run.status)}</span></button>`).join(""):'<p class="empty-state">还没有筛选运行。</p>';target.querySelectorAll("button").forEach((button)=>button.addEventListener("click",async()=>renderScreenRun(await requestJson(`/api/v1/screens/runs/${encodeURIComponent(button.dataset.runId)}`))));}
+  catch(error){target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
+async function saveScreenWatchlist() {
+  if(!state.screenRun)return;const target=$("#screen-watchlist-message");
+  try {const saved=await requestJson(`/api/v1/screens/runs/${encodeURIComponent(state.screenRun.run_id)}/watchlists`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("#screen-watchlist-name").value.trim()})});target.textContent=`已保存 ${saved.symbols.length} 只股票 · ${saved.watchlist_id}`;}
+  catch(error){target.textContent=error.message;target.classList.add("negative");}
+}
+
+function sendScreenSymbols(target) {
+  const symbols=(state.screenRun?.items||[]).filter((item)=>item.selected).map((item)=>item.symbol);if(!symbols.length)return;
+  if(target==="backtest"){$("#symbols").value=symbols.join(" ");$("#top-n").value=Math.min(Number($("#top-n").value)||1,symbols.length);$("#backtest").scrollIntoView({behavior:"smooth"});}
+  else if(target==="lab"){$("#lab-symbols").value=symbols.join(" ");$("#factor-lab").scrollIntoView({behavior:"smooth"});}
+  else {$("#copilot-question").value=`基于条件选股运行 ${state.screenRun.run_id} 的入选股票 ${symbols.join(" ")}，设计一个可复现的因子研究计划，并保留该筛选运行作为股票池来源。`;$("#copilot").scrollIntoView({behavior:"smooth"});}
+}
+
 const explorerLabels = {prices:"股票行情",benchmarks:"指数基准",announcements:"定期公告",financials:"财务指标"};
 const reportTypeLabels = {q1:"一季报",interim:"中报",q3:"三季报",annual:"年报"};
 const explorerColumns = {
@@ -532,6 +617,19 @@ async function showLineage(recordId) {
   catch(error){$("#lineage-content").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
 }
 
+$("#screen-as-of").value=new Date().toLocaleDateString("en-CA");
+addScreenCondition({field:"roe",operator:"gte",value:12});
+addScreenCondition({field:"revenue_yoy",operator:"gte",value:10});
+addScreenCondition({field:"debt_asset_ratio",operator:"lt",value:60});
+$("#screen-sort-by").value="roe";
+$("#screen-form").addEventListener("submit",runScreen);
+$("#screen-preflight").addEventListener("click",()=>preflightScreen().catch(()=>{}));
+$("#screen-add-condition").addEventListener("click",()=>addScreenCondition({field:"gross_margin",operator:"gte",value:20}));
+$("#screen-refresh-history").addEventListener("click",loadScreenHistory);
+$("#screen-save-watchlist").addEventListener("click",saveScreenWatchlist);
+$("#screen-to-copilot").addEventListener("click",()=>sendScreenSymbols("copilot"));
+$("#screen-to-backtest").addEventListener("click",()=>sendScreenSymbols("backtest"));
+$("#screen-to-lab").addEventListener("click",()=>sendScreenSymbols("lab"));
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#copilot-form").addEventListener("submit", submitCopilotQuestion);
 $("#copilot-new").addEventListener("click", createCopilotConversation);
@@ -553,4 +651,4 @@ $("#explorer-filters").addEventListener("submit", (event) => {event.preventDefau
 let explorerSearchTimer;
 $("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true);
+loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory();

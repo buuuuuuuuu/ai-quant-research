@@ -29,6 +29,12 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
+from ai_quant_assistant.research.screener import (
+    SCREEN_FIELDS,
+    PointInTimeScreener,
+    ScreenCondition,
+    ScreenSpec,
+)
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
@@ -151,6 +157,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lab.add_argument("--max-industry-weight", type=float, default=1.0)
     lab.add_argument("--require-verified-industry", action="store_true")
+
+    screen = subcommands.add_parser("screen", help="运行 Point-in-Time 条件选股并保存候选池")
+    screen.add_argument("--name", default="CLI 条件选股")
+    screen.add_argument("--as-of", type=_date, required=True)
+    screen.add_argument(
+        "--conditions",
+        nargs="+",
+        required=True,
+        help="条件格式：roe:gte:12 debt_asset_ratio:lt:60；区间使用 eps:between:1:3",
+    )
+    screen.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    screen.add_argument(
+        "--universe-mode",
+        choices=["explicit", "all_available", "historical_index", "observed_index"],
+        default="explicit",
+    )
+    screen.add_argument("--benchmark", default="csi000300")
+    screen.add_argument("--classification-system", default="provider")
+    screen.add_argument("--include-industries", nargs="*", default=[])
+    screen.add_argument("--exclude-industries", nargs="*", default=[])
+    screen.add_argument("--require-verified-industry", action="store_true")
+    screen.add_argument("--missing-policy", choices=["exclude", "show"], default="show")
+    screen.add_argument("--sort-by", choices=list(SCREEN_FIELDS))
+    screen.add_argument("--sort-direction", choices=["asc", "desc"], default="desc")
+    screen.add_argument("--top-n", type=int)
+    screen.add_argument("--save-watchlist")
+    screen.add_argument("--data-dir", type=Path)
+    screen.add_argument("--duckdb-path", type=Path)
 
     universe = subcommands.add_parser("universe", help="构建 Point-in-Time 动态股票池")
     universe_commands = universe.add_subparsers(dest="universe_command", required=True)
@@ -560,6 +594,49 @@ def main() -> None:
             and payload["status"] == "failed"
         ):
             raise SystemExit(1)
+        return
+
+    if args.command == "screen":
+        conditions = []
+        for definition in args.conditions:
+            parts = definition.split(":")
+            if len(parts) not in {3, 4}:
+                raise SystemExit(
+                    f"invalid screen condition: {definition}; expected field:operator:value[:upper]"
+                )
+            conditions.append(
+                ScreenCondition(
+                    field=parts[0],
+                    operator=parts[1],
+                    value=float(parts[2]),
+                    upper_value=float(parts[3]) if len(parts) == 4 else None,
+                )
+            )
+        database = _local_database(args, settings)
+        service = PointInTimeScreener(database)
+        payload = service.run(
+            ScreenSpec(
+                name=args.name,
+                as_of=args.as_of,
+                conditions=tuple(conditions),
+                symbols=tuple(args.symbols),
+                universe_mode=args.universe_mode,
+                benchmark_symbol=args.benchmark,
+                classification_system=args.classification_system,
+                include_industries=tuple(args.include_industries),
+                exclude_industries=tuple(args.exclude_industries),
+                require_verified_industry=args.require_verified_industry,
+                missing_policy=args.missing_policy,
+                sort_by=args.sort_by,
+                sort_direction=args.sort_direction,
+                top_n=args.top_n,
+            )
+        )
+        if args.save_watchlist:
+            payload["saved_watchlist"] = service.save_watchlist(
+                payload["run_id"], args.save_watchlist
+            )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return
 
     if args.command == "universe":

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 @dataclass(frozen=True, slots=True)
@@ -620,6 +620,74 @@ MIGRATIONS = (
             """
             CREATE INDEX operation_task_type_created_idx
             ON operation_task (task_type, created_at)
+            """,
+        ),
+    ),
+    Migration(
+        version=9,
+        name="point_in_time_screen_runs_results_and_saved_watchlists",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS screen_run (
+                run_id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('running', 'succeeded', 'failed')),
+                as_of TIMESTAMP NOT NULL,
+                universe_mode VARCHAR NOT NULL
+                    CHECK (universe_mode IN (
+                        'explicit', 'all_available', 'historical_index', 'observed_index'
+                    )),
+                spec_json VARCHAR NOT NULL,
+                candidate_count BIGINT NOT NULL DEFAULT 0 CHECK (candidate_count >= 0),
+                selected_count BIGINT NOT NULL DEFAULT 0 CHECK (selected_count >= 0),
+                diagnostics_json VARCHAR NOT NULL DEFAULT '{}',
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ NOT NULL,
+                completed_at TIMESTAMPTZ
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS screen_run_created_idx
+            ON screen_run (created_at)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS screen_result (
+                run_id VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                symbol VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                industry_name VARCHAR,
+                selected BOOLEAN NOT NULL,
+                selection_rank INTEGER,
+                values_json VARCHAR NOT NULL DEFAULT '{}',
+                evaluations_json VARCHAR NOT NULL DEFAULT '[]',
+                evidence_json VARCHAR NOT NULL DEFAULT '{}',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (selection_rank IS NULL OR selection_rank >= 1),
+                PRIMARY KEY (run_id, security_id)
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS screen_result_run_selected_rank_idx
+            ON screen_result (run_id, selected, selection_rank)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS saved_watchlist (
+                watchlist_id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                screen_run_id VARCHAR NOT NULL,
+                as_of TIMESTAMP NOT NULL,
+                symbols_json VARCHAR NOT NULL,
+                history_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                warning VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS saved_watchlist_created_idx
+            ON saved_watchlist (created_at)
             """,
         ),
     ),

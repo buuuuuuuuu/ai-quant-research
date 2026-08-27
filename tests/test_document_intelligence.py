@@ -12,6 +12,7 @@ from test_web_workbench import _settings
 from ai_quant_assistant.api.app import create_app
 from ai_quant_assistant.documents.service import (
     DocumentIntelligenceService,
+    _canonicalize_document_url,
     _validate_remote_url,
 )
 
@@ -52,6 +53,28 @@ def test_pdf_type_size_and_remote_url_security_are_enforced(tmp_path) -> None:
     with pytest.raises(ValueError, match="size limit"):
         DocumentIntelligenceService(service.database, small).archive_bytes(
             "announcement-600519-2023", PDF_A
+        )
+
+
+def test_cninfo_detail_url_is_converted_to_a_safe_static_pdf_url() -> None:
+    source = (
+        "/new/disclosure/detail?stockCode=000858&announcementId=1225273125"
+        "&orgId=gssz0000858&announcementTime=2026-04-30 18:20:27"
+    )
+
+    assert _canonicalize_document_url(source) == (
+        "https://static.cninfo.com.cn/finalpage/2026-04-30/1225273125.PDF"
+    )
+    assert _canonicalize_document_url(
+        "https://static.cninfo.com.cn/finalpage/2026-04-30/report name.PDF"
+    ).endswith("/report%20name.PDF")
+    with pytest.raises(ValueError, match="allowed CNInfo"):
+        _canonicalize_document_url("/private/internal.pdf")
+    with pytest.raises(ValueError, match="control characters"):
+        _canonicalize_document_url("https://example.com/report.pdf\nX-Test: unsafe")
+    with pytest.raises(ValueError, match="announcement ID or date"):
+        _canonicalize_document_url(
+            "/new/disclosure/detail?announcementId=not-a-number&announcementTime=2026-04-30"
         )
 
 

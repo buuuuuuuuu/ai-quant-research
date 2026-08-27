@@ -32,6 +32,8 @@ MIN_NATIVE_CHARS = 40
 MAX_DOCUMENTS_PER_QUESTION = 6
 MAX_QUESTION_CHARS = 2_000
 MAX_SEARCH_QUERY_CHARS = 200
+CNINFO_DETAIL_PATH = "/new/disclosure/detail"
+CNINFO_DETAIL_HOSTS = {"cninfo.com.cn", "www.cninfo.com.cn"}
 
 
 def _now() -> str:
@@ -54,8 +56,51 @@ def _jsonable(value: Any) -> Any:
 
 class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        _validate_remote_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        resolved = urllib.parse.urljoin(req.full_url, newurl)
+        canonical = _canonicalize_document_url(resolved)
+        _validate_remote_url(canonical)
+        return super().redirect_request(req, fp, code, msg, headers, canonical)
+
+
+def _canonicalize_document_url(url: str) -> str:
+    """Return a request-safe PDF URL without weakening remote-host validation."""
+
+    raw = url.strip()
+    if not raw:
+        raise ValueError("document URL is empty")
+    if len(raw) > 2_048:
+        raise ValueError("document URL is too long")
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw):
+        raise ValueError("document URL contains control characters")
+    if "\\" in raw or raw.startswith("//"):
+        raise ValueError("document URL has an unsafe relative form")
+
+    parsed = urllib.parse.urlsplit(raw)
+    if not parsed.scheme:
+        if parsed.netloc or parsed.path != CNINFO_DETAIL_PATH:
+            raise ValueError("relative document URL is not an allowed CNInfo detail URL")
+        parsed = urllib.parse.urlsplit(urllib.parse.urljoin("https://www.cninfo.com.cn", raw))
+
+    hostname = (parsed.hostname or "").lower()
+    if hostname in CNINFO_DETAIL_HOSTS and parsed.path == CNINFO_DETAIL_PATH:
+        parameters = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        announcement_id = str((parameters.get("announcementId") or [""])[0]).strip()
+        announcement_time = str((parameters.get("announcementTime") or [""])[0]).strip()
+        date_match = re.match(r"^(\d{4}-\d{2}-\d{2})(?:\s|$)", announcement_time)
+        if not announcement_id.isdigit() or not date_match:
+            raise ValueError("CNInfo detail URL is missing a valid announcement ID or date")
+        try:
+            datetime.strptime(date_match.group(1), "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("CNInfo detail URL has an invalid announcement date") from exc
+        return (
+            "https://static.cninfo.com.cn/finalpage/"
+            f"{date_match.group(1)}/{announcement_id}.PDF"
+        )
+
+    path = urllib.parse.quote(parsed.path, safe="/%:@-._~!$&'()*+,;=")
+    query = urllib.parse.quote(parsed.query, safe="=&%:+,;@/?")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
 
 
 def _validate_remote_url(url: str) -> str:
@@ -113,9 +158,10 @@ class DocumentIntelligenceService:
 
     def download(self, announcement_id: str) -> bytes:
         announcement = self._announcement(announcement_id)
-        url = str(announcement.get("url") or "").strip()
-        if not url:
+        source_url = str(announcement.get("url") or "").strip()
+        if not source_url:
             raise ValueError("announcement has no source PDF URL")
+        url = _canonicalize_document_url(source_url)
         _validate_remote_url(url)
         request = urllib.request.Request(
             url,

@@ -335,6 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "universe": "/api/v1/universe/overview",
             "screens": "/api/v1/screens/runs",
             "copilot": "/api/v1/copilot/conversations",
+            "data_explorer": "/api/v1/data/datasets",
         }
 
     @app.get("/health")
@@ -443,6 +444,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/api/v1/data/announcements/{announcement_id}")
+    def data_announcement_detail(announcement_id: str) -> dict[str, Any]:
+        try:
+            return data_explorer.announcement_detail(announcement_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="announcement not found") from exc
+
     @app.get("/api/v1/data/securities/{symbol}/financial-reports")
     def data_security_financial_reports(
         symbol: str,
@@ -487,6 +495,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_size=page_size,
         )
         return explorer_response(payload, output, f"{symbol}-financial-metrics")
+
+    @app.get("/api/v1/data/financial-reports/{report_id}")
+    def data_financial_report_detail(report_id: str) -> dict[str, Any]:
+        try:
+            return data_explorer.financial_report_detail(report_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="financial report not found") from exc
 
     @app.get("/api/v1/data/benchmarks")
     def data_benchmarks(page: int = 1, page_size: int = 50) -> dict[str, Any]:

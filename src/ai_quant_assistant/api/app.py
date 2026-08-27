@@ -36,7 +36,9 @@ from ai_quant_assistant.api.schemas import (
     FactorLabRequest,
     IncrementalSyncRequest,
     InterimReportEventStudyRequest,
+    PointInTimeScreenRequest,
     ResearchRunResponse,
+    SaveWatchlistRequest,
 )
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.errors import QuantResearchError
@@ -48,6 +50,7 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
+from ai_quant_assistant.research.screener import PointInTimeScreener
 from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.data_explorer import DataExplorer
 from ai_quant_assistant.storage.database import LocalDatabase
@@ -150,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     copilot_repository = CopilotRepository(database)
     data_explorer = DataExplorer(database)
+    screener = PointInTimeScreener(database)
     copilot_service = CopilotService(
         repository=copilot_repository,
         planner=create_planner(resolved_settings),
@@ -199,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.copilot_service = copilot_service
     app.state.copilot_tasks = copilot_tasks
     app.state.data_explorer = data_explorer
+    app.state.screener = screener
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -312,6 +317,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             context={
                 "version": __version__,
                 "factors": factors,
+                "screen_fields": screener.fields()["fields"],
                 "auth_enabled": authenticator.enabled,
                 "username": resolved_settings.web_username,
             },
@@ -327,6 +333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "backtests": "/api/v1/backtests",
             "factor_lab": "/api/v1/factor-lab",
             "universe": "/api/v1/universe/overview",
+            "screens": "/api/v1/screens/runs",
             "copilot": "/api/v1/copilot/conversations",
         }
 
@@ -655,6 +662,127 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/screens/fields")
+    def screen_fields() -> dict[str, Any]:
+        return screener.fields()
+
+    @app.post("/api/v1/screens/preflight")
+    def screen_preflight(request: PointInTimeScreenRequest) -> dict[str, Any]:
+        try:
+            return screener.preflight(request.to_spec())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/screens/runs", status_code=201)
+    def create_screen_run(request: PointInTimeScreenRequest) -> dict[str, Any]:
+        try:
+            run = screener.run(request.to_spec())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "point_in_time_screen_succeeded",
+            actor=resolved_settings.web_username,
+            object_type="screen_run",
+            object_id=run["run_id"],
+            details={
+                "as_of": request.as_of.isoformat(),
+                "candidate_count": run["candidate_count"],
+                "selected_count": run["selected_count"],
+            },
+        )
+        return run
+
+    @app.get("/api/v1/screens/runs")
+    def list_screen_runs(limit: int = 20) -> list[dict[str, Any]]:
+        return screener.list_runs(limit=limit)
+
+    @app.get("/api/v1/screens/runs/{run_id}")
+    def get_screen_run(run_id: str) -> dict[str, Any]:
+        try:
+            return screener.get_run(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="screen run not found") from exc
+
+    @app.get("/api/v1/screens/runs/{run_id}/results.csv")
+    def download_screen_results(run_id: str, selected_only: bool = False) -> Response:
+        try:
+            run = screener.get_run(run_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="screen run not found") from exc
+        conditions = [item["field"] for item in run["spec"]["conditions"]]
+        stream = io.StringIO()
+        columns = [
+            "symbol",
+            "name",
+            "industry",
+            "selected",
+            "rank",
+            *conditions,
+            "report_period_end",
+            "report_published_at",
+            "trade_date",
+            "evaluations",
+        ]
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        for item in run["items"]:
+            if selected_only and not item["selected"]:
+                continue
+            financial = item["evidence"].get("financial", {})
+            market = item["evidence"].get("market", {})
+            row = {
+                "symbol": item["symbol"],
+                "name": item["name"],
+                "industry": item["industry"],
+                "selected": item["selected"],
+                "rank": item["rank"],
+                "report_period_end": financial.get("report_period_end"),
+                "report_published_at": financial.get("published_at"),
+                "trade_date": market.get("trade_date"),
+                "evaluations": "; ".join(
+                    f"{evaluation['label']}:{evaluation['status']}"
+                    for evaluation in item["evaluations"]
+                ),
+            }
+            row.update({field: item["values"].get(field) for field in conditions})
+            writer.writerow(
+                {
+                    key: f"'{value}"
+                    if isinstance(value, str)
+                    and value.startswith(("=", "+", "-", "@", "\t", "\r"))
+                    else value
+                    for key, value in row.items()
+                }
+            )
+        return Response(
+            "\ufeff" + stream.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{run_id}-screen-results.csv"'
+            },
+        )
+
+    @app.post("/api/v1/screens/runs/{run_id}/watchlists", status_code=201)
+    def save_screen_watchlist(run_id: str, request: SaveWatchlistRequest) -> dict[str, Any]:
+        try:
+            watchlist = screener.save_watchlist(run_id, request.name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="screen run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_repository.record(
+            "screen_watchlist_saved",
+            actor=resolved_settings.web_username,
+            object_type="saved_watchlist",
+            object_id=watchlist["watchlist_id"],
+            details={"screen_run_id": run_id, "symbol_count": len(watchlist["symbols"])},
+        )
+        return watchlist
+
+    @app.get("/api/v1/watchlists")
+    def list_saved_watchlists(limit: int = 50) -> list[dict[str, Any]]:
+        return screener.list_watchlists(limit=limit)
 
     @app.get("/api/v1/ops/status")
     def operations_status() -> dict[str, Any]:

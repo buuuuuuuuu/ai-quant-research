@@ -14,6 +14,11 @@ from ai_quant_assistant.domain.models import (
     FactorLabSpec,
 )
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
+from ai_quant_assistant.research.screener import (
+    SCREEN_FIELDS,
+    ScreenCondition,
+    ScreenSpec,
+)
 
 
 class InterimReportEventStudyRequest(BaseModel):
@@ -328,3 +333,92 @@ class CopilotMessageRequest(BaseModel):
 
 class CopilotConfirmRequest(BaseModel):
     revision: int = Field(default=1, ge=1)
+
+
+class ScreenConditionRequest(BaseModel):
+    field: str
+    operator: Literal["gt", "gte", "lt", "lte", "between"]
+    value: float
+    upper_value: float | None = None
+
+    @field_validator("field")
+    @classmethod
+    def validate_field(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SCREEN_FIELDS:
+            raise ValueError("field must be a supported published screen field")
+        return normalized
+
+    def to_condition(self) -> ScreenCondition:
+        return ScreenCondition(
+            field=self.field,
+            operator=self.operator,
+            value=self.value,
+            upper_value=self.upper_value,
+        )
+
+
+class PointInTimeScreenRequest(BaseModel):
+    name: str = Field(default="未命名条件选股", min_length=1, max_length=120)
+    as_of: date = Field(default_factory=date.today)
+    conditions: list[ScreenConditionRequest] = Field(min_length=1, max_length=12)
+    symbols: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), max_length=500
+    )
+    universe_mode: Literal[
+        "explicit", "all_available", "historical_index", "observed_index"
+    ] = "explicit"
+    benchmark_symbol: str = "csi000300"
+    classification_system: str = Field(default="provider", min_length=1, max_length=80)
+    include_industries: list[str] = Field(default_factory=list, max_length=100)
+    exclude_industries: list[str] = Field(default_factory=list, max_length=100)
+    require_verified_industry: bool = False
+    missing_policy: Literal["exclude", "show"] = "show"
+    sort_by: str | None = None
+    sort_direction: Literal["asc", "desc"] = "desc"
+    top_n: int | None = Field(default=None, ge=1, le=500)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_screen_symbols(cls, symbols: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(item.strip() for item in symbols if item.strip()))
+        if any(len(item) != 6 or not item.isdigit() for item in normalized):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return normalized
+
+    @field_validator("sort_by")
+    @classmethod
+    def validate_sort_by(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in SCREEN_FIELDS:
+            raise ValueError("sort_by must be a supported published screen field")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_screen(self) -> PointInTimeScreenRequest:
+        self.to_spec()
+        return self
+
+    def to_spec(self) -> ScreenSpec:
+        return ScreenSpec(
+            name=self.name,
+            as_of=self.as_of,
+            conditions=tuple(item.to_condition() for item in self.conditions),
+            symbols=tuple(self.symbols),
+            universe_mode=self.universe_mode,
+            benchmark_symbol=self.benchmark_symbol,
+            classification_system=self.classification_system,
+            include_industries=tuple(self.include_industries),
+            exclude_industries=tuple(self.exclude_industries),
+            require_verified_industry=self.require_verified_industry,
+            missing_policy=self.missing_policy,
+            sort_by=self.sort_by,
+            sort_direction=self.sort_direction,
+            top_n=self.top_n,
+        )
+
+
+class SaveWatchlistRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)

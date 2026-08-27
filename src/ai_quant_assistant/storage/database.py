@@ -49,6 +49,9 @@ CORE_RELATIONS = (
     "copilot_message",
     "research_plan",
     "research_plan_event",
+    "screen_run",
+    "screen_result",
+    "saved_watchlist",
 )
 
 _CONNECTION_LOCKS: dict[Path, RLock] = {}

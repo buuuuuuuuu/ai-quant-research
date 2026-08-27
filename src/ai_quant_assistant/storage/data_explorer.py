@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from ai_quant_assistant.domain.models import normalize_benchmark_symbol
+from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.storage.database import LocalDatabase
 
 DATASETS = {
@@ -456,6 +457,7 @@ class DataExplorer:
             frame = connection.execute(
                 f"""
                 SELECT report.report_id || ':' || metric.metric_code AS record_id,
+                       report.report_id,
                        security.symbol, security.name, report.report_period_end,
                        report.report_type, report.published_at, report.availability_source,
                        metric.metric_code, metric.metric_value, metric.unit,
@@ -486,11 +488,188 @@ class DataExplorer:
                 ).fetchall()
             ]
         result = self._result(self._records(frame), total, page, page_size)
+        for item in result["items"]:
+            definition = FINANCIAL_METRICS.get(str(item["metric_code"]), {})
+            item["metric_label"] = definition.get("label", item["metric_code"])
         result["metric_codes"] = codes
         result["point_in_time_notice"] = (
             "指标仅从财报 published_at 起可用于研究；缺失值不会被静默填充。"
         )
         return result
+
+    def announcement_detail(self, announcement_id: str) -> dict[str, Any]:
+        """Return one published announcement with related financial reports."""
+        with self.database.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                SELECT announcement.announcement_id AS record_id,
+                       security.security_id, security.symbol, security.name,
+                       announcement.company_name, announcement.title,
+                       announcement.report_type, announcement.report_year,
+                       announcement.report_period_end, announcement.announcement_date,
+                       announcement.published_at, announcement.url,
+                       announcement.content_sha256, announcement.quality_status,
+                       'local:published_announcement' AS serving_source,
+                       announcement.source AS provider_source,
+                       announcement.source_batch_id,
+                       COALESCE((
+                           SELECT partition.raw_path
+                           FROM research_sync_partition AS partition
+                           WHERE partition.batch_id = announcement.source_batch_id
+                             AND partition.dataset = 'announcement'
+                             AND partition.object_id = announcement.security_id
+                             AND partition.variant = announcement.report_type
+                             AND announcement.announcement_date BETWEEN
+                                 partition.start_date AND partition.end_date
+                           ORDER BY partition.updated_at DESC
+                           LIMIT 1
+                       ), '') AS raw_path
+                FROM published_announcement AS announcement
+                JOIN security_master AS security USING (security_id)
+                WHERE announcement.announcement_id = ?
+                """,
+                [announcement_id],
+            ).fetchdf()
+            if frame.empty:
+                raise KeyError(announcement_id)
+            announcement = self._records(frame)[0]
+            reports = connection.execute(
+                """
+                SELECT report.report_id, report.report_period_end, report.report_type,
+                       report.published_at, report.availability_source,
+                       report.quality_status, COUNT(metric.metric_code) AS metric_count
+                FROM published_financial_report AS report
+                LEFT JOIN published_financial_metric AS metric USING (report_id)
+                WHERE report.security_id = ?
+                  AND report.report_period_end = ?
+                  AND report.report_type = ?
+                GROUP BY report.report_id, report.report_period_end, report.report_type,
+                         report.published_at, report.availability_source,
+                         report.quality_status
+                ORDER BY report.published_at DESC
+                """,
+                [
+                    announcement["security_id"],
+                    announcement["report_period_end"],
+                    announcement["report_type"],
+                ],
+            ).fetchdf()
+        url = str(announcement.get("url") or "").strip()
+        return {
+            "announcement": announcement,
+            "related_financial_reports": self._records(reports),
+            "document": {
+                "status": "external_url" if url else "metadata_only",
+                "url": url or None,
+                "content_sha256": announcement.get("content_sha256"),
+                "notice": (
+                    "本地库保存公告元数据、原文地址与内容摘要，不保存或伪造公告正文。"
+                    if url
+                    else "该记录没有可用原文地址，本地仅保存公告元数据和内容摘要。"
+                ),
+            },
+            "point_in_time_notice": (
+                "研究从 published_at 起才能使用此公告；report_period_end 不是信息可用时间。"
+            ),
+        }
+
+    def financial_report_detail(self, report_id: str) -> dict[str, Any]:
+        """Return one report with metrics, revisions and announcements."""
+        with self.database.connect(read_only=True) as connection:
+            frame = connection.execute(
+                """
+                SELECT report.report_id AS record_id, security.security_id,
+                       security.symbol, security.name, report.report_period_end,
+                       report.report_type, report.published_at,
+                       report.availability_source, report.quality_status,
+                       report.source AS provider_source, report.source_batch_id,
+                       report.raw_sha256,
+                       'local:published_financial_report' AS serving_source,
+                       COALESCE((
+                           SELECT partition.raw_path
+                           FROM financial_sync_partition AS partition
+                           WHERE partition.batch_id = report.source_batch_id
+                             AND partition.security_id = report.security_id
+                             AND report.report_period_end BETWEEN
+                                 partition.start_date AND partition.end_date
+                           ORDER BY partition.updated_at DESC,
+                                    partition.partition_key DESC
+                           LIMIT 1
+                       ), '') AS raw_path
+                FROM published_financial_report AS report
+                JOIN security_master AS security USING (security_id)
+                WHERE report.report_id = ?
+                """,
+                [report_id],
+            ).fetchdf()
+            if frame.empty:
+                raise KeyError(report_id)
+            report = self._records(frame)[0]
+            metrics = connection.execute(
+                """
+                SELECT metric.metric_code, metric.metric_value, metric.unit,
+                       metric.quality_status, metric.source_batch_id
+                FROM published_financial_metric AS metric
+                WHERE metric.report_id = ?
+                ORDER BY metric.metric_code
+                """,
+                [report_id],
+            ).fetchdf()
+            revisions = connection.execute(
+                """
+                SELECT revision.report_id, revision.published_at,
+                       revision.availability_source, revision.quality_status,
+                       COUNT(metric.metric_code) AS metric_count
+                FROM published_financial_report AS revision
+                LEFT JOIN published_financial_metric AS metric
+                  ON metric.report_id = revision.report_id
+                WHERE revision.security_id = ?
+                  AND revision.report_period_end = ?
+                  AND revision.report_type = ?
+                GROUP BY revision.report_id, revision.published_at,
+                         revision.availability_source, revision.quality_status
+                ORDER BY revision.published_at
+                """,
+                [
+                    report["security_id"],
+                    report["report_period_end"],
+                    report["report_type"],
+                ],
+            ).fetchdf()
+            announcements = connection.execute(
+                """
+                SELECT announcement.announcement_id AS record_id,
+                       announcement.title, announcement.announcement_date,
+                       announcement.published_at, announcement.url,
+                       announcement.quality_status
+                FROM published_announcement AS announcement
+                WHERE announcement.security_id = ?
+                  AND announcement.report_period_end = ?
+                  AND announcement.report_type = ?
+                ORDER BY announcement.published_at
+                """,
+                [
+                    report["security_id"],
+                    report["report_period_end"],
+                    report["report_type"],
+                ],
+            ).fetchdf()
+        metric_items = self._records(metrics)
+        for item in metric_items:
+            definition = FINANCIAL_METRICS.get(str(item["metric_code"]), {})
+            item["metric_label"] = definition.get("label", item["metric_code"])
+        revision_items = self._records(revisions)
+        for item in revision_items:
+            item["current"] = item["report_id"] == report_id
+        return {
+            "report": report,
+            "metrics": metric_items,
+            "revisions": revision_items,
+            "related_announcements": self._records(announcements),
+            "point_in_time_notice": (
+                "指标从该版本 published_at 起可用于研究；修订版本不会覆盖旧版本。"
+            ),
+        }
 
     def benchmarks(self, *, page: int = 1, page_size: int = 50) -> dict[str, Any]:
         page, page_size, offset = self._page(page, page_size)

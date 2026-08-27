@@ -138,6 +138,66 @@ def test_announcement_and_financial_explorer_exposes_point_in_time_and_csv(tmp_p
     assert "metric_code" in csv_response.text
 
 
+def test_announcement_and_financial_report_details_are_readable_and_linked(
+    tmp_path,
+) -> None:
+    database = _explorer_database(tmp_path)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO announcement (
+                announcement_id, security_id, company_name, title, report_type,
+                report_year, report_period_end, announcement_date, published_at,
+                url, source, source_batch_id, content_sha256
+            ) VALUES (
+                'announcement-600519-q3', 'SSE.600519', '测试公司600519',
+                '2023 年第三季度报告', 'q3', 2023, '2023-09-30', '2024-01-02',
+                '2024-01-02 17:30:00', 'https://example.test/q3.pdf',
+                'fixture-announcement', 'fixture-announcement-batch', 'sha-q3'
+            )
+            """
+        )
+
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        announcement = client.get(
+            "/api/v1/data/announcements/announcement-600519-q3"
+        )
+        report = client.get("/api/v1/data/financial-reports/maotai-revision")
+        missing_announcement = client.get("/api/v1/data/announcements/missing")
+        missing_report = client.get("/api/v1/data/financial-reports/missing")
+        home = client.get("/")
+
+    assert announcement.status_code == 200
+    announcement_payload = announcement.json()
+    assert announcement_payload["announcement"]["title"] == "2023 年第三季度报告"
+    assert announcement_payload["document"]["status"] == "external_url"
+    assert announcement_payload["document"]["url"].endswith("q3.pdf")
+    assert {
+        item["report_id"]
+        for item in announcement_payload["related_financial_reports"]
+    } == {"maotai-q3", "maotai-revision"}
+    assert "published_at" in announcement_payload["point_in_time_notice"]
+
+    assert report.status_code == 200
+    report_payload = report.json()
+    assert report_payload["report"]["record_id"] == "maotai-revision"
+    assert {item["metric_label"] for item in report_payload["metrics"]} == {
+        "加权净资产收益率",
+        "资产负债率",
+    }
+    assert [item["report_id"] for item in report_payload["revisions"]] == [
+        "maotai-q3",
+        "maotai-revision",
+    ]
+    assert sum(item["current"] for item in report_payload["revisions"]) == 1
+    assert report_payload["related_announcements"][0]["record_id"] == (
+        "announcement-600519-q3"
+    )
+    assert missing_announcement.status_code == 404
+    assert missing_report.status_code == 404
+    assert 'id="record-detail-dialog"' in home.text
+
+
 def test_benchmark_explorer_and_workbench_drilldown_controls(tmp_path) -> None:
     _explorer_database(tmp_path)
     with TestClient(create_app(_settings(tmp_path))) as client:

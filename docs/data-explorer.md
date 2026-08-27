@@ -10,6 +10,22 @@ Web 首页“数据库概览”的四张卡片可以下钻到股票行情、指�
 3. 记录：按日期、复权、报告类型或指标筛选；服务端每页默认 50 条，最多 200 条。
 4. 血缘：每条记录可查看服务层来源、供应商来源、同步批次、原始 Parquet 路径、发布时点和质量状态。
 
+## 公告与财报内容详情（M7-B）
+
+公告记录提供“查看公告”，展示公司、报告期、公告日期、真实公开时间、供应商、质量状态、
+内容摘要和对应财务报告。本地库当前保存的是规范化元数据、原文 URL 与内容摘要，不保存
+PDF 正文；页面只允许打开 `http/https` 原文地址，没有地址时明确显示“仅有本地元数据”。
+
+财务指标记录提供“查看财报”，按不可变报告版本展示：
+
+- 该版本的全部财务指标、中文名称、数值、单位和质量状态；
+- 同报告期的旧版本与修订版本，旧版本不会被覆盖；
+- 同证券、同报告期、同报告类型的定期公告；
+- 报告 ID、供应商、同步批次、原始 Parquet 和 SHA-256 摘要。
+
+详情页不会根据标题生成摘要，也不会把缺失指标填成零。报告期仍不等于公开时间，研究只能
+从该公告或财报版本的 `published_at` 开始使用它。
+
 定期公告明确区分 `report_period_end` 与 `published_at`。财务指标只从真实公开时间开始
 可用，同一报告期的修订不会回填到修订公开之前。`observed_snapshot` 行业分类也会显式
 提示不能用于推断首次观察之前的历史。
@@ -21,8 +37,10 @@ Web 首页“数据库概览”的四张卡片可以下钻到股票行情、指�
 - `GET /api/v1/data/securities/{symbol}`
 - `GET /api/v1/data/securities/{symbol}/prices`
 - `GET /api/v1/data/securities/{symbol}/announcements`
+- `GET /api/v1/data/announcements/{announcement_id}`
 - `GET /api/v1/data/securities/{symbol}/financial-reports`
 - `GET /api/v1/data/securities/{symbol}/financial-metrics`
+- `GET /api/v1/data/financial-reports/{report_id}`
 - `GET /api/v1/data/benchmarks`
 - `GET /api/v1/data/benchmarks/{symbol}/prices`
 - `GET /api/v1/data/lineage/{dataset}/{record_id}`

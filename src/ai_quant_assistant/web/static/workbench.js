@@ -501,7 +501,7 @@ const explorerColumns = {
   prices: [["trade_date","交易日"],["open","开盘"],["high","最高"],["low","最低"],["close","收盘"],["volume","成交量"],["amount","成交额"],["adjustment","复权"],["quality_status","质量"]],
   benchmarks: [["trade_date","交易日"],["close","收盘"],["quality_status","质量"],["provider_source","数据源"]],
   announcements: [["announcement_date","公告日"],["published_at","可用时间"],["report_period_end","报告期"],["report_type","类型"],["title","标题"],["quality_status","质量"]],
-  financials: [["report_period_end","报告期"],["published_at","可用时间"],["report_type","类型"],["metric_code","指标"],["metric_value","值"],["unit","单位"],["availability_source","可用性依据"],["quality_status","质量"]],
+  financials: [["report_period_end","报告期"],["published_at","可用时间"],["report_type","类型"],["metric_label","指标"],["metric_value","值"],["unit","单位"],["availability_source","可用性依据"],["quality_status","质量"]],
 };
 
 function explorerValue(key, value) {
@@ -550,17 +550,58 @@ function explorerPagination(target, pagination, callback) {
 function renderExplorerTable(payload) {
   const columns = explorerColumns[state.explorerDataset];
   const items = payload.items || [];
-  $("#explorer-table").innerHTML = items.length ? `<table><thead><tr>${columns.map(([,label])=>`<th>${label}</th>`).join("")}<th>证据</th></tr></thead><tbody>${items.map((row)=>`<tr>${columns.map(([key])=>`<td>${key === "quality_status" ? `<span class="quality-pill">${escapeHtml(explorerValue(key,row[key]))}</span>` : escapeHtml(explorerValue(key,row[key]))}</td>`).join("")}<td><button class="lineage-button" type="button" data-record-id="${escapeHtml(row.record_id)}">血缘</button></td></tr>`).join("")}</tbody></table>` : '<p class="empty-state">筛选范围内没有已发布记录；不会以供应商回退数据静默填充。</p>';
+  const hasDetail = ["announcements","financials"].includes(state.explorerDataset);
+  $("#explorer-table").innerHTML = items.length ? `<table><thead><tr>${columns.map(([,label])=>`<th>${label}</th>`).join("")}${hasDetail?"<th>内容</th>":""}<th>证据</th></tr></thead><tbody>${items.map((row)=>`<tr>${columns.map(([key])=>`<td>${key === "quality_status" ? `<span class="quality-pill">${escapeHtml(explorerValue(key,row[key]))}</span>` : escapeHtml(explorerValue(key,row[key]))}</td>`).join("")}${hasDetail?`<td><button class="record-detail-button" type="button" data-detail-id="${escapeHtml(state.explorerDataset==="financials"?row.report_id:row.record_id)}">${state.explorerDataset==="financials"?"查看财报":"查看公告"}</button></td>`:""}<td><button class="lineage-button" type="button" data-record-id="${escapeHtml(row.record_id)}">血缘</button></td></tr>`).join("")}</tbody></table>` : '<p class="empty-state">筛选范围内没有已发布记录；不会以供应商回退数据静默填充。</p>';
   $("#explorer-notice").textContent = payload.point_in_time_notice || `${explorerLabels[state.explorerDataset]}仅展示已经通过质量发布的数据。`;
   $("#explorer-download").href = explorerQuery(payload.pagination.page, "csv");
   renderExplorerChart(items);
   explorerPagination($("#explorer-pages"), payload.pagination, loadExplorerRecords);
   $$(".lineage-button").forEach((button)=>button.addEventListener("click",()=>showLineage(button.dataset.recordId)));
+  $$(".record-detail-button").forEach((button)=>button.addEventListener("click",()=>showRecordDetail(state.explorerDataset,button.dataset.detailId)));
   if (state.explorerDataset === "financials") {
     const select=$("#explorer-metric-code"), current=select.value;
     select.innerHTML='<option value="">全部指标</option>'+(payload.metric_codes||[]).map((code)=>`<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`).join("");
     select.value=current;
   }
+}
+
+function safeExternalUrl(value) {
+  if (!value) return null;
+  try {const url=new URL(value);return ["http:","https:"].includes(url.protocol)?url.href:null;}
+  catch (_) {return null;}
+}
+
+function detailGrid(rows) {
+  return `<div class="record-detail-grid">${rows.map(([label,value])=>`<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value??"—")}</strong></div>`).join("")}</div>`;
+}
+
+function renderAnnouncementDetail(payload) {
+  const item=payload.announcement||{}, document=payload.document||{}, url=safeExternalUrl(document.url);
+  $("#record-detail-eyebrow").textContent="ANNOUNCEMENT DETAIL · POINT-IN-TIME";
+  $("#record-detail-title").textContent=item.title||"公告详情";
+  const reports=payload.related_financial_reports||[];
+  $("#record-detail-content").innerHTML=`<p class="record-detail-lead">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(reportTypeLabels[item.report_type]||item.report_type||"—")}</p>${detailGrid([["报告期",item.report_period_end],["公告日期",item.announcement_date],["实际公开时间",item.published_at],["报告年度",item.report_year],["质量状态",item.quality_status],["供应商",item.provider_source]])}<section class="record-document"><h4>公告原文</h4><p>${escapeHtml(document.notice||"")}</p>${url?`<a class="primary-button record-document-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">打开公告原文 <b>↗</b></a>`:'<span class="quality-pill">仅有本地元数据</span>'}<code>内容摘要：${escapeHtml(document.content_sha256||"未记录")}</code></section><section class="record-detail-section"><h4>对应财务报告</h4>${reports.length?`<div class="record-related-list">${reports.map((report)=>`<button type="button" data-related-report="${escapeHtml(report.report_id)}"><strong>${escapeHtml(reportTypeLabels[report.report_type]||report.report_type)} · ${escapeHtml(report.report_period_end)}</strong><span>${escapeHtml(report.published_at)} · ${formatNumber(report.metric_count)} 项指标</span></button>`).join("")}</div>`:'<p class="empty-state">本地库尚未匹配到同报告期、同类型的财务指标记录。</p>'}</section><p class="explorer-pit-notice">${escapeHtml(payload.point_in_time_notice||"")}</p><details class="record-evidence"><summary>查看数据证据</summary><code>记录 ID：${escapeHtml(item.record_id)}\n服务层：${escapeHtml(item.serving_source)}\n批次：${escapeHtml(item.source_batch_id)}\n原始文件：${escapeHtml(item.raw_path||"未记录")}</code></details>`;
+  $$("[data-related-report]").forEach((button)=>button.addEventListener("click",()=>showRecordDetail("financials",button.dataset.relatedReport)));
+}
+
+function renderFinancialReportDetail(payload) {
+  const report=payload.report||{}, metrics=payload.metrics||[], revisions=payload.revisions||[], announcements=payload.related_announcements||[];
+  $("#record-detail-eyebrow").textContent="FINANCIAL REPORT · IMMUTABLE VERSION";
+  $("#record-detail-title").textContent=`${report.symbol||""} · ${report.name||""} ${reportTypeLabels[report.report_type]||report.report_type||"财报"}`;
+  $("#record-detail-content").innerHTML=`${detailGrid([["报告期",report.report_period_end],["实际公开时间",report.published_at],["可用时间依据",report.availability_source],["指标数量",metrics.length],["质量状态",report.quality_status],["供应商",report.provider_source]])}<section class="record-detail-section"><h4>全部财务指标</h4>${metrics.length?`<div class="table-shell record-metric-table"><table><thead><tr><th>指标</th><th>代码</th><th>数值</th><th>单位</th><th>质量</th></tr></thead><tbody>${metrics.map((metric)=>`<tr><td>${escapeHtml(metric.metric_label)}</td><td><code>${escapeHtml(metric.metric_code)}</code></td><td>${escapeHtml(explorerValue("metric_value",metric.metric_value))}</td><td>${escapeHtml(metric.unit)}</td><td><span class="quality-pill">${escapeHtml(metric.quality_status)}</span></td></tr>`).join("")}</tbody></table></div>`:'<p class="empty-state">该财报版本没有已发布指标，缺失值不会填零。</p>'}</section><section class="record-detail-columns"><div><h4>同报告期版本</h4><div class="record-version-list">${revisions.map((revision)=>`<div class="${revision.current?"current":""}"><strong>${revision.current?"当前查看 · ":""}${escapeHtml(revision.published_at)}</strong><span>${formatNumber(revision.metric_count)} 项 · ${escapeHtml(revision.availability_source)}</span></div>`).join("")}</div></div><div><h4>对应定期公告</h4>${announcements.length?`<div class="record-related-list">${announcements.map((item)=>`<button type="button" data-related-announcement="${escapeHtml(item.record_id)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.published_at)}</span></button>`).join("")}</div>`:'<p class="empty-state">本地库尚未匹配到同报告期公告。</p>'}</div></section><p class="explorer-pit-notice">${escapeHtml(payload.point_in_time_notice||"")}</p><details class="record-evidence"><summary>查看数据证据</summary><code>报告 ID：${escapeHtml(report.record_id)}\n服务层：${escapeHtml(report.serving_source)}\n批次：${escapeHtml(report.source_batch_id)}\n原始文件：${escapeHtml(report.raw_path||"未记录")}\n原始摘要：${escapeHtml(report.raw_sha256||"未记录")}</code></details>`;
+  $$("[data-related-announcement]").forEach((button)=>button.addEventListener("click",()=>showRecordDetail("announcements",button.dataset.relatedAnnouncement)));
+}
+
+async function showRecordDetail(dataset, recordId) {
+  const dialog=$("#record-detail-dialog");
+  if(!dialog.open) dialog.showModal();
+  $("#record-detail-title").textContent="正在读取已发布记录…";
+  $("#record-detail-content").innerHTML='<p class="empty-state">正在聚合元数据、指标、版本和对应公告…</p>';
+  try {
+    const path=dataset==="announcements"?`/api/v1/data/announcements/${encodeURIComponent(recordId)}`:`/api/v1/data/financial-reports/${encodeURIComponent(recordId)}`;
+    const payload=await requestJson(path);
+    if(dataset==="announcements") renderAnnouncementDetail(payload); else renderFinancialReportDetail(payload);
+  } catch(error){$("#record-detail-content").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
 }
 
 async function loadExplorerRecords(page=1) {

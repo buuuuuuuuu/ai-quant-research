@@ -16,6 +16,19 @@ DATASETS = {
     "financials": "published_financial_metric",
 }
 
+DATE_FIELDS = {
+    "announcement_date",
+    "delisting_date",
+    "end_date",
+    "industry_effective_from",
+    "listing_date",
+    "price_end",
+    "price_start",
+    "report_period_end",
+    "start_date",
+    "trade_date",
+}
+
 
 class DataExplorer:
     """Read-only, paginated access to published research data and its lineage."""
@@ -30,17 +43,19 @@ class DataExplorer:
         return page, page_size, (page - 1) * page_size
 
     @staticmethod
-    def _value(value: Any) -> Any:
+    def _value(value: Any, field: str | None = None) -> Any:
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return None
         if isinstance(value, (pd.Timestamp, datetime, date)):
+            if field in DATE_FIELDS:
+                return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
             return value.isoformat()
         return value
 
     @classmethod
     def _records(cls, frame: pd.DataFrame) -> list[dict[str, Any]]:
         return [
-            {str(key): cls._value(value) for key, value in row.items()}
+            {str(key): cls._value(value, str(key)) for key, value in row.items()}
             for row in frame.to_dict(orient="records")
         ]
 
@@ -83,8 +98,8 @@ class DataExplorer:
                         "dataset": key,
                         "rows": int(rows),
                         "batches": int(batches),
-                        "start_date": self._value(start),
-                        "end_date": self._value(end),
+                        "start_date": self._value(start, "start_date"),
+                        "end_date": self._value(end, "end_date"),
                     }
                 )
             failed_checks = int(
@@ -291,8 +306,8 @@ class DataExplorer:
             ).fetchone()
         result = self._result(self._records(frame), total, page, page_size)
         result["summary"] = {
-            "start_date": self._value(summary[0]),
-            "end_date": self._value(summary[1]),
+            "start_date": self._value(summary[0], "start_date"),
+            "end_date": self._value(summary[1], "end_date"),
             "rows": int(summary[2]),
             "warning_rows": int(summary[3] or 0),
             "adjustment": adjustment,

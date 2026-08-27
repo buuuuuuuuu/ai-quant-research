@@ -39,10 +39,20 @@ class Settings:
     openai_model: str = "gpt-5-mini"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: float = 45.0
+    document_max_bytes: int = 52_428_800
+    document_max_pages: int = 500
+    document_chunk_chars: int = 1_200
+    document_ocr_enabled: bool = True
+    document_ocr_language: str = "chi_sim+eng"
+    document_answerer: str = "rules"
 
     @property
     def resolved_backup_dir(self) -> Path:
         return self.backup_dir or self.data_dir / "backups"
+
+    @property
+    def document_dir(self) -> Path:
+        return self.data_dir / "documents"
 
     @staticmethod
     def _project_root() -> Path:
@@ -168,6 +178,15 @@ class Settings:
             .strip()
             .rstrip("/"),
             openai_timeout_seconds=float(os.getenv("AI_QUANT_OPENAI_TIMEOUT_SECONDS", "45")),
+            document_max_bytes=int(os.getenv("AI_QUANT_DOCUMENT_MAX_BYTES", "52428800")),
+            document_max_pages=int(os.getenv("AI_QUANT_DOCUMENT_MAX_PAGES", "500")),
+            document_chunk_chars=int(os.getenv("AI_QUANT_DOCUMENT_CHUNK_CHARS", "1200")),
+            document_ocr_enabled=os.getenv("AI_QUANT_DOCUMENT_OCR_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"},
+            document_ocr_language=os.getenv(
+                "AI_QUANT_DOCUMENT_OCR_LANGUAGE", "chi_sim+eng"
+            ).strip(),
+            document_answerer=os.getenv("AI_QUANT_DOCUMENT_ANSWERER", "rules").strip().lower(),
         )
 
     def ensure_directories(self) -> None:
@@ -176,3 +195,4 @@ class Settings:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+        self.document_dir.mkdir(parents=True, exist_ok=True)

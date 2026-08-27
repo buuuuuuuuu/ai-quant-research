@@ -32,6 +32,8 @@ from ai_quant_assistant.api.schemas import (
     CopilotConfirmRequest,
     CopilotConversationRequest,
     CopilotMessageRequest,
+    DocumentCompareRequest,
+    DocumentQuestionRequest,
     FactorBacktestRequest,
     FactorLabRequest,
     IncrementalSyncRequest,
@@ -41,6 +43,7 @@ from ai_quant_assistant.api.schemas import (
     SaveWatchlistRequest,
 )
 from ai_quant_assistant.config import Settings
+from ai_quant_assistant.documents import DocumentIntelligenceService, DocumentTaskManager
 from ai_quant_assistant.errors import QuantResearchError
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.base import MarketDataProvider
@@ -154,6 +157,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     copilot_repository = CopilotRepository(database)
     data_explorer = DataExplorer(database)
     screener = PointInTimeScreener(database)
+    document_service = DocumentIntelligenceService(database, resolved_settings)
+    document_tasks = DocumentTaskManager(document_service, task_repository)
     copilot_service = CopilotService(
         repository=copilot_repository,
         planner=create_planner(resolved_settings),
@@ -179,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         factor_lab_manager.shutdown()
         copilot_tasks.shutdown()
         operation_manager.shutdown()
+        document_tasks.shutdown()
 
     app = FastAPI(
         title="AI 量化研究助手 API",
@@ -204,6 +210,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.copilot_tasks = copilot_tasks
     app.state.data_explorer = data_explorer
     app.state.screener = screener
+    app.state.document_service = document_service
+    app.state.document_tasks = document_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -336,6 +344,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "screens": "/api/v1/screens/runs",
             "copilot": "/api/v1/copilot/conversations",
             "data_explorer": "/api/v1/data/datasets",
+            "documents": "/api/v1/documents/announcements/{announcement_id}",
         }
 
     @app.get("/health")
@@ -538,6 +547,112 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="data record not found") from exc
+
+    @app.post(
+        "/api/v1/documents/announcements/{announcement_id}/ingest", status_code=202
+    )
+    def ingest_announcement_document(announcement_id: str) -> dict[str, Any]:
+        try:
+            document_service.list_announcement_documents(announcement_id)
+            task = document_tasks.submit(announcement_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="announcement not found") from exc
+        audit_repository.record(
+            "announcement_document_ingest_requested",
+            actor=resolved_settings.web_username,
+            object_type="announcement",
+            object_id=announcement_id,
+            details={"task_id": task["task_id"]},
+        )
+        return task
+
+    @app.get("/api/v1/documents/announcements/{announcement_id}")
+    def list_announcement_documents(announcement_id: str) -> dict[str, Any]:
+        try:
+            return document_service.list_announcement_documents(announcement_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="announcement not found") from exc
+
+    @app.get("/api/v1/documents/securities/{symbol}")
+    def list_security_documents(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+        if len(symbol) != 6 or not symbol.isdigit():
+            raise HTTPException(status_code=422, detail="symbol must be a six-digit code")
+        return document_service.list_security_documents(symbol, limit=limit)
+
+    @app.get("/api/v1/documents/{document_id}")
+    def get_document(document_id: str) -> dict[str, Any]:
+        try:
+            return document_service.get_document(document_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+
+    @app.get("/api/v1/documents/{document_id}/pages/{page_number}")
+    def get_document_page(document_id: str, page_number: int) -> dict[str, Any]:
+        try:
+            return document_service.page(document_id, page_number)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document page not found") from exc
+
+    @app.get("/api/v1/documents/{document_id}/search")
+    def search_document(document_id: str, q: str, limit: int = 20) -> dict[str, Any]:
+        try:
+            return document_service.search([document_id], q, limit=limit)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/documents/{document_id}/file", response_class=FileResponse)
+    def download_document(document_id: str) -> FileResponse:
+        try:
+            path = document_service.safe_path(document_id)
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail="document file not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{document_id}.pdf"',
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "sandbox",
+            },
+        )
+
+    @app.post("/api/v1/documents/questions", status_code=201)
+    def ask_documents(request: DocumentQuestionRequest) -> dict[str, Any]:
+        try:
+            answer = document_service.ask(request.document_ids, request.question)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "document_question_answered",
+            actor=resolved_settings.web_username,
+            object_type="document_question",
+            object_id=answer["question_id"],
+            outcome="warning" if answer["status"] != "answered" else "success",
+            details={"document_ids": request.document_ids, "status": answer["status"]},
+        )
+        return answer
+
+    @app.get("/api/v1/documents/questions/{question_id}")
+    def get_document_question(question_id: str) -> dict[str, Any]:
+        try:
+            return document_service.get_question(question_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document question not found") from exc
+
+    @app.post("/api/v1/documents/compare", status_code=201)
+    def compare_documents(request: DocumentCompareRequest) -> dict[str, Any]:
+        try:
+            return document_service.compare(request.document_ids, request.focus)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/v1/copilot/tools")
     def copilot_tools() -> list[dict[str, object]]:

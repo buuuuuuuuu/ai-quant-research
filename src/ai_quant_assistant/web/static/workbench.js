@@ -16,7 +16,7 @@ async function requestJson(url, options = {}) {
 }
 
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
-const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究" };
+const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究", document_ingest: "公告文档解析" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
 const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", point_in_time_screen_succeeded: "完成条件选股", screen_watchlist_saved: "保存候选股票池", alert_acknowledged: "确认运行告警" };
 
@@ -582,6 +582,61 @@ function renderAnnouncementDetail(payload) {
   const reports=payload.related_financial_reports||[];
   $("#record-detail-content").innerHTML=`<p class="record-detail-lead">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(reportTypeLabels[item.report_type]||item.report_type||"—")}</p>${detailGrid([["报告期",item.report_period_end],["公告日期",item.announcement_date],["实际公开时间",item.published_at],["报告年度",item.report_year],["质量状态",item.quality_status],["供应商",item.provider_source]])}<section class="record-document"><h4>公告原文</h4><p>${escapeHtml(document.notice||"")}</p>${url?`<a class="primary-button record-document-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">打开公告原文 <b>↗</b></a>`:'<span class="quality-pill">仅有本地元数据</span>'}<code>内容摘要：${escapeHtml(document.content_sha256||"未记录")}</code></section><section class="record-detail-section"><h4>对应财务报告</h4>${reports.length?`<div class="record-related-list">${reports.map((report)=>`<button type="button" data-related-report="${escapeHtml(report.report_id)}"><strong>${escapeHtml(reportTypeLabels[report.report_type]||report.report_type)} · ${escapeHtml(report.report_period_end)}</strong><span>${escapeHtml(report.published_at)} · ${formatNumber(report.metric_count)} 项指标</span></button>`).join("")}</div>`:'<p class="empty-state">本地库尚未匹配到同报告期、同类型的财务指标记录。</p>'}</section><p class="explorer-pit-notice">${escapeHtml(payload.point_in_time_notice||"")}</p><details class="record-evidence"><summary>查看数据证据</summary><code>记录 ID：${escapeHtml(item.record_id)}\n服务层：${escapeHtml(item.serving_source)}\n批次：${escapeHtml(item.source_batch_id)}\n原始文件：${escapeHtml(item.raw_path||"未记录")}</code></details>`;
   $$("[data-related-report]").forEach((button)=>button.addEventListener("click",()=>showRecordDetail("financials",button.dataset.relatedReport)));
+  const intelligence=document.createElement("section");
+  intelligence.id="document-intelligence";
+  intelligence.className="record-detail-section document-intelligence";
+  intelligence.innerHTML='<h4>文档智能</h4><p class="empty-state">正在检查本地归档、正文和版本…</p>';
+  $("#record-detail-content").appendChild(intelligence);
+  loadDocumentIntelligence(item.record_id,item.symbol);
+}
+
+function renderDocumentAnswer(answer) {
+  const citations=answer.citations||[];
+  $("#document-answer").innerHTML=`<div class="document-answer-status ${answer.status==='answered'?'positive':'negative'}">${escapeHtml(answer.status)}</div><p>${escapeHtml(answer.answer||"没有生成答案")}</p>${citations.length?`<ol>${citations.map((item)=>`<li><button type="button" data-citation-document="${escapeHtml(item.document_id)}" data-citation-page="${escapeHtml(item.page_number)}">第 ${escapeHtml(item.page_number)} 页</button><blockquote>${escapeHtml(item.quote)}</blockquote><small>${escapeHtml(item.claim)}</small></li>`).join("")}</ol>`:""}${(answer.limitations||[]).map((item)=>`<small class="document-limitation">${escapeHtml(item)}</small>`).join("")}`;
+  $$("[data-citation-page]").forEach((button)=>button.addEventListener("click",()=>loadDocumentPage(button.dataset.citationDocument,Number(button.dataset.citationPage))));
+}
+
+async function loadDocumentPage(documentId,pageNumber) {
+  const target=$("#document-page-reader");
+  target.innerHTML='<p class="empty-state">正在读取页码正文…</p>';
+  try {
+    const page=await requestJson(`/api/v1/documents/${encodeURIComponent(documentId)}/pages/${pageNumber}`);
+    target.innerHTML=`<div class="document-page-head"><strong>第 ${escapeHtml(page.page_number)} 页</strong><span>${escapeHtml(page.extraction_method)} · ${formatNumber(page.char_count)} 字符</span></div><pre>${escapeHtml(page.text||"本页没有可解析正文")}</pre>`;
+  } catch(error){target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
+async function renderDocumentWorkspace(announcementId,symbol,documents) {
+  const target=$("#document-intelligence"), ready=documents.filter((item)=>item.status==="ready");
+  if(!documents.length){
+    target.innerHTML='<h4>文档智能</h4><p>尚未在本地归档此公告 PDF。归档任务会校验文件、保存版本、解析页码并在必要时 OCR。</p><button id="document-ingest" class="primary-button" type="button">归档并解析 <b>→</b></button><p id="document-task-status" class="empty-state"></p>';
+    $("#document-ingest").addEventListener("click",()=>ingestDocument(announcementId,symbol));
+    return;
+  }
+  const selected=(ready[0]||documents[0]).document_id;
+  const comparable=await requestJson(`/api/v1/documents/securities/${encodeURIComponent(symbol)}`).catch(()=>[]);
+  target.innerHTML=`<div class="document-intelligence-head"><div><h4>文档智能</h4><p>本地 PDF、正文页码、全文检索及逐字引用问答</p></div><button id="document-reingest" class="secondary-button" type="button">检查新版本</button></div><label class="field"><span>本地版本</span><select id="document-version">${documents.map((item)=>`<option value="${escapeHtml(item.document_id)}">v${escapeHtml(item.version_no)} · ${escapeHtml(item.status)} · ${escapeHtml(item.extraction_method)} · ${formatNumber(item.page_count)} 页</option>`).join("")}</select></label><div id="document-version-meta"></div>${ready.length?`<div class="document-tool-grid"><form id="document-search-form"><label class="field"><span>全文搜索</span><input id="document-search-query" maxlength="200" placeholder="例如：营业收入、现金流、风险" required></label><button class="secondary-button" type="submit">搜索正文</button></form><form id="document-question-form"><label class="field"><span>引用式问答</span><textarea id="document-question" maxlength="2000" required placeholder="这份财报披露了哪些主要经营变化？"></textarea></label><button class="primary-button" type="submit">基于原文回答 <b>→</b></button></form></div><div id="document-search-results"></div><div id="document-answer"></div><div id="document-page-reader" class="document-page-reader"><p class="empty-state">点击搜索结果或答案引文查看对应页正文。</p></div><details class="document-compare"><summary>多期与修订版本比较</summary><div class="document-compare-list">${comparable.map((item)=>`<label><input type="checkbox" value="${escapeHtml(item.document_id)}" ${item.document_id===selected?'checked':''}><span>${escapeHtml(item.report_period_end)} · ${escapeHtml(reportTypeLabels[item.report_type]||item.report_type)} · v${escapeHtml(item.version_no)}</span></label>`).join("")}</div><label class="field"><span>比较重点</span><input id="document-compare-focus" maxlength="500" value="比较主要财务表现、经营变化、风险和修订差异"></label><button id="document-compare-run" class="secondary-button" type="button">比较所选文档</button></details>`:'<p class="empty-state">已有归档版本正在处理或处理失败；可查看状态并重新检查。</p>'}`;
+  const selector=$("#document-version"); selector.value=selected;
+  function showVersion(){const item=documents.find((row)=>row.document_id===selector.value)||documents[0];$("#document-version-meta").innerHTML=`${detailGrid([["状态",item.status],["解析",item.extraction_method],["页数",item.page_count],["大小",`${(Number(item.size_bytes)/1024/1024).toFixed(2)} MB`],["SHA-256",item.sha256],["归档时间",item.downloaded_at]])}<a class="secondary-button" target="_blank" rel="noopener" href="${escapeHtml(item.file_url)}">打开本地 PDF ↗</a>${item.error?`<p class="negative">${escapeHtml(item.error)}</p>`:""}`;}
+  selector.addEventListener("change",showVersion); showVersion();
+  $("#document-reingest").addEventListener("click",()=>ingestDocument(announcementId,symbol));
+  if(!ready.length) return;
+  $("#document-search-form").addEventListener("submit",async(event)=>{event.preventDefault();const documentId=selector.value,query=$("#document-search-query").value,resultTarget=$("#document-search-results");resultTarget.innerHTML='<p class="empty-state">正在搜索…</p>';try{const result=await requestJson(`/api/v1/documents/${encodeURIComponent(documentId)}/search?q=${encodeURIComponent(query)}`);resultTarget.innerHTML=result.items.length?`<h5>搜索结果</h5>${result.items.map((item)=>`<button class="document-search-hit" type="button" data-search-page="${escapeHtml(item.page_number)}"><strong>第 ${escapeHtml(item.page_number)} 页 · 相关度 ${escapeHtml(item.score)}</strong><span>${escapeHtml(item.text)}</span></button>`).join("")}`:'<p class="empty-state">没有找到匹配正文。</p>';$$("[data-search-page]").forEach((button)=>button.addEventListener("click",()=>loadDocumentPage(documentId,Number(button.dataset.searchPage))));}catch(error){resultTarget.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}});
+  $("#document-question-form").addEventListener("submit",async(event)=>{event.preventDefault();const answerTarget=$("#document-answer");answerTarget.innerHTML='<p class="empty-state">正在检索证据并校验引用…</p>';try{renderDocumentAnswer(await requestJson("/api/v1/documents/questions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({document_ids:[selector.value],question:$("#document-question").value})}));}catch(error){answerTarget.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}});
+  $("#document-compare-run").addEventListener("click",async()=>{const ids=$$(".document-compare-list input:checked").map((item)=>item.value),answerTarget=$("#document-answer");if(ids.length<2){answerTarget.innerHTML='<p class="negative">至少选择两个已解析文档。</p>';return;}answerTarget.innerHTML='<p class="empty-state">正在比较多个期间或修订版本…</p>';try{renderDocumentAnswer(await requestJson("/api/v1/documents/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({document_ids:ids,focus:$("#document-compare-focus").value})}));}catch(error){answerTarget.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}});
+}
+
+async function loadDocumentIntelligence(announcementId,symbol) {
+  try {const payload=await requestJson(`/api/v1/documents/announcements/${encodeURIComponent(announcementId)}`);await renderDocumentWorkspace(announcementId,symbol,payload.documents||[]);}
+  catch(error){$("#document-intelligence").innerHTML=`<h4>文档智能</h4><p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
+async function ingestDocument(announcementId,symbol) {
+  const target=$("#document-task-status")||$("#document-intelligence");
+  try {
+    const task=await requestJson(`/api/v1/documents/announcements/${encodeURIComponent(announcementId)}/ingest`,{method:"POST"});
+    for(;;){const current=await requestJson(`/api/v1/ops/tasks/${encodeURIComponent(task.task_id)}`);target.textContent=`${current.message} · ${current.progress}%`;if(["succeeded","failed"].includes(current.status)){if(current.status==="failed") throw new Error(current.error||"文档任务失败");break;}await new Promise((resolve)=>setTimeout(resolve,1000));}
+    await loadDocumentIntelligence(announcementId,symbol); await loadOperations();
+  } catch(error){target.innerHTML=`<span class="negative">${escapeHtml(error.message)}</span>`;}
 }
 
 function renderFinancialReportDetail(payload) {

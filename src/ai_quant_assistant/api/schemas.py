@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any, Literal
 
@@ -422,3 +423,33 @@ class PointInTimeScreenRequest(BaseModel):
 
 class SaveWatchlistRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+
+
+class DocumentQuestionRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1, max_length=6)
+    question: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("document_ids")
+    @classmethod
+    def validate_document_ids(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if len(normalized) != len(values):
+            raise ValueError("document_ids must be non-empty and unique")
+        if any(not re.fullmatch(r"doc-[0-9a-f]{32}", value) for value in normalized):
+            raise ValueError("document_ids contain an invalid identifier")
+        return normalized
+
+
+class DocumentCompareRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=2, max_length=6)
+    focus: str = Field(default="比较主要财务表现、经营变化、风险和修订差异", min_length=1, max_length=500)
+
+    @field_validator("document_ids")
+    @classmethod
+    def validate_document_ids(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if len(normalized) != len(values):
+            raise ValueError("document_ids must be non-empty and unique")
+        if any(not re.fullmatch(r"doc-[0-9a-f]{32}", value) for value in normalized):
+            raise ValueError("document_ids contain an invalid identifier")
+        return normalized

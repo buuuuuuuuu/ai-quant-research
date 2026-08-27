@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null };
+const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1 };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -111,8 +111,8 @@ async function loadOverview() {
   try {
     const overview = await requestJson("/api/v1/data/overview");
     const relations = overview.database.relations || {};
-    $("#metric-securities").textContent = formatNumber(relations.security_master);
     $("#metric-prices").textContent = formatNumber(relations.published_daily_bar);
+    $("#metric-benchmarks").textContent = formatNumber(relations.published_benchmark_daily_bar);
     $("#metric-financials").textContent = formatNumber(relations.published_financial_metric);
     $("#metric-announcements").textContent = formatNumber(relations.published_announcement);
     $("#database-path").textContent = overview.database.database_path || "尚未初始化";
@@ -410,6 +410,128 @@ async function executeCopilotPlan() {
   } catch (exc) {$("#copilot-error").textContent = exc.message; $("#copilot-error").hidden = false;}
 }
 
+const explorerLabels = {prices:"股票行情",benchmarks:"指数基准",announcements:"定期公告",financials:"财务指标"};
+const reportTypeLabels = {q1:"一季报",interim:"中报",q3:"三季报",annual:"年报"};
+const explorerColumns = {
+  prices: [["trade_date","交易日"],["open","开盘"],["high","最高"],["low","最低"],["close","收盘"],["volume","成交量"],["amount","成交额"],["adjustment","复权"],["quality_status","质量"]],
+  benchmarks: [["trade_date","交易日"],["close","收盘"],["quality_status","质量"],["provider_source","数据源"]],
+  announcements: [["announcement_date","公告日"],["published_at","可用时间"],["report_period_end","报告期"],["report_type","类型"],["title","标题"],["quality_status","质量"]],
+  financials: [["report_period_end","报告期"],["published_at","可用时间"],["report_type","类型"],["metric_code","指标"],["metric_value","值"],["unit","单位"],["availability_source","可用性依据"],["quality_status","质量"]],
+};
+
+function explorerValue(key, value) {
+  if (value == null || value === "") return "—";
+  if (key === "report_type") return reportTypeLabels[value] || value;
+  if (["open","high","low","close","metric_value"].includes(key)) return Number(value).toLocaleString("zh-CN", {maximumFractionDigits:4});
+  if (["volume","amount"].includes(key)) return formatNumber(value);
+  return String(value).replace("T00:00:00", "");
+}
+
+function explorerQuery(page = state.explorerPage, output = "json") {
+  const symbol = encodeURIComponent(state.explorerEntity?.symbol || "");
+  let path;
+  if (state.explorerDataset === "prices") path = `/api/v1/data/securities/${symbol}/prices`;
+  else if (state.explorerDataset === "benchmarks") path = `/api/v1/data/benchmarks/${symbol}/prices`;
+  else if (state.explorerDataset === "announcements") path = `/api/v1/data/securities/${symbol}/announcements`;
+  else path = `/api/v1/data/securities/${symbol}/financial-metrics`;
+  const query = new URLSearchParams({page:String(page), page_size:"50", output});
+  if ($("#explorer-start").value) query.set("start_date", $("#explorer-start").value);
+  if ($("#explorer-end").value) query.set("end_date", $("#explorer-end").value);
+  if (state.explorerDataset === "prices") query.set("adjustment", $("#explorer-adjustment").value);
+  if (state.explorerDataset === "announcements" && $("#explorer-report-type").value) query.set("report_type", $("#explorer-report-type").value);
+  if (state.explorerDataset === "financials" && $("#explorer-metric-code").value) query.set("metric_code", $("#explorer-metric-code").value);
+  return `${path}?${query}`;
+}
+
+function renderExplorerChart(items) {
+  const target = $("#explorer-chart");
+  if (!items.length || !["prices","benchmarks","financials"].includes(state.explorerDataset)) {target.innerHTML = ""; return;}
+  const dateKey = state.explorerDataset === "financials" ? "report_period_end" : "trade_date";
+  const valueKey = state.explorerDataset === "financials" ? "metric_value" : "close";
+  const ordered = [...items].filter((item) => Number.isFinite(Number(item[valueKey]))).sort((a,b) => String(a[dateKey]).localeCompare(String(b[dateKey])));
+  if (ordered.length < 2) {target.innerHTML = ""; return;}
+  const width=900,height=190,left=52,right=16,top=12,bottom=28, values=ordered.map((row)=>Number(row[valueKey]));
+  let min=Math.min(...values),max=Math.max(...values); if(min===max){min-=1;max+=1;}
+  const x=(i)=>left+i*(width-left-right)/Math.max(ordered.length-1,1), y=(v)=>top+(max-v)*(height-top-bottom)/(max-min);
+  const points=ordered.map((row,i)=>`${x(i).toFixed(1)},${y(Number(row[valueKey])).toFixed(1)}`).join(" ");
+  target.innerHTML=`<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="当前页数据趋势"><line class="chart-grid" x1="${left}" y1="${y(max)}" x2="${width-right}" y2="${y(max)}"/><line class="chart-grid" x1="${left}" y1="${y(min)}" x2="${width-right}" y2="${y(min)}"/><polyline class="strategy-line" points="${points}"/><text class="chart-label" x="0" y="${y(max)+4}">${max.toFixed(2)}</text><text class="chart-label" x="0" y="${y(min)+4}">${min.toFixed(2)}</text><text class="chart-label" x="${left}" y="${height-4}">${escapeHtml(ordered[0][dateKey])}</text><text class="chart-label" text-anchor="end" x="${width-right}" y="${height-4}">${escapeHtml(ordered.at(-1)[dateKey])}</text></svg>`;
+}
+
+function explorerPagination(target, pagination, callback) {
+  target.innerHTML = `<button type="button" data-direction="prev" ${pagination.page<=1?"disabled":""}>上一页</button><span>第 ${pagination.page} / ${pagination.pages} 页 · 共 ${formatNumber(pagination.total)} 条</span><button type="button" data-direction="next" ${pagination.page>=pagination.pages?"disabled":""}>下一页</button>`;
+  target.querySelectorAll("button").forEach((button)=>button.addEventListener("click",()=>callback(button.dataset.direction === "prev" ? pagination.page-1 : pagination.page+1)));
+}
+
+function renderExplorerTable(payload) {
+  const columns = explorerColumns[state.explorerDataset];
+  const items = payload.items || [];
+  $("#explorer-table").innerHTML = items.length ? `<table><thead><tr>${columns.map(([,label])=>`<th>${label}</th>`).join("")}<th>证据</th></tr></thead><tbody>${items.map((row)=>`<tr>${columns.map(([key])=>`<td>${key === "quality_status" ? `<span class="quality-pill">${escapeHtml(explorerValue(key,row[key]))}</span>` : escapeHtml(explorerValue(key,row[key]))}</td>`).join("")}<td><button class="lineage-button" type="button" data-record-id="${escapeHtml(row.record_id)}">血缘</button></td></tr>`).join("")}</tbody></table>` : '<p class="empty-state">筛选范围内没有已发布记录；不会以供应商回退数据静默填充。</p>';
+  $("#explorer-notice").textContent = payload.point_in_time_notice || `${explorerLabels[state.explorerDataset]}仅展示已经通过质量发布的数据。`;
+  $("#explorer-download").href = explorerQuery(payload.pagination.page, "csv");
+  renderExplorerChart(items);
+  explorerPagination($("#explorer-pages"), payload.pagination, loadExplorerRecords);
+  $$(".lineage-button").forEach((button)=>button.addEventListener("click",()=>showLineage(button.dataset.recordId)));
+  if (state.explorerDataset === "financials") {
+    const select=$("#explorer-metric-code"), current=select.value;
+    select.innerHTML='<option value="">全部指标</option>'+(payload.metric_codes||[]).map((code)=>`<option value="${escapeHtml(code)}">${escapeHtml(code)}</option>`).join("");
+    select.value=current;
+  }
+}
+
+async function loadExplorerRecords(page=1) {
+  if (!state.explorerEntity) return;
+  state.explorerPage=page; $("#explorer-table").innerHTML='<p class="empty-state">正在读取已发布记录…</p>';
+  try {renderExplorerTable(await requestJson(explorerQuery(page)));}
+  catch(error){$("#explorer-table").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
+function renderSecurityIdentity(item) {
+  const coverage=(item.price_coverage||[]).map((row)=>`${row.adjustment}: ${row.start_date||"—"} → ${row.end_date||"—"} · ${formatNumber(row.rows)} 行${row.missing_trading_days==null?"":` · 缺 ${formatNumber(row.missing_trading_days)} 日`}`).join("；");
+  $("#explorer-identity").innerHTML=`<p class="eyebrow">SECURITY DETAIL</p><h3>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</h3><p class="muted">${escapeHtml(item.exchange)} · ${escapeHtml(item.status)}${item.industry_name?` · ${escapeHtml(item.industry_name)}`:" · 行业缺失"}</p><div class="explorer-identity-grid"><div><span>上市 / 退市</span><strong>${escapeHtml(item.list_date||"—")} / ${escapeHtml(item.delist_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber((item.price_coverage||[]).reduce((sum,row)=>sum+Number(row.rows||0),0))} 行</strong></div><div><span>定期公告</span><strong>${formatNumber(item.announcement_count)} 条</strong></div><div><span>财务报告 / 指标</span><strong>${formatNumber(item.report_count)} / ${formatNumber(item.metric_count)}</strong></div><div><span>未通过质量检查</span><strong class="${item.failed_quality_checks?"negative":"positive"}">${formatNumber(item.failed_quality_checks)}</strong></div></div><p class="explorer-coverage-note">${escapeHtml(coverage||"暂无行情覆盖")}</p><p class="explorer-pit-notice">${escapeHtml(item.point_in_time_notice||"")}</p>`;
+}
+
+async function selectExplorerEntity(item) {
+  state.explorerEntity=item; state.explorerPage=1;
+  $$(".explorer-entity").forEach((button)=>button.classList.toggle("active",button.dataset.symbol===item.symbol));
+  if (state.explorerDataset === "benchmarks") $("#explorer-identity").innerHTML=`<p class="eyebrow">BENCHMARK DETAIL</p><h3>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</h3><div class="explorer-identity-grid"><div><span>覆盖日期</span><strong>${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber(item.price_rows)} 行</strong></div><div><span>同步批次</span><strong>${formatNumber(item.batches)}</strong></div><div><span>供应商</span><strong>${escapeHtml(item.provider_source||"—")}</strong></div></div>`;
+  else renderSecurityIdentity(await requestJson(`/api/v1/data/securities/${encodeURIComponent(item.symbol)}`));
+  await loadExplorerRecords(1);
+}
+
+async function loadExplorerEntities(page=1) {
+  state.explorerEntityPage=page; state.explorerEntity=null;
+  const target=$("#explorer-entity-list"); target.innerHTML='<p class="empty-state">正在读取可用对象…</p>';
+  try {
+    const query=new URLSearchParams({page:String(page),page_size:"30"});
+    let url="/api/v1/data/benchmarks";
+    if(state.explorerDataset!=="benchmarks"){query.set("dataset",state.explorerDataset);query.set("query",$("#explorer-search").value.trim());url="/api/v1/data/securities";}
+    const payload=await requestJson(`${url}?${query}`), items=payload.items||[];
+    target.innerHTML=items.length?items.map((item)=>`<button class="explorer-entity" type="button" data-symbol="${escapeHtml(item.symbol)}"><strong>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</strong><span>${state.explorerDataset==="benchmarks"?`${formatNumber(item.price_rows)} 行 · ${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}`:`行情 ${formatNumber(item.price_rows)} · 公告 ${formatNumber(item.announcement_count)} · 财报 ${formatNumber(item.report_count)}`}</span></button>`).join(""):'<p class="empty-state">没有匹配的已发布数据。</p>';
+    target.querySelectorAll("button").forEach((button)=>button.addEventListener("click",()=>selectExplorerEntity(items.find((item)=>item.symbol===button.dataset.symbol))));
+    explorerPagination($("#explorer-entity-pages"),payload.pagination,loadExplorerEntities);
+    if(items.length) await selectExplorerEntity(items[0]);
+  } catch(error){target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
+async function openExplorer(dataset="prices") {
+  state.explorerDataset=dataset; state.explorerPage=1;
+  $("#data-explorer").hidden=false;
+  $$("[data-explorer-dataset]").forEach((button)=>button.classList.toggle("active",button.dataset.explorerDataset===dataset && button.closest(".explorer-tabs")));
+  $("#explorer-adjustment-field").hidden=dataset!=="prices";
+  $("#explorer-report-field").hidden=dataset!=="announcements";
+  $("#explorer-metric-field").hidden=dataset!=="financials";
+  $("#explorer-search").disabled=dataset==="benchmarks";
+  $("#explorer-record-title").textContent=`${explorerLabels[dataset]}记录`;
+  await loadExplorerEntities(1);
+  $("#data-explorer").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+async function showLineage(recordId) {
+  const dialog=$("#lineage-dialog"); dialog.showModal(); $("#lineage-content").innerHTML='<p class="empty-state">正在读取记录证据…</p>';
+  try {const payload=await requestJson(`/api/v1/data/lineage/${encodeURIComponent(state.explorerDataset)}/${encodeURIComponent(recordId)}`), lineage=payload.lineage||{}; $("#lineage-content").innerHTML=`<div class="lineage-grid"><div><span>记录 ID</span><code>${escapeHtml(recordId)}</code></div><div><span>服务层来源</span><code>${escapeHtml(lineage.serving_source||"—")}</code></div><div><span>供应商来源</span><code>${escapeHtml(lineage.provider_source||"—")}</code></div><div><span>同步批次</span><code>${escapeHtml(lineage.source_batch_id||"—")}</code></div><div><span>原始文件</span><code>${escapeHtml(lineage.raw_path||"未记录")}</code></div><div><span>质量 / 发布时间</span><code>${escapeHtml(lineage.quality_status||"—")} · ${escapeHtml(lineage.published_at||"—")}</code></div></div>`;}
+  catch(error){$("#lineage-content").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+}
+
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#copilot-form").addEventListener("submit", submitCopilotQuestion);
 $("#copilot-new").addEventListener("click", createCopilotConversation);
@@ -424,5 +546,11 @@ $("#refresh-operations").addEventListener("click", loadOperations);
 $("#run-health-check").addEventListener("click", checkOperations);
 $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
+$$("[data-explorer-dataset]").forEach((button) => button.addEventListener("click", () => openExplorer(button.dataset.explorerDataset)));
+$("#open-data-explorer").addEventListener("click", (event) => {event.preventDefault(); openExplorer(state.explorerDataset);});
+$("#close-data-explorer").addEventListener("click", () => {$("#data-explorer").hidden = true; $("#overview-title").scrollIntoView({behavior:"smooth"});});
+$("#explorer-filters").addEventListener("submit", (event) => {event.preventDefault(); loadExplorerRecords(1);});
+let explorerSearchTimer;
+$("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
 loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true);

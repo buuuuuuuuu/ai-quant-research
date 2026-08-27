@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 from test_factor_backtest import _database

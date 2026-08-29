@@ -34,6 +34,10 @@ MAX_QUESTION_CHARS = 2_000
 MAX_SEARCH_QUERY_CHARS = 200
 CNINFO_DETAIL_PATH = "/new/disclosure/detail"
 CNINFO_DETAIL_HOSTS = {"cninfo.com.cn", "www.cninfo.com.cn"}
+DOCUMENT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 def _now() -> str:
@@ -165,12 +169,18 @@ class DocumentIntelligenceService:
         _validate_remote_url(url)
         request = urllib.request.Request(
             url,
-            headers={"User-Agent": "ai-quant-research/0.2 document-archive"},
+            headers={
+                "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.5",
+                "Referer": "https://www.cninfo.com.cn/",
+                "User-Agent": DOCUMENT_USER_AGENT,
+            },
         )
         opener = urllib.request.build_opener(_SafeRedirectHandler())
         try:
             with opener.open(request, timeout=self.settings.akshare_timeout_seconds) as response:
                 _validate_remote_url(response.geturl())
+                media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
                 declared = response.headers.get("Content-Length")
                 if declared and int(declared) > self.settings.document_max_bytes:
                     raise ValueError("document exceeds configured size limit")
@@ -181,7 +191,13 @@ class DocumentIntelligenceService:
                         raise ValueError("document exceeds configured size limit")
         except urllib.error.URLError as exc:
             raise RuntimeError(f"document download failed: {exc.reason}") from exc
-        return bytes(payload)
+        result = bytes(payload)
+        if b"%PDF-" not in result[:1_024]:
+            returned_type = media_type or "unknown content type"
+            raise RuntimeError(
+                f"document provider returned {returned_type} instead of a PDF"
+            )
+        return result
 
     def archive_bytes(
         self,
@@ -191,7 +207,7 @@ class DocumentIntelligenceService:
         source_url: str | None = None,
     ) -> dict[str, Any]:
         announcement = self._announcement(announcement_id)
-        if not payload.startswith(b"%PDF-"):
+        if b"%PDF-" not in payload[:1_024]:
             raise ValueError("downloaded file is not a PDF")
         if len(payload) > self.settings.document_max_bytes:
             raise ValueError("document exceeds configured size limit")

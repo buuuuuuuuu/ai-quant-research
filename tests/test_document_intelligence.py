@@ -78,6 +78,55 @@ def test_cninfo_detail_url_is_converted_to_a_safe_static_pdf_url() -> None:
         )
 
 
+def test_cninfo_download_uses_browser_headers_and_rejects_html(tmp_path, monkeypatch) -> None:
+    _, _, service = _service(tmp_path)
+    captured = {}
+
+    class Response:
+        headers = {"Content-Type": "application/pdf", "Content-Length": str(len(PDF_A))}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def geturl(self):
+            return "https://static.cninfo.com.cn/finalpage/2026-04-30/1225273125.PDF"
+
+        def read(self, _size):
+            payload, self.payload = self.payload, b""
+            return payload
+
+    class Opener:
+        response = Response(PDF_A)
+
+        def open(self, request, *, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return self.response
+
+    opener = Opener()
+    monkeypatch.setattr(
+        "ai_quant_assistant.documents.service._validate_remote_url", lambda url: url
+    )
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: opener)
+
+    assert service.download("announcement-600519-2023") == PDF_A
+    request = captured["request"]
+    assert request.get_header("Referer") == "https://www.cninfo.com.cn/"
+    assert request.get_header("User-agent").startswith("Mozilla/5.0")
+    assert "application/pdf" in request.get_header("Accept")
+
+    opener.response = Response(b"<html>request blocked</html>")
+    opener.response.headers = {"Content-Type": "text/html; charset=utf-8"}
+    with pytest.raises(RuntimeError, match="returned text/html instead of a PDF"):
+        service.download("announcement-600519-2023")
+
+
 def test_page_extraction_search_and_rule_answer_keep_exact_citations(tmp_path, monkeypatch) -> None:
     _, _, service = _service(tmp_path)
     document = service.archive_bytes("announcement-600519-2023", PDF_A)

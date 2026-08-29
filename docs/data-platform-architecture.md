@@ -106,6 +106,14 @@ Schema v9 增加：
 - 筛选只接受字段与操作符白名单，不开放任意 SQL，缺失值不会自动填零；
 - 继续保留 v1–v8 的行情、财务、研究、Copilot、股票池和运维记录。
 
+Schema v10 增加：
+
+- `announcement_document`：公告 PDF 的校验归档、摘要和不可覆盖版本；
+- `document_page` / `document_chunk`：带页码的原生/OCR 正文和检索证据块；
+- `document_extraction`：解析运行、原生/OCR/空白页统计和失败诊断；
+- `document_question` / `document_answer_citation`：问题、答案器版本和服务端逐字验证引文；
+- `operation_task` 增加 `document_ingest`，沿用持久化进度和服务重启恢复语义。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期
@@ -167,6 +175,9 @@ sync-announcements` 按证券、自然年、`q1/interim/q3/annual` 报告类型�
 
 股票血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建；指数和公告
 通过各自记录的实际 Provider 来源、同步批次与 `research_sync_partition.raw_path` 重建。
+公告 PDF 在通过魔数、大小、公开地址和 SHA-256 校验后写入 `data/documents/<摘要前缀>/`；
+Schema v10 只保存相对该归档的页码正文、检索块、解析运行和已验证引文，不把外部网页或
+模型生成内容混入已发布公告事实表。
 研究快照保留上述逐行字段，`source=local` 的 CLI 和 API 均可实现三个研究输入全部本地命中。
 
 `batch-event-study` 对每只股票独立运行现有研究，失败股票不会中断其他股票。事件记录

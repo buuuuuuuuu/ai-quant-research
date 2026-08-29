@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v9）
+# A 股本地数据库数据字典（Schema v10）
 
 ## 公共约定
 
@@ -442,3 +442,18 @@ Schema v7 按证券和分类体系保存行业分类变更；只允许同时满�
 
 `saved_watchlist` 保存由成功筛选产生的入选代码、来源运行、筛选时点与历史可信度。保存
 动作不会把 `observed_snapshot` 升级为 `verified_history`，风险警告必须随股票池保留。
+
+## 公告文档智能（Schema v10）
+
+`announcement_document` 按公告保存不可覆盖的 PDF 版本、来源 URL、本地路径、SHA-256、
+文件大小、处理状态、页数和解析方式。相同公告、相同摘要幂等复用；摘要变化才增加
+`version_no`。读取本地文件前再次校验摘要。
+
+`document_page` 保存页码、正文、正文摘要、字符数和 `native/ocr/empty` 解析方式；
+`document_chunk` 将正文切为带页码的检索证据块。`document_extraction` 追加保存每次解析的
+原生、OCR、空白页统计和失败原因。
+
+`document_question` 保存问题范围、回答状态、答案器/模型、提示版本和限制；
+`document_answer_citation` 仅保存经过服务端验证、确实出现在对应证据块中的逐字引文。
+模型输出的文档 ID、页码或引文不能绕过该校验。`operation_task` 新增
+`document_ingest`，沿用持久化后台进度和重启失败恢复语义。

@@ -182,3 +182,18 @@ def test_history_reader_converts_csv_missing_values_to_json_null(tmp_path) -> No
     detail = BacktestRunRepository(tmp_path / "artifacts").detail(run_id)
 
     assert detail["trades"][0]["price"] is None
+
+
+def test_announcement_document_metadata_does_not_shadow_browser_document() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "ai_quant_assistant"
+        / "web"
+        / "static"
+        / "workbench.js"
+    ).read_text(encoding="utf-8")
+
+    assert "documentMeta=payload.document" in script
+    assert "document=payload.document" not in script
+    assert 'const intelligence=document.createElement("section")' in script

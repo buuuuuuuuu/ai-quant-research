@@ -52,6 +52,12 @@ CORE_RELATIONS = (
     "screen_run",
     "screen_result",
     "saved_watchlist",
+    "announcement_document",
+    "document_page",
+    "document_chunk",
+    "document_extraction",
+    "document_question",
+    "document_answer_citation",
 )
 
 _CONNECTION_LOCKS: dict[Path, RLock] = {}

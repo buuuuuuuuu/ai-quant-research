@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +688,141 @@ MIGRATIONS = (
             """
             CREATE INDEX IF NOT EXISTS saved_watchlist_created_idx
             ON saved_watchlist (created_at)
+            """,
+        ),
+    ),
+    Migration(
+        version=10,
+        name="announcement_document_archive_pages_search_and_cited_answers",
+        statements=(
+            """
+            CREATE TABLE IF NOT EXISTS announcement_document (
+                document_id VARCHAR PRIMARY KEY,
+                announcement_id VARCHAR NOT NULL,
+                version_no INTEGER NOT NULL CHECK (version_no >= 1),
+                source_url VARCHAR NOT NULL,
+                storage_path VARCHAR NOT NULL,
+                sha256 VARCHAR NOT NULL,
+                size_bytes BIGINT NOT NULL CHECK (size_bytes > 0),
+                media_type VARCHAR NOT NULL DEFAULT 'application/pdf',
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('archived', 'extracting', 'ready', 'failed')),
+                page_count INTEGER CHECK (page_count IS NULL OR page_count >= 0),
+                extraction_method VARCHAR NOT NULL DEFAULT 'pending'
+                    CHECK (extraction_method IN ('pending', 'native', 'ocr', 'mixed', 'failed')),
+                parser_version VARCHAR NOT NULL DEFAULT 'm8a-v1',
+                downloaded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                extracted_at TIMESTAMPTZ,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (announcement_id, sha256),
+                UNIQUE (announcement_id, version_no)
+            )
+            """,
+            """
+            CREATE INDEX announcement_document_announcement_version_idx
+            ON announcement_document (announcement_id, version_no)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS document_page (
+                document_id VARCHAR NOT NULL,
+                page_number INTEGER NOT NULL CHECK (page_number >= 1),
+                text VARCHAR NOT NULL,
+                text_sha256 VARCHAR NOT NULL,
+                extraction_method VARCHAR NOT NULL
+                    CHECK (extraction_method IN ('native', 'ocr', 'empty')),
+                char_count BIGINT NOT NULL CHECK (char_count >= 0),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (document_id, page_number)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS document_chunk (
+                chunk_id VARCHAR PRIMARY KEY,
+                document_id VARCHAR NOT NULL,
+                page_number INTEGER NOT NULL CHECK (page_number >= 1),
+                chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+                text VARCHAR NOT NULL,
+                text_sha256 VARCHAR NOT NULL,
+                token_estimate INTEGER NOT NULL CHECK (token_estimate >= 0),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_id, page_number, chunk_index)
+            )
+            """,
+            """
+            CREATE INDEX document_chunk_document_page_idx
+            ON document_chunk (document_id, page_number, chunk_index)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS document_extraction (
+                extraction_id VARCHAR PRIMARY KEY,
+                document_id VARCHAR NOT NULL,
+                parser_version VARCHAR NOT NULL,
+                status VARCHAR NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                native_pages INTEGER NOT NULL DEFAULT 0 CHECK (native_pages >= 0),
+                ocr_pages INTEGER NOT NULL DEFAULT 0 CHECK (ocr_pages >= 0),
+                empty_pages INTEGER NOT NULL DEFAULT 0 CHECK (empty_pages >= 0),
+                started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMPTZ,
+                error VARCHAR
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS document_question (
+                question_id VARCHAR PRIMARY KEY,
+                scope_json VARCHAR NOT NULL,
+                question VARCHAR NOT NULL,
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('answered', 'insufficient', 'refused', 'failed')),
+                answer VARCHAR NOT NULL DEFAULT '',
+                provider VARCHAR NOT NULL,
+                model VARCHAR,
+                prompt_version VARCHAR NOT NULL DEFAULT 'm8a-v1',
+                limitations_json VARCHAR NOT NULL DEFAULT '[]',
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS document_answer_citation (
+                question_id VARCHAR NOT NULL,
+                citation_order INTEGER NOT NULL CHECK (citation_order >= 1),
+                chunk_id VARCHAR NOT NULL,
+                document_id VARCHAR NOT NULL,
+                page_number INTEGER NOT NULL CHECK (page_number >= 1),
+                quote VARCHAR NOT NULL,
+                claim VARCHAR NOT NULL,
+                PRIMARY KEY (question_id, citation_order)
+            )
+            """,
+            """
+            CREATE TABLE operation_task_v10 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL
+                    CHECK (task_type IN (
+                        'backtest', 'sync', 'backup', 'copilot', 'document_ingest'
+                    )),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "INSERT INTO operation_task_v10 SELECT * FROM operation_task",
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v10 RENAME TO operation_task",
+            """
+            CREATE INDEX operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
             """,
         ),
     ),

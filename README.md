@@ -17,6 +17,7 @@ V1 是研究与决策支持工具，不连接券商、不自动下单，也不�
 - AI 自然语言研究对话、结构化计划预览、覆盖预检、显式确认和可追溯解释。
 - 股票行情、指数基准、定期公告和财务指标的逐股票数据浏览、公告/财报详情、筛选、CSV 与记录血缘。
 - Point-in-Time 条件选股、逐股票入选/淘汰证据、筛选快照和可复用候选股票池。
+- 公告 PDF 本地校验归档、页码正文/OCR、全文检索、财报内容浏览、引用式问答与多版本比较。
 - 单管理员登录、持久化后台任务、定时增量同步和 DuckDB 一致性备份。
 - 非 root 服务、Nginx 反向代理、备份恢复、运行告警、运维审计与自动 CI。
 - CLI、FastAPI 接口、离线端到端测试、Docker 与 systemd 部署入口。
@@ -33,6 +34,7 @@ ai-quant-research/
 │   ├── ai/                  # 白名单研究工具注册表
 │   ├── api/                 # FastAPI schemas/routes
 │   ├── domain/              # 研究规格与结果模型
+│   ├── documents/           # 公告 PDF 归档、解析、搜索与引用问答
 │   ├── providers/           # Fixture/AkShare/缓存与标准化
 │   ├── reports/             # HTML/Excel 报告
 │   ├── research/            # 事件研究引擎与服务
@@ -45,7 +47,7 @@ ai-quant-research/
 
 ## A 股本地数据库（M0 + M1 + M2 + M3 + M4 + M5 + M6）
 
-数据平台提供 DuckDB Schema v9、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v10、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -57,8 +59,11 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v8 数据库执行同一命令时会自动升级到 Schema v9，不删除已发布的
+已有 Schema v1–v9 数据库执行同一命令时会自动升级到 Schema v10，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
+
+Schema v10 的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。
+首次点击“归档并解析”会启动后台任务；详见 [文档智能说明](docs/document-intelligence.md)。
 
 初始化并写入离线样例：
 
@@ -425,7 +430,7 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v9 会持久化回测、Copilot、条件选股、候选股票池、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
+Schema v10 会持久化回测、Copilot、条件选股、候选股票池、公告文档任务、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256
 校验。Web 首页“数据同步与备份”可直接查看状态并启动任务。
 

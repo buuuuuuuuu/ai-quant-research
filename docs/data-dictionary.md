@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v11）
+# A 股本地数据库数据字典（Schema v12）
 
 ## 公共约定
 
@@ -469,3 +469,24 @@ Schema v7 按证券和分类体系保存行业分类变更；只允许同时满�
 `document_extraction.heartbeat_at` 标记解析租约。页面和分块只在当前 extraction 仍持有
 文档租约时以单一事务替换。v10 已有的 `(announcement_id, sha256)` 与
 `(announcement_id, version_no)` 唯一约束继续作为数据库级最终完整性边界。
+
+## 公告结构化事件（Schema v12）
+
+`document_event_extraction` 记录 `extraction_id/document_id/extractor/extractor_version`、
+running/succeeded/failed 状态、heartbeat 和错误。`announcement_document` 新增
+`active_event_extraction_id`，作为写入 fencing；只有当前 extraction 可发布结果。
+
+`document_event` 保存 `event_id`、公告/文档/证券、五类 `event_type`、真实
+`published_at`、研究版本可知时间 `known_at`、可选 `event_date/period_start/period_end`、明确披露的
+`direction/amount/currency/ratio`、完整 `structured_payload_json`、提取器版本和
+`insufficient/needs_review/accepted/rejected` 状态。业务唯一键为
+`document_id + event_type + extractor_version`。审核人、审核时间和备注与更新时间一并
+保留，修订版本不覆盖旧行。
+
+`document_event_evidence` 以 `event_id + evidence_order` 为主键。每项包含字段/claim 名、
+文档、页码、正文块、逐字 quote 和 `quote_sha256`；quote 必须在该正文块中逐字存在。
+
+`document_event_research_run` 冻结 `run_id/event_id/announcement_id/document_id/as_of`、
+事件研究参数、结果和证据 JSON。只有 `published_at <= as_of` 且 `known_at <= as_of` 的
+accepted 事件可以创建研究记录。`operation_task` 增加 `document_event_extract`，claim key
+包含文档和提取器版本。

@@ -14,6 +14,7 @@ from ai_quant_assistant.ai.repository import CopilotRepository
 from ai_quant_assistant.ai.tool_registry import ALLOWED_RESEARCH_TOOLS, require_allowed_tool
 from ai_quant_assistant.api.app import create_app
 from ai_quant_assistant.config import Settings
+from ai_quant_assistant.storage.schema import SCHEMA_VERSION
 
 QUESTION = (
     "请用 600519 000001 300750 在 2024-01-02 到 2024-03-08 做 ROE 因子回测，"
@@ -84,7 +85,7 @@ def test_conversations_plans_messages_and_events_persist_in_schema_v8(tmp_path) 
     restored = repository.get_plan(plan["plan_id"])
     messages = repository.list_messages(conversation["conversation_id"])
 
-    assert database.status()["schema_version"] == 11
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 12
     assert restored["spec"]["factor"] == "roe"
     assert restored["events"][0]["event_type"] == "created"
     assert messages[0]["content"] == QUESTION

@@ -60,9 +60,7 @@ class EventStudyEngine:
                 raise DataValidationError(f"{label} prices missing columns: {sorted(missing)}")
 
         stock = stock_prices[["date", "close"]].rename(columns={"close": "stock_close"})
-        benchmark = benchmark_prices[["date", "close"]].rename(
-            columns={"close": "benchmark_close"}
-        )
+        benchmark = benchmark_prices[["date", "close"]].rename(columns={"close": "benchmark_close"})
         stock["date"] = pd.to_datetime(stock["date"]).dt.normalize()
         benchmark["date"] = pd.to_datetime(benchmark["date"]).dt.normalize()
         calendar = stock.merge(benchmark, on="date", how="inner").drop_duplicates("date")
@@ -121,9 +119,7 @@ class EventStudyEngine:
         stock_closes["date"] = pd.to_datetime(stock_closes["date"]).dt.normalize()
         stock_closes["close"] = pd.to_numeric(stock_closes["close"], errors="coerce")
         stock_closes = stock_closes.dropna(subset=["date", "close"])
-        stock_closes = stock_closes.drop_duplicates("date", keep="last").set_index("date")[
-            "close"
-        ]
+        stock_closes = stock_closes.drop_duplicates("date", keep="last").set_index("date")["close"]
         rows: list[dict[str, Any]] = []
         dropped: list[dict[str, Any]] = []
         cost = spec.round_trip_cost_bps / 10_000.0
@@ -136,72 +132,99 @@ class EventStudyEngine:
 
         for announcement in normalized_announcements.to_dict(orient="records"):
             announcement_date = pd.Timestamp(announcement["announcement_date"])
+            source_event_id = str(announcement.get("source_event_id") or "")
             announcement_close = stock_closes.get(announcement_date, float("nan"))
             entry_pos = int(
                 np.searchsorted(calendar_dates, announcement_date.to_datetime64(), side="right")
             )
             if entry_pos >= len(calendar):
-                dropped.append(
-                    {
-                        "report_year": int(announcement["report_year"]),
-                        "reason": "no_common_trading_day_after_announcement",
-                    }
-                )
+                dropped_item = {
+                    "report_year": int(announcement["report_year"]),
+                    "reason": "no_common_trading_day_after_announcement",
+                }
+                if source_event_id:
+                    dropped_item["source_event_id"] = source_event_id
+                dropped.append(dropped_item)
                 continue
 
             entry = calendar.iloc[entry_pos]
             for window in spec.windows:
                 exit_pos = entry_pos + window
                 if exit_pos >= len(calendar):
-                    dropped.append(
-                        {
-                            "report_year": int(announcement["report_year"]),
-                            "window": window,
-                            "reason": "insufficient_forward_trading_days",
-                        }
-                    )
+                    dropped_item = {
+                        "report_year": int(announcement["report_year"]),
+                        "window": window,
+                        "reason": "insufficient_forward_trading_days",
+                    }
+                    if source_event_id:
+                        dropped_item["source_event_id"] = source_event_id
+                    dropped.append(dropped_item)
                     continue
                 exit_row = calendar.iloc[exit_pos]
                 stock_gross_return = float(exit_row["stock_close"] / entry["stock_close"] - 1)
                 stock_net_return = stock_gross_return - cost
-                benchmark_return = float(
-                    exit_row["benchmark_close"] / entry["benchmark_close"] - 1
-                )
-                rows.append(
-                    {
-                        "event_id": f"{spec.symbol}-{int(announcement['report_year'])}-{window}d",
-                        "symbol": spec.symbol,
-                        "report_year": int(announcement["report_year"]),
-                        "announcement_date": announcement_date,
-                        "title": str(announcement["title"]),
-                        "url": str(announcement.get("url", "")),
-                        "entry_date": pd.Timestamp(entry["date"]),
-                        "exit_date": pd.Timestamp(exit_row["date"]),
-                        "window": window,
-                        "stock_announcement_close": float(announcement_close),
-                        "stock_entry_close": float(entry["stock_close"]),
-                        "stock_exit_close": float(exit_row["stock_close"]),
-                        "benchmark_entry_close": float(entry["benchmark_close"]),
-                        "benchmark_exit_close": float(exit_row["benchmark_close"]),
-                        "stock_gross_return": stock_gross_return,
-                        "round_trip_cost": cost,
-                        "stock_net_return": stock_net_return,
-                        "benchmark_return": benchmark_return,
-                        "excess_return": stock_net_return - benchmark_return,
-                    }
-                )
+                benchmark_return = float(exit_row["benchmark_close"] / entry["benchmark_close"] - 1)
+                row = {
+                    "event_id": f"{spec.symbol}-{int(announcement['report_year'])}-{window}d",
+                    "symbol": spec.symbol,
+                    "report_year": int(announcement["report_year"]),
+                    "announcement_date": announcement_date,
+                    "title": str(announcement["title"]),
+                    "url": str(announcement.get("url", "")),
+                    "entry_date": pd.Timestamp(entry["date"]),
+                    "exit_date": pd.Timestamp(exit_row["date"]),
+                    "window": window,
+                    "stock_announcement_close": float(announcement_close),
+                    "stock_entry_close": float(entry["stock_close"]),
+                    "stock_exit_close": float(exit_row["stock_close"]),
+                    "benchmark_entry_close": float(entry["benchmark_close"]),
+                    "benchmark_exit_close": float(exit_row["benchmark_close"]),
+                    "stock_gross_return": stock_gross_return,
+                    "round_trip_cost": cost,
+                    "stock_net_return": stock_net_return,
+                    "benchmark_return": benchmark_return,
+                    "excess_return": stock_net_return - benchmark_return,
+                }
+                if source_event_id:
+                    row.update(
+                        {
+                            "event_id": source_event_id,
+                            "event_window_id": f"{source_event_id}-{window}d",
+                            "announcement_id": announcement.get("announcement_id"),
+                            "document_id": announcement.get("document_id"),
+                        }
+                    )
+                rows.append(row)
 
         events = pd.DataFrame(rows)
-        if events.empty or events["report_year"].nunique() < spec.min_events:
-            raise InsufficientDataError(
-                f"only {events['report_year'].nunique() if not events.empty else 0} usable events; "
-                f"minimum is {spec.min_events}"
+        has_source_event_ids = bool(
+            "source_event_id" in announcements.columns
+            and announcements["source_event_id"].fillna("").astype(str).str.len().gt(0).any()
+        )
+        event_count = (
+            0
+            if events.empty
+            else int(
+                events["event_id"].nunique()
+                if has_source_event_ids
+                else events["report_year"].nunique()
             )
-        events = events.sort_values(["report_year", "window"]).reset_index(drop=True)
+        )
+        if events.empty or event_count < spec.min_events:
+            raise InsufficientDataError(
+                f"only {event_count} usable events; minimum is {spec.min_events}"
+            )
+        order = (
+            ["announcement_date", "event_id", "window"]
+            if has_source_event_ids
+            else ["report_year", "window"]
+        )
+        events = events.sort_values(order).reset_index(drop=True)
         summary = self._summary(events)
         diagnostics: dict[str, Any] = {
             "announcements_received": int(len(announcements)),
             "usable_event_years": int(events["report_year"].nunique()),
+            "usable_events": event_count,
             "event_window_rows": int(len(events)),
             "common_trading_days": int(len(calendar)),
             "common_calendar_start": pd.Timestamp(calendar["date"].min()).date().isoformat(),

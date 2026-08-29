@@ -15,6 +15,10 @@ Web 服务启动时也会自动升级已存在的数据库。Schema v11 起，qu
 owner 和 heartbeat 租约；启动只回收超过租约期限的任务，不会把其他 Uvicorn Worker
 仍在执行的任务误判为失败。已完成任务和回测结果继续可见。
 
+Schema v12 增加 `document_event_extract` claim 和独立 extraction fencing。升级后先确认
+`data status` 的 schema 版本为 12，再提交事件提取；备份、同步、文档解析和事件写入继续
+使用 `.operations.lock` → DuckDB access lock 的既定顺序。
+
 ## Web 登录
 
 认证默认仅在 `AI_QUANT_WEB_PASSWORD` 已配置时启用，以兼容本机开发和既有调用。

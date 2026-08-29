@@ -49,14 +49,14 @@ def _archive_process(data_dir: str, payload: bytes, start, output) -> None:
         output.put(("error", type(exc).__name__, str(exc)))
 
 
-def test_schema_v11_archive_is_checksum_verified_idempotent_and_versioned(tmp_path) -> None:
+def test_current_schema_archive_is_checksum_verified_idempotent_and_versioned(tmp_path) -> None:
     database, _, service = _service(tmp_path)
 
     first = service.archive_bytes("announcement-600519-2023", PDF_A)
     repeated = service.archive_bytes("announcement-600519-2023", PDF_A)
     revised = service.archive_bytes("announcement-600519-2023", PDF_B)
 
-    assert database.status()["schema_version"] == 11
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 12
     assert first["document_id"] == repeated["document_id"]
     assert first["version_no"] == 1
     assert revised["version_no"] == 2
@@ -64,7 +64,7 @@ def test_schema_v11_archive_is_checksum_verified_idempotent_and_versioned(tmp_pa
     assert database.status()["relations"]["announcement_document"] == 2
 
 
-def test_schema_v10_to_v11_preserves_documents_and_tasks_idempotently(tmp_path) -> None:
+def test_schema_v10_to_current_preserves_documents_and_tasks_idempotently(tmp_path) -> None:
     root = tmp_path / "data"
     root.mkdir()
     database = LocalDatabase(root / "catalog.duckdb", DataLayout.from_root(root))
@@ -105,9 +105,9 @@ def test_schema_v10_to_v11_preserves_documents_and_tasks_idempotently(tmp_path) 
     first = database.initialize()
     second = database.initialize()
 
-    assert first["applied_migrations"] == [11]
+    assert first["applied_migrations"] == [11, 12]
     assert second["applied_migrations"] == []
-    assert database.status()["schema_version"] == SCHEMA_VERSION == 11
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 12
     with database.connect(read_only=True) as connection:
         assert connection.execute(
             "SELECT document_id, version_no FROM announcement_document"

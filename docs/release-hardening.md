@@ -1,5 +1,17 @@
 # 生产发布加固与恢复手册（M4-B）
 
+## M8-B / Schema v12 升级注意
+
+v11→v12 迁移新增公告事件、逐字段证据、事件提取运行和事件研究结果表，并在原表上增加
+事件提取 fencing 与任务类型。迁移不删除、合并或更新已有公告、文档、页面、分块、问答、
+引用、任务、备份和审计记录；任务表复制若遇到不受支持的历史类型会让事务明确失败，不能
+静默丢行。
+
+发布前停止 Web、同步和备份写入，创建并验证 v11 备份；更新 Wheel 后以 `ai-quant` 用户
+执行 `ai-quant data init`，确认 `schema_version` 与 `expected_schema_version` 均为 12，再
+启动服务。旧版本程序不要再指向已升级的 v12 数据库。事件提取继续使用 v11 的 DuckDB
+access lock 和 `.operations.lock` 顺序，不需要 Redis、Celery、外部数据库或额外密钥。
+
 ## M8-A.1 / Schema v11 升级注意
 
 升级前仍应按本手册停止写入服务并创建、验证一次备份，然后执行 `ai-quant data init`。

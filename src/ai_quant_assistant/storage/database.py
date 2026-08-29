@@ -59,6 +59,10 @@ CORE_RELATIONS = (
     "document_extraction",
     "document_question",
     "document_answer_citation",
+    "document_event_extraction",
+    "document_event",
+    "document_event_evidence",
+    "document_event_research_run",
 )
 
 DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0

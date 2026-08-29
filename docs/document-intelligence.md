@@ -33,7 +33,7 @@ sudo -u ai-quant env \
   .venv/bin/ai-quant data init
 ```
 
-`data status` 应显示 `schema_version: 10`，并列出：
+`data status` 应显示 `schema_version: 11`，并列出：
 
 ```text
 announcement_document
@@ -88,3 +88,21 @@ document_answer_citation
 
 自动测试覆盖归档幂等、版本、URL/文件安全、解析、OCR、搜索、引用校验、提示注入文本、
 OpenAI 伪造引文降级、后台进度、Web API 和文件响应安全头。
+
+## 并发、任务租约与备份协调
+
+- 所有 DuckDB 打开都经过同一数据目录下的跨进程访问锁；等待有 30 秒上限，超时会返回
+  可诊断错误，不会无限阻塞。该边界适用于多线程、多个 Uvicorn Worker 和独立服务进程。
+- 文档归档在短时数据库锁内重新查重、分配 `version_no`、插入记录并发布内容寻址文件；
+  下载和 OCR 不持有此锁。临时文件总会清理，事务失败时不会保留未登记的新 PDF。
+- 同一公告同时只能拥有一个 `document_ingest` claim。重复请求返回已有 `task_id`；成功后
+  继续幂等返回该任务，失败或超过 30 分钟未续租后才允许创建新任务。
+- 任务状态由 `owner_id` 条件更新，progress 会刷新 heartbeat；旧 worker 的迟到成功或失败
+  不会覆盖终态。应用启动只回收已过期任务，不会无条件判死其他 Worker 的活动任务。
+- 页面解析通过 `active_extraction_id` fencing。新租约接管后，旧解析不能删除或覆盖页面、
+  分块和文档状态。
+- 数据库备份在 checkpoint、文件复制、临时库校验、原子发布及备份登记的完整区间持有同一
+  数据库访问锁；文档写入会等待复制完成，得到的是一致快照。
+
+锁顺序固定为：长任务需要时先获取 `.operations.lock`，再短时获取 DuckDB access lock；
+文档下载/OCR 不获取 `.operations.lock`，只在数据库读写和发布文件时短时获取 access lock。

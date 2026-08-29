@@ -114,6 +114,15 @@ Schema v10 增加：
 - `document_question` / `document_answer_citation`：问题、答案器版本和服务端逐字验证引文；
 - `operation_task` 增加 `document_ingest`，沿用持久化进度和服务重启恢复语义。
 
+Schema v11 增加：
+
+- `operation_task.claim_key`：同一公告只允许一个活动归档任务，终态或租约过期后释放；
+- `operation_task.owner_id/heartbeat_at`：worker 租约和条件终态更新，阻止迟到线程覆盖结果；
+- `announcement_document.active_extraction_id` 与 `document_extraction.heartbeat_at`：解析
+  fencing、过期接管和页面/分块事务发布；
+- 所有 DuckDB 连接通过带超时的跨进程 access lock，备份在同一锁内完成 checkpoint、
+  复制、校验和原子发布；下载、PDF 解析和 OCR 不长期持锁。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期
@@ -176,7 +185,7 @@ sync-announcements` 按证券、自然年、`q1/interim/q3/annual` 报告类型�
 股票血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建；指数和公告
 通过各自记录的实际 Provider 来源、同步批次与 `research_sync_partition.raw_path` 重建。
 公告 PDF 在通过魔数、大小、公开地址和 SHA-256 校验后写入 `data/documents/<摘要前缀>/`；
-Schema v10 只保存相对该归档的页码正文、检索块、解析运行和已验证引文，不把外部网页或
+Schema v10–v11 只保存相对该归档的页码正文、检索块、解析运行和已验证引文，不把外部网页或
 模型生成内容混入已发布公告事实表。
 研究快照保留上述逐行字段，`source=local` 的 CLI 和 API 均可实现三个研究输入全部本地命中。
 

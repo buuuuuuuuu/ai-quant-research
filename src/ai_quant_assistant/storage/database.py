@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
-from threading import Lock, RLock
+from threading import Lock
 from typing import Any
 
 import pandas as pd
@@ -13,6 +13,7 @@ from ai_quant_assistant.domain.models import normalize_benchmark_symbol
 from ai_quant_assistant.providers.normalization import security_id_for_symbol
 from ai_quant_assistant.storage.fixture_data import load_fixture_data
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.locks import InterProcessFileLock
 from ai_quant_assistant.storage.schema import SCHEMA_VERSION, apply_migrations
 
 CORE_RELATIONS = (
@@ -60,7 +61,9 @@ CORE_RELATIONS = (
     "document_answer_citation",
 )
 
-_CONNECTION_LOCKS: dict[Path, RLock] = {}
+DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0
+
+_CONNECTION_LOCKS: dict[Path, InterProcessFileLock] = {}
 _CONNECTION_LOCKS_GUARD = Lock()
 
 
@@ -70,7 +73,13 @@ class LocalDatabase:
         self.layout = layout
         resolved_path = path.resolve()
         with _CONNECTION_LOCKS_GUARD:
-            self.connection_lock = _CONNECTION_LOCKS.setdefault(resolved_path, RLock())
+            self.connection_lock = _CONNECTION_LOCKS.setdefault(
+                resolved_path,
+                InterProcessFileLock(
+                    resolved_path.parent / f".{resolved_path.name}.access.lock",
+                    description=f"DuckDB access lock for {resolved_path}",
+                ),
+            )
 
     @staticmethod
     def _duckdb() -> Any:
@@ -94,9 +103,23 @@ class LocalDatabase:
 
     @contextmanager
     def connect(self, *, read_only: bool = False) -> Iterator[Any]:
-        with self.connection_lock:
+        with self.exclusive_access():
             with self._duckdb().connect(str(self.path), read_only=read_only) as connection:
                 yield connection
+
+    @contextmanager
+    def exclusive_access(
+        self, *, timeout_seconds: float = DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS
+    ) -> Iterator[None]:
+        """Serialize DuckDB opens across threads and application processes.
+
+        DuckDB supports one read/write process at a time. Holding the same lock for
+        reads also prevents a second Uvicorn worker from opening the catalog while a
+        writer or a consistent file-copy backup is active.
+        """
+
+        with self.connection_lock.hold(timeout_seconds=timeout_seconds):
+            yield
 
     def load_fixture(self) -> dict[str, int]:
         self.initialize()

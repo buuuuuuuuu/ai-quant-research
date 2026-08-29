@@ -346,28 +346,31 @@ class DatabaseBackupService:
         target = self.backup_dir / f"{backup_id}.duckdb"
         temporary = self.backup_dir / f".{backup_id}.duckdb.tmp"
         try:
-            with self.database.connect() as connection:
-                connection.execute("CHECKPOINT")
-            shutil.copy2(self.database.path, temporary)
-            with self.database._duckdb().connect(str(temporary), read_only=True) as connection:
-                version = int(
-                    connection.execute(
-                        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-                    ).fetchone()[0]
-                )
-            with temporary.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            os.replace(temporary, target)
-            size = target.stat().st_size
-            backup = {
-                "backup_id": backup_id,
-                "backup_path": str(target),
-                "size_bytes": size,
-                "sha256": digest,
-                "schema_version": version,
-            }
-            self._record_backup(backup)
-            return backup
+            # Keep checkpoint, copy, verification, publication, and catalog
+            # registration inside one cross-process database-access fence.
+            with self.database.exclusive_access():
+                with self.database.connect() as connection:
+                    connection.execute("CHECKPOINT")
+                shutil.copy2(self.database.path, temporary)
+                with self.database._duckdb().connect(str(temporary), read_only=True) as connection:
+                    version = int(
+                        connection.execute(
+                            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                        ).fetchone()[0]
+                    )
+                with temporary.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                os.replace(temporary, target)
+                size = target.stat().st_size
+                backup = {
+                    "backup_id": backup_id,
+                    "backup_path": str(target),
+                    "size_bytes": size,
+                    "sha256": digest,
+                    "schema_version": version,
+                }
+                self._record_backup(backup)
+                return backup
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -526,18 +529,23 @@ class DatabaseBackupService:
         temporary = self.database.path.parent / f".restore-{uuid4().hex}.duckdb.tmp"
         try:
             with self.operation_lock.hold():
-                self.verify(backup_id, actor=actor)
-                previous = self._create_backup_file()
-                shutil.copy2(selected["backup_path"], temporary)
-                with self.database._duckdb().connect(str(temporary), read_only=True) as connection:
-                    connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()
-                wal_path = Path(f"{self.database.path}.wal")
-                if wal_path.exists():
-                    raise RuntimeError("database write-ahead log exists; stop active writers before restore")
-                os.replace(temporary, self.database.path)
-                migration = self.database.initialize()
-                self._record_backup(selected)
-                self._record_backup(previous)
+                with self.database.exclusive_access():
+                    self.verify(backup_id, actor=actor)
+                    previous = self._create_backup_file()
+                    shutil.copy2(selected["backup_path"], temporary)
+                    with self.database._duckdb().connect(
+                        str(temporary), read_only=True
+                    ) as connection:
+                        connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()
+                    wal_path = Path(f"{self.database.path}.wal")
+                    if wal_path.exists():
+                        raise RuntimeError(
+                            "database write-ahead log exists; stop active writers before restore"
+                        )
+                    os.replace(temporary, self.database.path)
+                    migration = self.database.initialize()
+                    self._record_backup(selected)
+                    self._record_backup(previous)
             result = {
                 "status": "restored",
                 "backup_id": backup_id,

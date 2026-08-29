@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v10）
+# A 股本地数据库数据字典（Schema v11）
 
 ## 公共约定
 
@@ -457,3 +457,15 @@ Schema v7 按证券和分类体系保存行业分类变更；只允许同时满�
 `document_answer_citation` 仅保存经过服务端验证、确实出现在对应证据块中的逐字引文。
 模型输出的文档 ID、页码或引文不能绕过该校验。`operation_task` 新增
 `document_ingest`，沿用持久化后台进度和重启失败恢复语义。
+
+## 文档任务并发控制（Schema v11）
+
+`operation_task.claim_key` 是活动任务的唯一业务 claim。公告文档任务使用
+`document_ingest:<announcement_id>`；queued/running 期间保持唯一，任务成功、失败或租约
+过期时释放，因此历史任务仍完整保留。`owner_id` 和 `heartbeat_at` 用于条件状态转换及
+过期恢复，旧 worker 不能把已经终止或被接管的任务重新写成成功。
+
+`announcement_document.active_extraction_id` 对解析结果写入进行 fencing；
+`document_extraction.heartbeat_at` 标记解析租约。页面和分块只在当前 extraction 仍持有
+文档租约时以单一事务替换。v10 已有的 `(announcement_id, sha256)` 与
+`(announcement_id, version_no)` 唯一约束继续作为数据库级最终完整性边界。

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -197,6 +200,15 @@ def test_restart_marks_incomplete_tasks_failed_without_deleting_history(tmp_path
     queued = repository.create("sync", spec={"as_of": "2024-08-20"})
     running = repository.create("backup")
     repository.update(running["task_id"], status="running", progress=35)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE operation_task
+            SET updated_at = CURRENT_TIMESTAMP - INTERVAL '2 hours'
+            WHERE task_id IN (?, ?)
+            """,
+            [queued["task_id"], running["task_id"]],
+        )
 
     with TestClient(create_app(_settings(tmp_path))) as client:
         tasks = client.get("/api/v1/ops/tasks").json()
@@ -318,6 +330,59 @@ def test_exclusive_operation_lock_blocks_parallel_database_mutations(tmp_path) -
     with first.hold():
         with pytest.raises(RuntimeError, match="already running"), second.hold():
             raise AssertionError("a second operation must not acquire the lock")
+
+
+def test_backup_fences_document_style_database_writes_until_copy_finishes(
+    tmp_path, monkeypatch
+) -> None:
+    settings = _settings(tmp_path)
+    database = _database(tmp_path)
+    repository = OperationTaskRepository(database)
+    backups = DatabaseBackupService(
+        database=database,
+        backup_dir=settings.resolved_backup_dir,
+        tasks=repository,
+        operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
+    )
+    copy_started = Event()
+    release_copy = Event()
+    original_copy = shutil.copy2
+
+    def slow_copy(source, target):
+        copy_started.set()
+        assert release_copy.wait(10)
+        return original_copy(source, target)
+
+    monkeypatch.setattr("ai_quant_assistant.storage.operations.shutil.copy2", slow_copy)
+
+    def write_after_backup_starts():
+        with database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO security_master (
+                    security_id, symbol, exchange, name, source, source_batch_id
+                ) VALUES ('SSE.688999', '688999', 'SSE', '并发写入', 'fixture', 'race')
+                """
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        backup_future = executor.submit(backups.run)
+        assert copy_started.wait(10)
+        writer_future = executor.submit(write_after_backup_starts)
+        time.sleep(0.1)
+        assert not writer_future.done()
+        release_copy.set()
+        backup = backup_future.result(timeout=20)
+        writer_future.result(timeout=20)
+
+    assert backups.verify(backup["backup_id"])["status"] == "verified"
+    with database._duckdb().connect(backup["backup_path"], read_only=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM security_master WHERE symbol = '688999'"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_cli_backup_status_and_task_history_use_automatic_catalog(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 @dataclass(frozen=True, slots=True)
@@ -823,6 +823,61 @@ MIGRATIONS = (
             """
             CREATE INDEX operation_task_type_created_idx
             ON operation_task (task_type, created_at)
+            """,
+        ),
+    ),
+    Migration(
+        version=11,
+        name="document_ingest_claims_leases_and_extraction_fencing",
+        statements=(
+            "ALTER TABLE announcement_document ADD COLUMN active_extraction_id VARCHAR",
+            "ALTER TABLE document_extraction ADD COLUMN heartbeat_at TIMESTAMPTZ",
+            """
+            CREATE TABLE operation_task_v11 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL
+                    CHECK (task_type IN (
+                        'backtest', 'sync', 'backup', 'copilot', 'document_ingest'
+                    )),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                claim_key VARCHAR UNIQUE,
+                owner_id VARCHAR,
+                heartbeat_at TIMESTAMPTZ
+            )
+            """,
+            """
+            INSERT INTO operation_task_v11 (
+                task_id, task_type, status, progress, message, spec_json, result_json,
+                run_id, error, created_at, started_at, completed_at, updated_at,
+                claim_key, owner_id, heartbeat_at
+            )
+            SELECT task_id, task_type, status, progress, message, spec_json, result_json,
+                   run_id, error, created_at, started_at, completed_at, updated_at,
+                   NULL, NULL,
+                   CASE WHEN status = 'running' THEN updated_at ELSE NULL END
+            FROM operation_task
+            """,
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v11 RENAME TO operation_task",
+            """
+            CREATE INDEX operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
+            """,
+            """
+            CREATE INDEX operation_task_claim_status_idx
+            ON operation_task (claim_key, status)
             """,
         ),
     ),

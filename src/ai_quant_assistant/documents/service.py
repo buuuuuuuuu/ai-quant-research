@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import shutil
 import socket
@@ -28,6 +29,7 @@ from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 
 PARSER_VERSION = "m8a-v1"
+EXTRACTION_LEASE_SECONDS = 1_800
 MIN_NATIVE_CHARS = 40
 MAX_DOCUMENTS_PER_QUESTION = 6
 MAX_QUESTION_CHARS = 2_000
@@ -224,41 +226,78 @@ class DocumentIntelligenceService:
             )
             if existing:
                 return self._document_payload(existing[0])
-            version_no = int(
-                connection.execute(
-                    """
-                    SELECT COALESCE(MAX(version_no), 0) + 1
-                    FROM announcement_document WHERE announcement_id = ?
-                    """,
-                    [announcement_id],
-                ).fetchone()[0]
-            )
         document_id = f"doc-{uuid4().hex}"
         target = self.settings.document_dir / digest[:2] / f"{digest}.pdf"
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
+        temporary: Path | None = None
+        installed_target = False
+        try:
             with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
                 handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
                 temporary = Path(handle.name)
-            temporary.replace(target)
-        with self.database.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO announcement_document (
-                    document_id, announcement_id, version_no, source_url, storage_path,
-                    sha256, size_bytes, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'archived')
-                """,
-                [
-                    document_id,
-                    announcement_id,
-                    version_no,
-                    source_url or str(announcement.get("url") or ""),
-                    str(target.resolve()),
-                    digest,
-                    len(payload),
-                ],
-            )
+            # Recheck and allocate the version while holding the cross-process
+            # database access lock. The v10 unique business keys remain the final
+            # integrity guard if a non-cooperating writer bypasses this service.
+            with self.database.connect() as connection:
+                existing = _records(
+                    connection.execute(
+                        """
+                        SELECT * FROM announcement_document
+                        WHERE announcement_id = ? AND sha256 = ?
+                        """,
+                        [announcement_id, digest],
+                    )
+                )
+                if existing:
+                    return self._document_payload(existing[0])
+                connection.execute("BEGIN TRANSACTION")
+                try:
+                    version_no = int(
+                        connection.execute(
+                            """
+                            SELECT COALESCE(MAX(version_no), 0) + 1
+                            FROM announcement_document WHERE announcement_id = ?
+                            """,
+                            [announcement_id],
+                        ).fetchone()[0]
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO announcement_document (
+                            document_id, announcement_id, version_no, source_url,
+                            storage_path, sha256, size_bytes, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'archived')
+                        """,
+                        [
+                            document_id,
+                            announcement_id,
+                            version_no,
+                            source_url or str(announcement.get("url") or ""),
+                            str(target.resolve()),
+                            digest,
+                            len(payload),
+                        ],
+                    )
+                    if target.exists():
+                        with target.open("rb") as stream:
+                            stored_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                        if stored_digest != digest:
+                            raise ValueError("content-addressed PDF path has invalid content")
+                    else:
+                        os.replace(temporary, target)
+                        installed_target = True
+                        temporary = None
+                    connection.execute("COMMIT")
+                except Exception:
+                    connection.execute("ROLLBACK")
+                    if installed_target:
+                        target.unlink(missing_ok=True)
+                    raise
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         return self.get_document(document_id)
 
     def ingest(
@@ -386,22 +425,66 @@ class DocumentIntelligenceService:
         emit = progress or (lambda _value, _message: None)
         path = self.safe_path(document_id)
         extraction_id = f"extract-{uuid4().hex}"
+        started_at = datetime.now(UTC)
         with self.database.connect() as connection:
-            connection.execute(
+            state = connection.execute(
                 """
-                UPDATE announcement_document
-                SET status = 'extracting', error = NULL WHERE document_id = ?
+                SELECT status, active_extraction_id
+                FROM announcement_document WHERE document_id = ?
                 """,
                 [document_id],
-            )
-            connection.execute(
-                """
-                INSERT INTO document_extraction (
-                    extraction_id, document_id, parser_version, status
-                ) VALUES (?, ?, ?, 'running')
-                """,
-                [extraction_id, document_id, PARSER_VERSION],
-            )
+            ).fetchone()
+            if state is None:
+                raise KeyError(document_id)
+            if state[0] == "ready":
+                return self.get_document(document_id)
+            if state[0] == "extracting" and state[1]:
+                lease = connection.execute(
+                    """
+                    SELECT COALESCE(heartbeat_at, started_at)
+                    FROM document_extraction WHERE extraction_id = ?
+                    """,
+                    [state[1]],
+                ).fetchone()
+                lease_time = lease[0] if lease else None
+                if lease_time is not None and lease_time.tzinfo is None:
+                    lease_time = lease_time.replace(tzinfo=UTC)
+                if (
+                    lease_time is not None
+                    and (started_at - lease_time).total_seconds() < EXTRACTION_LEASE_SECONDS
+                ):
+                    raise RuntimeError("document extraction is already in progress")
+                connection.execute(
+                    """
+                    UPDATE document_extraction
+                    SET status = 'failed', error = 'extraction lease expired',
+                        completed_at = ?, heartbeat_at = ?
+                    WHERE extraction_id = ? AND status = 'running'
+                    """,
+                    [started_at, started_at, state[1]],
+                )
+            connection.execute("BEGIN TRANSACTION")
+            try:
+                connection.execute(
+                    """
+                    UPDATE announcement_document
+                    SET status = 'extracting', error = NULL, active_extraction_id = ?
+                    WHERE document_id = ?
+                    """,
+                    [extraction_id, document_id],
+                )
+                connection.execute(
+                    """
+                    INSERT INTO document_extraction (
+                        extraction_id, document_id, parser_version, status, heartbeat_at
+                    ) VALUES (?, ?, ?, 'running', ?)
+                    """,
+                    [extraction_id, document_id, PARSER_VERSION, started_at],
+                )
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
         native_pages = ocr_pages = empty_pages = 0
         try:
             native_texts = self._native_pages(path)
@@ -411,6 +494,15 @@ class DocumentIntelligenceService:
             pages: list[tuple[int, str, str]] = []
             for number, native in enumerate(native_texts, start=1):
                 emit(35 + int(55 * number / max(page_count, 1)), f"解析第 {number}/{page_count} 页")
+                with self.database.connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE document_extraction
+                        SET heartbeat_at = CURRENT_TIMESTAMP
+                        WHERE extraction_id = ? AND status = 'running'
+                        """,
+                        [extraction_id],
+                    )
                 text = native
                 method = "native"
                 if len(native) < MIN_NATIVE_CHARS:
@@ -429,70 +521,98 @@ class DocumentIntelligenceService:
                     native_pages += 1
                 pages.append((number, text, method))
             with self.database.connect() as connection:
-                connection.execute("DELETE FROM document_chunk WHERE document_id = ?", [document_id])
-                connection.execute("DELETE FROM document_page WHERE document_id = ?", [document_id])
-                for number, text, method in pages:
-                    text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                    connection.execute(
-                        """
-                        INSERT INTO document_page (
-                            document_id, page_number, text, text_sha256,
-                            extraction_method, char_count
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        [document_id, number, text, text_digest, method, len(text)],
-                    )
-                    for index, chunk in enumerate(
-                        self._chunks(text, self.settings.document_chunk_chars)
-                    ):
-                        connection.execute(
-                            """
-                            INSERT INTO document_chunk (
-                                chunk_id, document_id, page_number, chunk_index,
-                                text, text_sha256, token_estimate
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            [
-                                f"chunk-{uuid4().hex}", document_id, number, index, chunk,
-                                hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
-                                max(1, len(chunk) // 3),
-                            ],
-                        )
-                method = "mixed" if native_pages and ocr_pages else (
-                    "ocr" if ocr_pages else "native"
-                )
-                connection.execute(
+                owner = connection.execute(
                     """
-                    UPDATE announcement_document
-                    SET status = 'ready', page_count = ?, extraction_method = ?,
-                        parser_version = ?, extracted_at = CURRENT_TIMESTAMP, error = NULL
+                    SELECT active_extraction_id FROM announcement_document
                     WHERE document_id = ?
                     """,
-                    [page_count, method, PARSER_VERSION, document_id],
-                )
-                connection.execute(
-                    """
-                    UPDATE document_extraction
-                    SET status = 'succeeded', native_pages = ?, ocr_pages = ?, empty_pages = ?,
-                        completed_at = CURRENT_TIMESTAMP
-                    WHERE extraction_id = ?
-                    """,
-                    [native_pages, ocr_pages, empty_pages, extraction_id],
-                )
+                    [document_id],
+                ).fetchone()
+                if owner is None or owner[0] != extraction_id:
+                    raise RuntimeError("document extraction lease was superseded")
+                connection.execute("BEGIN TRANSACTION")
+                try:
+                    connection.execute(
+                        "DELETE FROM document_chunk WHERE document_id = ?", [document_id]
+                    )
+                    connection.execute(
+                        "DELETE FROM document_page WHERE document_id = ?", [document_id]
+                    )
+                    for number, text, method in pages:
+                        text_digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                        connection.execute(
+                            """
+                            INSERT INTO document_page (
+                                document_id, page_number, text, text_sha256,
+                                extraction_method, char_count
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            [document_id, number, text, text_digest, method, len(text)],
+                        )
+                        for index, chunk in enumerate(
+                            self._chunks(text, self.settings.document_chunk_chars)
+                        ):
+                            connection.execute(
+                                """
+                                INSERT INTO document_chunk (
+                                    chunk_id, document_id, page_number, chunk_index,
+                                    text, text_sha256, token_estimate
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                [
+                                    f"chunk-{uuid4().hex}",
+                                    document_id,
+                                    number,
+                                    index,
+                                    chunk,
+                                    hashlib.sha256(chunk.encode("utf-8")).hexdigest(),
+                                    max(1, len(chunk) // 3),
+                                ],
+                            )
+                    method = (
+                        "mixed"
+                        if native_pages and ocr_pages
+                        else ("ocr" if ocr_pages else "native")
+                    )
+                    connection.execute(
+                        """
+                        UPDATE announcement_document
+                        SET status = 'ready', page_count = ?, extraction_method = ?,
+                            parser_version = ?, extracted_at = CURRENT_TIMESTAMP,
+                            error = NULL, active_extraction_id = NULL
+                        WHERE document_id = ? AND active_extraction_id = ?
+                        """,
+                        [page_count, method, PARSER_VERSION, document_id, extraction_id],
+                    )
+                    connection.execute(
+                        """
+                        UPDATE document_extraction
+                        SET status = 'succeeded', native_pages = ?, ocr_pages = ?,
+                            empty_pages = ?, completed_at = CURRENT_TIMESTAMP,
+                            heartbeat_at = CURRENT_TIMESTAMP
+                        WHERE extraction_id = ? AND status = 'running'
+                        """,
+                        [native_pages, ocr_pages, empty_pages, extraction_id],
+                    )
+                    connection.execute("COMMIT")
+                except Exception:
+                    connection.execute("ROLLBACK")
+                    raise
         except Exception as exc:
             with self.database.connect() as connection:
                 connection.execute(
                     """
-                    UPDATE announcement_document
-                    SET status = 'failed', extraction_method = 'failed', error = ?
-                    WHERE document_id = ?
+                    UPDATE announcement_document SET status = 'failed',
+                        extraction_method = 'failed', error = ?, active_extraction_id = NULL
+                    WHERE document_id = ? AND active_extraction_id = ?
                     """,
-                    [str(exc), document_id],
+                    [str(exc), document_id, extraction_id],
                 )
                 connection.execute(
                     """
                     UPDATE document_extraction SET status = 'failed', error = ?,
-                        completed_at = CURRENT_TIMESTAMP WHERE extraction_id = ?
+                        completed_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP
+                    WHERE extraction_id = ? AND status = 'running'
                     """,
                     [str(exc), extraction_id],
                 )
@@ -893,47 +1013,49 @@ class DocumentTaskManager:
     ) -> None:
         self.service = service
         self.repository = repository
+        self.worker_id = f"document-worker-{uuid4().hex}"
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="document")
 
     def submit(self, announcement_id: str) -> dict[str, Any]:
-        task = self.repository.create(
+        task, created = self.repository.create_or_get_active(
             "document_ingest",
+            claim_key=f"document_ingest:{announcement_id}",
             spec={"announcement_id": announcement_id},
             message="等待归档公告 PDF",
         )
-        self.executor.submit(self._run, task["task_id"], announcement_id)
+        if created:
+            self.executor.submit(self._run, task["task_id"], announcement_id)
         return task
 
     def _run(self, task_id: str, announcement_id: str) -> None:
-        self.repository.update(
-            task_id, status="running", progress=1, message="任务已启动", started_at=_now()
-        )
+        if not self.repository.start(task_id, owner_id=self.worker_id, message="任务已启动"):
+            return
 
         def progress(value: int, message: str) -> None:
-            self.repository.update(task_id, progress=value, message=message)
+            if not self.repository.progress(
+                task_id, owner_id=self.worker_id, progress=value, message=message
+            ):
+                raise RuntimeError("document task lease is no longer owned by this worker")
 
         try:
             result = self.service.ingest(announcement_id, progress=progress)
-            self.repository.update(
+            self.repository.succeed(
                 task_id,
-                status="succeeded",
-                progress=100,
+                owner_id=self.worker_id,
                 message="公告文档处理完成",
-                result_json={
+                result={
                     "document_id": result["document_id"],
                     "announcement_id": announcement_id,
                     "page_count": result["page_count"],
                     "extraction_method": result["extraction_method"],
                 },
-                completed_at=_now(),
             )
         except Exception as exc:  # noqa: BLE001 - persisted task failure is user-visible
-            self.repository.update(
+            self.repository.fail(
                 task_id,
-                status="failed",
+                owner_id=self.worker_id,
                 message="公告文档处理失败",
                 error=str(exc),
-                completed_at=_now(),
             )
 
     def shutdown(self) -> None:

@@ -1,5 +1,20 @@
 # 生产发布加固与恢复手册（M4-B）
 
+## M8-A.1 / Schema v11 升级注意
+
+升级前仍应按本手册停止写入服务并创建、验证一次备份，然后执行 `ai-quant data init`。
+v10→v11 迁移保留全部文档、页面、引用和任务历史，并为任务增加唯一 claim、worker
+owner/heartbeat，为解析增加 fencing 字段。v10 已存在的两个文档业务唯一约束保持不变；
+迁移不会删除或合并历史记录。
+
+Schema v11 会在数据目录创建 `.catalog.duckdb.access.lock`。同一生产数据库的所有 Web、
+CLI、同步和备份进程必须使用相同的 `AI_QUANT_DATA_DIR` 与 `AI_QUANT_DUCKDB_PATH`，且
+`ai-quant` 用户必须能写该锁文件。锁等待最多 30 秒，超时会明确失败而不是无限挂起。
+
+生产锁顺序固定为 `.operations.lock` → DuckDB access lock。备份在 access lock 内完成
+checkpoint、复制、临时库验证和原子发布；公告网络下载及 OCR 在锁外执行。不要让未使用
+本项目 `LocalDatabase` 的第三方进程直接写同一个 DuckDB 文件。
+
 ## 发布边界
 
 版本 `0.2.0` 使用 DuckDB Schema v6。迁移增加运维审计、活动告警和备份保留状态，不

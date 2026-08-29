@@ -11,8 +11,9 @@ uv run ai-quant data init
 uv run ai-quant data status
 ```
 
-Web 服务启动时也会自动升级已存在的数据库。正在执行的任务如果因服务重启中断，会
-被标记为失败并保留原因；已完成任务和回测结果继续可见。
+Web 服务启动时也会自动升级已存在的数据库。Schema v11 起，queued/running 任务使用
+owner 和 heartbeat 租约；启动只回收超过租约期限的任务，不会把其他 Uvicorn Worker
+仍在执行的任务误判为失败。已完成任务和回测结果继续可见。
 
 ## Web 登录
 
@@ -21,9 +22,10 @@ Web 服务启动时也会自动升级已存在的数据库。正在执行的任�
 API、报告与下载都需要有效的签名会话 Cookie。
 
 ```bash
-export AI_QUANT_WEB_USERNAME=admin
-export AI_QUANT_WEB_PASSWORD='<设置足够长的随机密码>'
-export AI_QUANT_WEB_SESSION_SECRET='<设置独立的随机签名密钥>'
+# 认证变量由权限受限的生产环境文件注入；文档不提供密码或签名密钥示例值。
+set -a
+. /etc/ai-quant/ai-quant.env
+set +a
 uv run uvicorn ai_quant_assistant.api.app:create_app --factory --host 0.0.0.0 --port 8080
 ```
 
@@ -53,11 +55,13 @@ uv run ai-quant ops audit --limit 20
 400 天；如果最近记录较旧，会自动补齐期间缺口。同步依次执行股票、指数、公告、财务
 四个阶段，失败时保留任务、阶段进度和数据源错误。
 
-备份默认保存到自动识别的数据目录下的 `backups/`。流程先持有跨进程互斥锁，再执行
-DuckDB `CHECKPOINT`、复制数据库、重新打开验证 Schema、计算 SHA-256，最后原子发布
+备份默认保存到自动识别的数据目录下的 `backups/`。流程先持有长任务互斥锁，再持有
+DuckDB 跨进程 access lock，并执行 `CHECKPOINT`、复制数据库、重新打开验证 Schema、
+计算 SHA-256，最后原子发布
 备份文件。清理默认只预演；systemd 备份服务通过明确的 `--apply-retention` 开启保留
 策略，默认至少保留最近 7 份且只清理超过 30 天的旧备份。同步、备份、恢复与 Web
-回测共用同一把锁。
+回测共用长任务锁；文档下载/OCR 不占用长任务锁，只在短时数据库读写阶段使用 access
+lock，因此备份复制期间文档写入会有界等待，而不会产生不一致快照。
 
 ## 安装 systemd 服务
 

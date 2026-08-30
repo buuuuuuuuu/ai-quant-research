@@ -47,8 +47,10 @@ on_error() {
   if ((writes_stopped)); then
     systemctl stop "${timer_units[@]}" >/dev/null 2>&1 || true
     systemctl stop "${service_units[@]}" >/dev/null 2>&1 || true
+    log "Deployment failed with exit code $status. AI Quant writers remain stopped."
+  else
+    log "Deployment failed with exit code $status before writers were stopped."
   fi
-  log "Deployment failed with exit code $status. AI Quant writers remain stopped."
   if [[ -n "$pre_upgrade_backup_id" ]]; then
     log "Verified pre-upgrade backup: $pre_upgrade_backup_id"
   fi

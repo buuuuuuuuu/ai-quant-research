@@ -72,8 +72,14 @@ print(value)
 }
 
 run_ai() {
-  runuser -u ai-quant -- env "${production_environment[@]}" \
-    "$app_dir/.venv/bin/ai-quant" "$@"
+  (
+    # The source checkout normally lives below /root and is intentionally not
+    # traversable by the service account. Run the installed CLI from its own
+    # production directory so Settings discovery never inspects /root.
+    cd "$app_dir"
+    runuser -u ai-quant -- env "${production_environment[@]}" \
+      "$app_dir/.venv/bin/ai-quant" "$@"
+  )
 }
 
 create_verified_backup() {

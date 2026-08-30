@@ -549,3 +549,5 @@ def test_git_production_updater_pins_main_and_fails_closed() -> None:
     assert "document_event_research_run" in content
     assert "AI Quant writers remain stopped" in content
     assert "curl --fail --silent --show-error" in content
+    assert 'cd "$app_dir"' in content
+    assert content.index('cd "$app_dir"') < content.index("runuser -u ai-quant")

@@ -43,7 +43,7 @@ jobs:
         run: node --check src/ai_quant_assistant/web/static/workbench.js
 
       - name: Validate deployment shell scripts
-        run: bash -n deploy/scripts/install-production.sh
+        run: bash -n deploy/scripts/*.sh
 
       - name: Validate systemd units
         run: systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer

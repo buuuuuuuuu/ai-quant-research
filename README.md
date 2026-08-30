@@ -446,6 +446,14 @@ Schema v12 会持久化回测、Copilot、条件选股、候选股票池、公�
 15 分钟运行检查；`deploy/nginx/` 提供 HTTP 和 HTTPS 反向代理模板。完整升级、
 备份恢复和发布操作见 `docs/platform-operations.md` 与 `docs/release-hardening.md`。
 
+生产服务器从已通过 CI 的 `main` 安全更新时，使用带备份验证、提交锁定、Schema 校验、
+健康检查和失败停机保护的脚本：
+
+```bash
+cd /root/code/ai-quant-research
+bash deploy/scripts/update-production-from-git.sh
+```
+
 离线请求示例：
 
 ```bash

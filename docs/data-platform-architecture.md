@@ -123,6 +123,17 @@ Schema v11 增加：
 - 所有 DuckDB 连接通过带超时的跨进程 access lock，备份在同一锁内完成 checkpoint、
   复制、校验和原子发布；下载、PDF 解析和 OCR 不长期持锁。
 
+Schema v12 增加：
+
+- `document_event_extraction` 与 `active_event_extraction_id`：事件提取租约、心跳和发布
+  fencing；`operation_task` 增加按文档和提取器版本唯一的 `document_event_extract` claim；
+- `document_event`：五类结构化事件、业务时间、真实公开时间、版本可知时间、提取器版本与
+  审核状态；同公告后续 PDF 版本不会回灌到归档前的研究时点；
+- `document_event_evidence`：逐字段绑定文档、页码、正文块、逐字 quote 与 SHA-256；
+- `document_event_research_run`：冻结事件、公告、文档、as_of、研究参数、结果和证据；
+- 提取计算和行情获取在 DuckDB 锁外完成，最终 fencing 校验/事务写入和备份复制复用现有
+  access lock；锁顺序仍为 `.operations.lock` → DuckDB access lock。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期
@@ -185,7 +196,7 @@ sync-announcements` 按证券、自然年、`q1/interim/q3/annual` 报告类型�
 股票血缘通过 `daily_bar.source_batch_id` 与 `sync_partition.raw_path` 重建；指数和公告
 通过各自记录的实际 Provider 来源、同步批次与 `research_sync_partition.raw_path` 重建。
 公告 PDF 在通过魔数、大小、公开地址和 SHA-256 校验后写入 `data/documents/<摘要前缀>/`；
-Schema v10–v11 只保存相对该归档的页码正文、检索块、解析运行和已验证引文，不把外部网页或
+Schema v10–v12 只保存相对该归档的页码正文、检索块、解析运行、结构化事件和已验证引文，不把外部网页或
 模型生成内容混入已发布公告事实表。
 研究快照保留上述逐行字段，`source=local` 的 CLI 和 API 均可实现三个研究输入全部本地命中。
 

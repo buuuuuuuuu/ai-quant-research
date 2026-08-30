@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,6 +871,152 @@ MIGRATIONS = (
             "DROP INDEX operation_task_type_created_idx",
             "DROP TABLE operation_task",
             "ALTER TABLE operation_task_v11 RENAME TO operation_task",
+            """
+            CREATE INDEX operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
+            """,
+            """
+            CREATE INDEX operation_task_claim_status_idx
+            ON operation_task (claim_key, status)
+            """,
+        ),
+    ),
+    Migration(
+        version=12,
+        name="document_event_intelligence_evidence_and_point_in_time_research",
+        statements=(
+            "ALTER TABLE announcement_document ADD COLUMN active_event_extraction_id VARCHAR",
+            """
+            CREATE TABLE document_event_extraction (
+                extraction_id VARCHAR PRIMARY KEY,
+                document_id VARCHAR NOT NULL,
+                extractor VARCHAR NOT NULL,
+                extractor_version VARCHAR NOT NULL,
+                status VARCHAR NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                heartbeat_at TIMESTAMPTZ,
+                started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMPTZ,
+                error VARCHAR
+            )
+            """,
+            """
+            CREATE INDEX document_event_extraction_document_started_idx
+            ON document_event_extraction (document_id, started_at)
+            """,
+            """
+            CREATE TABLE document_event (
+                event_id VARCHAR PRIMARY KEY,
+                extraction_id VARCHAR NOT NULL,
+                announcement_id VARCHAR NOT NULL,
+                document_id VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                event_type VARCHAR NOT NULL CHECK (event_type IN (
+                    'performance_forecast', 'dividend', 'share_repurchase',
+                    'major_contract', 'shareholder_change'
+                )),
+                published_at TIMESTAMPTZ NOT NULL,
+                known_at TIMESTAMPTZ NOT NULL,
+                event_date DATE,
+                period_start DATE,
+                period_end DATE,
+                direction VARCHAR NOT NULL DEFAULT 'unknown'
+                    CHECK (direction IN ('positive', 'negative', 'neutral', 'mixed', 'unknown')),
+                amount DOUBLE,
+                currency VARCHAR,
+                ratio DOUBLE,
+                structured_payload_json VARCHAR NOT NULL DEFAULT '{}',
+                extractor VARCHAR NOT NULL,
+                extractor_version VARCHAR NOT NULL,
+                status VARCHAR NOT NULL CHECK (
+                    status IN ('insufficient', 'needs_review', 'accepted', 'rejected')
+                ),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMPTZ,
+                reviewed_by VARCHAR,
+                review_note VARCHAR,
+                UNIQUE (document_id, event_type, extractor_version)
+            )
+            """,
+            """
+            CREATE INDEX document_event_pit_idx
+            ON document_event (security_id, published_at, status, event_type)
+            """,
+            """
+            CREATE TABLE document_event_evidence (
+                event_id VARCHAR NOT NULL,
+                evidence_order INTEGER NOT NULL CHECK (evidence_order >= 1),
+                field_name VARCHAR NOT NULL,
+                document_id VARCHAR NOT NULL,
+                page_number INTEGER NOT NULL CHECK (page_number >= 1),
+                chunk_id VARCHAR NOT NULL,
+                quote VARCHAR NOT NULL,
+                quote_sha256 VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (event_id, evidence_order)
+            )
+            """,
+            """
+            CREATE INDEX document_event_evidence_document_page_idx
+            ON document_event_evidence (document_id, page_number, chunk_id)
+            """,
+            """
+            CREATE TABLE document_event_research_run (
+                run_id VARCHAR PRIMARY KEY,
+                event_id VARCHAR NOT NULL,
+                announcement_id VARCHAR NOT NULL,
+                document_id VARCHAR NOT NULL,
+                as_of TIMESTAMPTZ NOT NULL,
+                spec_json VARCHAR NOT NULL,
+                result_json VARCHAR NOT NULL,
+                evidence_json VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX document_event_research_event_created_idx
+            ON document_event_research_run (event_id, created_at)
+            """,
+            """
+            CREATE TABLE operation_task_v12 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL
+                    CHECK (task_type IN (
+                        'backtest', 'sync', 'backup', 'copilot', 'document_ingest',
+                        'document_event_extract'
+                    )),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                claim_key VARCHAR UNIQUE,
+                owner_id VARCHAR,
+                heartbeat_at TIMESTAMPTZ
+            )
+            """,
+            """
+            INSERT INTO operation_task_v12 (
+                task_id, task_type, status, progress, message, spec_json, result_json,
+                run_id, error, created_at, started_at, completed_at, updated_at,
+                claim_key, owner_id, heartbeat_at
+            )
+            SELECT task_id, task_type, status, progress, message, spec_json, result_json,
+                   run_id, error, created_at, started_at, completed_at, updated_at,
+                   claim_key, owner_id, heartbeat_at
+            FROM operation_task
+            """,
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP INDEX operation_task_claim_status_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v12 RENAME TO operation_task",
             """
             CREATE INDEX operation_task_type_created_idx
             ON operation_task (task_type, created_at)

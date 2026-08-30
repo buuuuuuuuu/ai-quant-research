@@ -1,5 +1,40 @@
 # 生产发布加固与恢复手册（M4-B）
 
+## M8-B / Schema v12 升级注意
+
+v11→v12 迁移新增公告事件、逐字段证据、事件提取运行和事件研究结果表，并在原表上增加
+事件提取 fencing 与任务类型。迁移不删除、合并或更新已有公告、文档、页面、分块、问答、
+引用、任务、备份和审计记录；任务表复制若遇到不受支持的历史类型会让事务明确失败，不能
+静默丢行。
+
+发布前停止 Web、同步和备份写入，创建并验证 v11 备份；更新 Wheel 后以 `ai-quant` 用户
+执行 `ai-quant data init`，确认 `schema_version` 与 `expected_schema_version` 均为 12，再
+启动服务。旧版本程序不要再指向已升级的 v12 数据库。事件提取继续使用 v11 的 DuckDB
+access lock 和 `.operations.lock` 顺序，不需要 Redis、Celery、外部数据库或额外密钥。
+
+合并并确认 `main` CI 通过后，可在服务器源码目录执行受保护的 Git 更新脚本：
+
+```bash
+cd /root/code/ai-quant-research
+git fetch origin main
+git switch main
+git merge --ff-only origin/main
+
+bash deploy/scripts/update-production-from-git.sh
+```
+
+默认源码目录为 `/root/code/ai-quant-research`，生产目录为 `/opt/ai-quant/app`，更新来源为
+`origin/main`，目标 Schema 为 v12。也可显式传入这三个参数：
+
+```bash
+bash deploy/scripts/update-production-from-git.sh \
+  /root/code/ai-quant-research main 12
+```
+
+脚本拒绝脏工作树和非快进 `main`，先停止所有 DuckDB 写入并创建、验证升级前备份，再将
+准确的远端提交交给安装脚本。只有部署提交、Schema、M8-B 表、Web 健康检查及升级后备份
+全部通过才恢复定时器；任一步失败都会再次停止相关单元并显示已验证的升级前备份 ID。
+
 ## M8-A.1 / Schema v11 升级注意
 
 升级前仍应按本手册停止写入服务并创建、验证一次备份，然后执行 `ai-quant data init`。

@@ -1,4 +1,4 @@
-# M8-A 公告与财报文档智能
+# M8-A / M8-B 公告与财报文档智能
 
 ## 能力与入口
 
@@ -10,6 +10,7 @@
 - 单文档引用式问答；
 - 同一股票最多六份财报的多期或修订版本比较；
 - 持久化后台任务进度、失败原因和运维审计。
+- 五类公告结构化事件、逐字段原文证据、人工接受/拒绝和事件研究入口。
 
 财务指标仍来自 Point-in-Time 发布表；PDF 正文是补充证据，不能覆盖结构化指标或真实
 公开时间。只有 `published_announcement` 的公告可以归档。
@@ -33,7 +34,7 @@ sudo -u ai-quant env \
   .venv/bin/ai-quant data init
 ```
 
-`data status` 应显示 `schema_version: 11`，并列出：
+`data status` 应显示 `schema_version: 12`，并列出：
 
 ```text
 announcement_document
@@ -42,6 +43,10 @@ document_chunk
 document_extraction
 document_question
 document_answer_citation
+document_event_extraction
+document_event
+document_event_evidence
+document_event_research_run
 ```
 
 环境变量见 `deploy/systemd/ai-quant.env.example`。默认
@@ -75,6 +80,11 @@ document_answer_citation
 | GET | `/api/v1/documents/{document_id}/file` | 校验后查看本地 PDF |
 | POST | `/api/v1/documents/questions` | 单份或多份文档引用式问答 |
 | POST | `/api/v1/documents/compare` | 多期/修订版本比较 |
+| POST | `/api/v1/documents/{document_id}/events/extract` | 启动五类离线事件提取 |
+| GET | `/api/v1/documents/{document_id}/events` | 查看事件及逐字段证据 |
+| GET | `/api/v1/document-events?as_of=...` | 按可知时点查询审核事件 |
+| POST | `/api/v1/document-events/{event_id}/review` | `needs_review` 接受或拒绝 |
+| POST | `/api/v1/document-events/{event_id}/event-study` | 复用事件研究引擎 |
 | GET | `/api/v1/ops/tasks/{task_id}` | 查询后台进度 |
 
 ## 验收
@@ -106,3 +116,20 @@ OpenAI 伪造引文降级、后台进度、Web API 和文件响应安全头。
 
 锁顺序固定为：长任务需要时先获取 `.operations.lock`，再短时获取 DuckDB access lock；
 文档下载/OCR 不获取 `.operations.lock`，只在数据库读写和发布文件时短时获取 access lock。
+
+## M8-B 事件、证据与 Point-in-Time 语义
+
+- 默认 `rules/m8b-rules-v1` 完全离线。规则只保存正文明确披露的日期、方向、金额、币种和
+  比例；未知字段保持空值或 `unknown`，不把推断写成事实。
+- 每个事件由 `document_id + event_type + extractor_version` 唯一约束；同版本重复任务
+  幂等复用。每个非空事实字段都必须有正文块内逐字存在的 quote；校验不完整的事件只能是
+  `insufficient`，其余先进入 `needs_review`。
+- 审核仅允许 `needs_review → accepted/rejected`，并写 `operation_audit`。提取 worker 用
+  独立 `active_event_extraction_id` fencing，不能覆盖已经完成的结果或人工审核。
+- `published_at` 是公告真实公开时间，`known_at` 是该不可变文档版本可进入研究的时间，
+  `event_date/period_start/period_end` 是正文业务时间，`created_at` 是系统处理时间。查询
+  强制两种可知时间都不晚于 `as_of`；同一公告的首版 `known_at=published_at`，后来发现的
+  PDF 版本保守地不早于其归档时间，不回写旧事件或污染更早研究。
+- 事件研究只接受 `accepted` 事件，仍以公告公开后的首个股票与基准共同交易日收盘入场。
+  研究记录冻结 `event_id/announcement_id/document_id/as_of`、参数、结果和证据，可从结果
+  的证据页码回到原文。

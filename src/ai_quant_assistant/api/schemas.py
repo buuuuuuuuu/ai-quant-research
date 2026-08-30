@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -366,9 +366,9 @@ class PointInTimeScreenRequest(BaseModel):
     symbols: list[str] = Field(
         default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), max_length=500
     )
-    universe_mode: Literal[
-        "explicit", "all_available", "historical_index", "observed_index"
-    ] = "explicit"
+    universe_mode: Literal["explicit", "all_available", "historical_index", "observed_index"] = (
+        "explicit"
+    )
     benchmark_symbol: str = "csi000300"
     classification_system: str = Field(default="provider", min_length=1, max_length=80)
     include_industries: list[str] = Field(default_factory=list, max_length=100)
@@ -442,7 +442,9 @@ class DocumentQuestionRequest(BaseModel):
 
 class DocumentCompareRequest(BaseModel):
     document_ids: list[str] = Field(min_length=2, max_length=6)
-    focus: str = Field(default="比较主要财务表现、经营变化、风险和修订差异", min_length=1, max_length=500)
+    focus: str = Field(
+        default="比较主要财务表现、经营变化、风险和修订差异", min_length=1, max_length=500
+    )
 
     @field_validator("document_ids")
     @classmethod
@@ -453,3 +455,32 @@ class DocumentCompareRequest(BaseModel):
         if any(not re.fullmatch(r"doc-[0-9a-f]{32}", value) for value in normalized):
             raise ValueError("document_ids contain an invalid identifier")
         return normalized
+
+
+class DocumentEventReviewRequest(BaseModel):
+    status: Literal["accepted", "rejected"]
+    note: str = Field(default="", max_length=1_000)
+
+
+class DocumentEventStudyRequest(BaseModel):
+    source: Literal["fixture", "akshare", "local"] = "local"
+    as_of: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    benchmark_symbol: str = Field(default="csi000300", min_length=8, max_length=16)
+    windows: list[int] = Field(default_factory=lambda: [5, 10, 20], min_length=1, max_length=10)
+    adjustment: Literal["hfq", "qfq", ""] = "qfq"
+    round_trip_cost_bps: float = Field(default=20.0, ge=0, le=500)
+
+    @field_validator("windows")
+    @classmethod
+    def validate_windows(cls, windows: list[int]) -> list[int]:
+        normalized = sorted(set(windows))
+        if any(window <= 0 or window > 250 for window in normalized):
+            raise ValueError("windows must be between 1 and 250 trading days")
+        return normalized
+
+    @field_validator("as_of")
+    @classmethod
+    def validate_as_of(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("as_of must include an explicit timezone")
+        return value

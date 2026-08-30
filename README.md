@@ -45,9 +45,9 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0 + M1 + M2 + M3 + M4 + M5 + M6）
+## A 股本地数据库（M0–M8）
 
-数据平台提供 DuckDB Schema v11、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v12、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -59,13 +59,17 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v10 数据库执行同一命令时会自动升级到 Schema v11，不删除已发布的
+已有 Schema v1–v11 数据库执行同一命令时会自动升级到 Schema v12，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 Schema v10 引入的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。
 首次点击“归档并解析”会启动后台任务；详见 [文档智能说明](docs/document-intelligence.md)。
 Schema v11 增加跨进程 DuckDB 访问栅栏、文档归档原子版本分配、文档任务唯一 claim、
 worker 租约/心跳和解析 fencing；重复请求会复用活动任务，过期或失败任务可以安全重试。
+Schema v12 在已解析正文上提供业绩预告/快报、分红派息、股份回购、重大合同和股东
+增减持五类离线规则提取。每个结构化字段绑定页码、正文块、逐字 quote 和 SHA-256，需
+审核为 `accepted` 后才能复用现有事件研究引擎；研究按公告真实 `published_at` 做
+Point-in-Time 过滤，并保存事件、公告、文档和原文证据。
 
 初始化并写入离线样例：
 
@@ -432,13 +436,23 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v11 会持久化回测、Copilot、条件选股、候选股票池、公告文档任务、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与指数成分同步批次。同步按现有覆盖区间依次更新股票、
+Schema v12 会持久化回测、Copilot、条件选股、候选股票池、公告文档与事件提取任务、
+逐字段证据、事件研究输入、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与
+指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256
 校验。Web 首页“数据同步与备份”可直接查看状态并启动任务。
 
 `deploy/systemd/` 提供低权限 Web 常驻服务、交易日收盘后增量同步、每日备份及每
 15 分钟运行检查；`deploy/nginx/` 提供 HTTP 和 HTTPS 反向代理模板。完整升级、
 备份恢复和发布操作见 `docs/platform-operations.md` 与 `docs/release-hardening.md`。
+
+生产服务器从已通过 CI 的 `main` 安全更新时，使用带备份验证、提交锁定、Schema 校验、
+健康检查和失败停机保护的脚本：
+
+```bash
+cd /root/code/ai-quant-research
+bash deploy/scripts/update-production-from-git.sh
+```
 
 离线请求示例：
 

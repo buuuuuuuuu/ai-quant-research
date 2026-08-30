@@ -508,7 +508,7 @@ def test_ci_workflow_and_release_version_cover_all_required_checks() -> None:
         "uv run ruff check .",
         "uv run pytest",
         "node --check",
-        "bash -n deploy/scripts/install-production.sh",
+        "bash -n deploy/scripts/*.sh",
         "systemd-analyze verify",
         "uv build --wheel",
     ):
@@ -530,3 +530,24 @@ def test_production_installer_is_syntactically_valid_and_preserves_existing_cata
     assert "git clone --no-hardlinks" in content
     assert "runuser -u ai-quant" in content
     assert '"$resolved_python" == /root/*' in content
+
+
+def test_git_production_updater_pins_main_and_fails_closed() -> None:
+    root = Path(__file__).resolve().parents[1]
+    updater = root / "deploy/scripts/update-production-from-git.sh"
+    content = updater.read_text(encoding="utf-8")
+    checked = subprocess.run(["bash", "-n", str(updater)], check=False, capture_output=True)
+
+    assert checked.returncode == 0, checked.stderr.decode()
+    assert "/root/code/ai-quant-research" in content
+    assert "/opt/ai-quant/app" in content
+    assert 'branch="${2:-main}"' in content
+    assert "git -C \"$source_dir\" merge --ff-only" in content
+    assert "ops backup-verify" in content
+    assert "install-production.sh" in content
+    assert "expected_schema_version" in content
+    assert "document_event_research_run" in content
+    assert "AI Quant writers remain stopped" in content
+    assert "curl --fail --silent --show-error" in content
+    assert 'cd "$app_dir"' in content
+    assert content.index('cd "$app_dir"') < content.index("runuser -u ai-quant")

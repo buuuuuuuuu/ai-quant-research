@@ -4,12 +4,12 @@ import csv
 import io
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import parse_qs, quote
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -33,6 +33,8 @@ from ai_quant_assistant.api.schemas import (
     CopilotConversationRequest,
     CopilotMessageRequest,
     DocumentCompareRequest,
+    DocumentEventReviewRequest,
+    DocumentEventStudyRequest,
     DocumentQuestionRequest,
     FactorBacktestRequest,
     FactorLabRequest,
@@ -43,7 +45,12 @@ from ai_quant_assistant.api.schemas import (
     SaveWatchlistRequest,
 )
 from ai_quant_assistant.config import Settings
-from ai_quant_assistant.documents import DocumentIntelligenceService, DocumentTaskManager
+from ai_quant_assistant.documents import (
+    DocumentEventService,
+    DocumentEventTaskManager,
+    DocumentIntelligenceService,
+    DocumentTaskManager,
+)
 from ai_quant_assistant.errors import QuantResearchError
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.base import MarketDataProvider
@@ -159,6 +166,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     screener = PointInTimeScreener(database)
     document_service = DocumentIntelligenceService(database, resolved_settings)
     document_tasks = DocumentTaskManager(document_service, task_repository)
+    document_event_service = DocumentEventService(database)
+    document_event_tasks = DocumentEventTaskManager(document_event_service, task_repository)
     copilot_service = CopilotService(
         repository=copilot_repository,
         planner=create_planner(resolved_settings),
@@ -185,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         copilot_tasks.shutdown()
         operation_manager.shutdown()
         document_tasks.shutdown()
+        document_event_tasks.shutdown()
 
     app = FastAPI(
         title="AI 量化研究助手 API",
@@ -212,6 +222,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.screener = screener
     app.state.document_service = document_service
     app.state.document_tasks = document_tasks
+    app.state.document_event_service = document_event_service
+    app.state.document_event_tasks = document_event_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     @app.middleware("http")
@@ -548,9 +560,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="data record not found") from exc
 
-    @app.post(
-        "/api/v1/documents/announcements/{announcement_id}/ingest", status_code=202
-    )
+    @app.post("/api/v1/documents/announcements/{announcement_id}/ingest", status_code=202)
     def ingest_announcement_document(announcement_id: str) -> dict[str, Any]:
         try:
             document_service.list_announcement_documents(announcement_id)
@@ -653,6 +663,117 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="document not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/documents/{document_id}/events/extract", status_code=202)
+    def extract_document_events(document_id: str) -> dict[str, Any]:
+        try:
+            document_event_service.list_document_events(document_id)
+            task = document_event_tasks.submit(document_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "document_event_extraction_requested",
+            actor=resolved_settings.web_username,
+            object_type="announcement_document",
+            object_id=document_id,
+            details={"task_id": task["task_id"]},
+        )
+        return task
+
+    @app.get("/api/v1/documents/{document_id}/events")
+    def list_document_events(document_id: str) -> dict[str, Any]:
+        try:
+            return document_event_service.list_document_events(document_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+
+    @app.get("/api/v1/document-events")
+    def list_point_in_time_document_events(
+        as_of: Annotated[datetime | None, Query()] = None,
+        symbol: Annotated[str | None, Query(pattern=r"^\d{6}$")] = None,
+        event_type: Annotated[str | None, Query(max_length=40)] = None,
+        status: Annotated[
+            str, Query(pattern="^(accepted|rejected|needs_review|insufficient)$")
+        ] = "accepted",
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        as_of = as_of or datetime.now(UTC)
+        if as_of.tzinfo is None:
+            raise HTTPException(status_code=422, detail="as_of must include an explicit timezone")
+        allowed_types = {
+            "performance_forecast",
+            "dividend",
+            "share_repurchase",
+            "major_contract",
+            "shareholder_change",
+        }
+        if event_type is not None and event_type not in allowed_types:
+            raise HTTPException(status_code=422, detail="unsupported document event type")
+        return document_event_service.list_events(
+            as_of=as_of,
+            symbol=symbol,
+            event_type=event_type,
+            status=status,
+            limit=limit,
+        )
+
+    @app.get("/api/v1/document-events/{event_id}")
+    def get_document_event(event_id: str) -> dict[str, Any]:
+        try:
+            return document_event_service.get_event(event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document event not found") from exc
+
+    @app.post("/api/v1/document-events/{event_id}/review")
+    def review_document_event(event_id: str, request: DocumentEventReviewRequest) -> dict[str, Any]:
+        try:
+            event = document_event_service.review(
+                event_id,
+                status=request.status,
+                actor=resolved_settings.web_username,
+                note=request.note,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document event not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit_repository.record(
+            "document_event_reviewed",
+            actor=resolved_settings.web_username,
+            object_type="document_event",
+            object_id=event_id,
+            details={"status": request.status, "note": request.note},
+        )
+        return event
+
+    @app.post("/api/v1/document-events/{event_id}/event-study", status_code=201)
+    def run_document_event_study(
+        event_id: str, request: DocumentEventStudyRequest
+    ) -> dict[str, Any]:
+        try:
+            result = document_event_service.run_event_study(
+                event_id,
+                provider=_provider(request.source, resolved_settings),
+                as_of=request.as_of,
+                benchmark_symbol=request.benchmark_symbol,
+                windows=tuple(request.windows),
+                adjustment=request.adjustment,
+                round_trip_cost_bps=request.round_trip_cost_bps,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="document event not found") from exc
+        except (QuantResearchError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "document_event_study_completed",
+            actor=resolved_settings.web_username,
+            object_type="document_event_research_run",
+            object_id=result["run_id"],
+            details={"event_id": event_id, "as_of": request.as_of.isoformat()},
+        )
+        return result
 
     @app.get("/api/v1/copilot/tools")
     def copilot_tools() -> list[dict[str, object]]:
@@ -879,8 +1000,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             writer.writerow(
                 {
                     key: f"'{value}"
-                    if isinstance(value, str)
-                    and value.startswith(("=", "+", "-", "@", "\t", "\r"))
+                    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r"))
                     else value
                     for key, value in row.items()
                 }
@@ -888,9 +1008,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return Response(
             "\ufeff" + stream.getvalue(),
             media_type="text/csv; charset=utf-8",
-            headers={
-                "Content-Disposition": f'attachment; filename="{run_id}-screen-results.csv"'
-            },
+            headers={"Content-Disposition": f'attachment; filename="{run_id}-screen-results.csv"'},
         )
 
     @app.post("/api/v1/screens/runs/{run_id}/watchlists", status_code=201)

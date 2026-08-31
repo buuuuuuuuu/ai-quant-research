@@ -1,4 +1,4 @@
-# A 股本地数据库数据字典（Schema v12）
+# A 股本地数据库数据字典（Schema v13）
 
 ## 公共约定
 
@@ -318,7 +318,7 @@ Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。�
 | 字段 | 类型 | 约束 | 含义 |
 |---|---|---|---|
 | task_id | VARCHAR | PK | 稳定任务标识 |
-| task_type | VARCHAR | backtest/sync/backup | 任务类型 |
+| task_type | VARCHAR | backtest/sync/backup/copilot/document_ingest/document_event_extract/stock_pool_sync | 任务类型 |
 | status | VARCHAR | queued/running/succeeded/failed | 持久化生命周期状态 |
 | progress | INTEGER | 0–100 | 当前执行进度 |
 | message | VARCHAR | NOT NULL | 人类可读的阶段说明 |
@@ -327,6 +327,8 @@ Schema v5 统一持久化 Web 回测、定时增量同步和数据库备份。�
 | run_id | VARCHAR | 可空 | 对应财务因子回测运行标识 |
 | error | VARCHAR | 可空 | 失败原因 |
 | created_at/started_at/completed_at/updated_at | TIMESTAMPTZ | 创建和更新不可空 | 带时区的任务生命周期时间 |
+| claim_key | VARCHAR | UNIQUE，可空 | 跨进程幂等业务 claim；成功任务保留，失败或过期释放 |
+| owner_id/heartbeat_at | VARCHAR/TIMESTAMPTZ | 可空 | worker 租约、心跳和终态 fencing |
 
 ## database_backup
 
@@ -490,3 +492,15 @@ running/succeeded/failed 状态、heartbeat 和错误。`announcement_document` 
 事件研究参数、结果和证据 JSON。只有 `published_at <= as_of` 且 `known_at <= as_of` 的
 accepted 事件可以创建研究记录。`operation_task` 增加 `document_event_extract`，claim key
 包含文档和提取器版本。
+## 自定义股票池（Schema v13）
+
+`stock_pool` 保存 `pool_id`、名称、描述、`source_type`、来源筛选运行、`as_of`、
+`history_verified`、warning、active/archived、默认标记、`current_revision` 和时间戳。
+
+`stock_pool_member` 保存 `pool_id`、`security_id`、显示顺序、备注和增改时间；
+`(pool_id, security_id)` 唯一。证券代码、名称、交易所和上市状态来自 `security_master`，
+用户不能通过股票池修改证券主数据。
+
+`stock_pool_revision` 保存 `pool_id`、`revision_no`、有序 `symbols_json`、
+`symbols_sha256`、变更类型、摘要和创建时间；`(pool_id, revision_no)` 唯一且快照不可覆盖。
+研究运行在 spec/result 中保存冻结的股票池上下文，不需要为各研究引擎重复建表。

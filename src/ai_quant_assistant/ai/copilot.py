@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -15,6 +17,7 @@ from ai_quant_assistant.api.schemas import FactorBacktestRequest, FactorLabReque
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.storage.operations import ExclusiveOperationLock
+from ai_quant_assistant.storage.stock_pools import StockPoolService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 from ai_quant_assistant.storage.universe import UniverseRepository
 
@@ -28,10 +31,12 @@ class CopilotService:
         repository: CopilotRepository,
         planner: Planner,
         preflight: CoveragePreflight,
+        stock_pools: StockPoolService,
     ) -> None:
         self.repository = repository
         self.planner = planner
         self.preflight = preflight
+        self.stock_pools = stock_pools
 
     def create_conversation(self, title: str = "新研究对话") -> dict[str, Any]:
         return self.repository.create_conversation(title)
@@ -47,7 +52,13 @@ class CopilotService:
         draft = self.planner.plan(question)
         if draft.get("tool_name") and not draft.get("blocked"):
             try:
-                draft["spec"] = validate_tool_spec(draft["tool_name"], draft.get("spec", {}))
+                proposed_spec = self._resolve_stock_scope(
+                    draft["tool_name"], draft.get("spec", {})
+                )
+                frozen_context = proposed_spec.pop("_stock_pool_context", None)
+                draft["spec"] = validate_tool_spec(draft["tool_name"], proposed_spec)
+                if frozen_context is not None:
+                    draft["spec"]["stock_pool"] = frozen_context
                 draft["preflight"] = self.preflight.run(draft["tool_name"], draft["spec"])
                 if not draft["preflight"]["ready"]:
                     draft["blocked"] = True
@@ -74,6 +85,35 @@ class CopilotService:
             metadata={"kind": "plan_preview", "status": plan["status"]},
         )
         return self.repository.get_plan(plan["plan_id"])
+
+    def _resolve_stock_scope(self, tool_name: str, spec: dict[str, Any]) -> dict[str, Any]:
+        resolved = dict(spec)
+        if tool_name not in {"run_factor_backtest", "run_factor_lab"}:
+            return resolved
+        symbols = resolved.get("symbols")
+        if symbols:
+            normalized = list(dict.fromkeys(str(item).strip() for item in symbols))
+            canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+            context = {
+                "pool_id": None,
+                "pool_revision": None,
+                "resolved_symbols": normalized,
+                "symbols_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                "resolved_at": datetime.now(UTC).isoformat(),
+                "source_type": "explicit",
+                "as_of": None,
+                "history_verified": False,
+                "warning": "显式股票列表可能存在幸存者偏差。",
+            }
+        else:
+            context = self.stock_pools.resolve(
+                resolved.pop("stock_pool_id", None),
+                revision=resolved.pop("stock_pool_revision", None),
+            )
+            normalized = list(context["resolved_symbols"])
+        resolved["symbols"] = normalized
+        resolved["_stock_pool_context"] = context
+        return resolved
 
     def refresh_preflight(self, plan_id: str) -> dict[str, Any]:
         plan = self.repository.get_plan(plan_id)
@@ -121,6 +161,7 @@ class CopilotTaskManager:
         factor_backtests: FactorBacktestService,
         factor_lab: FactorLabService,
         universe: UniverseRepository,
+        stock_pools: StockPoolService,
         operation_lock: ExclusiveOperationLock,
     ) -> None:
         self.plans = plans
@@ -128,6 +169,7 @@ class CopilotTaskManager:
         self.factor_backtests = factor_backtests
         self.factor_lab = factor_lab
         self.universe = universe
+        self.stock_pools = stock_pools
         self.operation_lock = operation_lock
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="copilot")
 
@@ -207,13 +249,28 @@ class CopilotTaskManager:
             self.plans.add_event(plan_id, "failed", "system", {"error": str(exc)})
 
     def _execute(self, tool_name: str, spec: dict[str, Any], progress: Any) -> dict[str, Any]:
+        if tool_name == "list_stock_pools":
+            return {
+                "status": "succeeded",
+                "run_id": None,
+                "stock_pools": self.stock_pools.list(),
+                "artifacts": {},
+            }
         if tool_name == "run_factor_backtest":
+            request = FactorBacktestRequest.model_validate(spec)
             return self.factor_backtests.run(
-                FactorBacktestRequest.model_validate(spec).to_spec(), progress_callback=progress
+                request.to_spec(
+                    resolved_symbols=spec["symbols"], stock_pool=spec.get("stock_pool")
+                ),
+                progress_callback=progress,
             )
         if tool_name == "run_factor_lab":
+            request = FactorLabRequest.model_validate(spec)
             return self.factor_lab.run(
-                FactorLabRequest.model_validate(spec).to_spec(), progress_callback=progress
+                request.to_spec(
+                    resolved_symbols=spec["symbols"], stock_pool=spec.get("stock_pool")
+                ),
+                progress_callback=progress,
             )
         if tool_name == "build_point_in_time_universe":
             progress(30, "正在构建 Point-in-Time 股票池")
@@ -251,6 +308,10 @@ class CopilotTaskManager:
                 f"验证集选择 {summary.get('selected_strategy', '—')}。"
             )
             evidence.append({"kind": "ic_summary", "value": result.get("ic_summary", [])})
+        elif "stock_pools" in result:
+            pools = result["stock_pools"]
+            conclusion = f"当前有 {len(pools)} 个可用股票池。"
+            evidence.append({"kind": "stock_pools", "value": pools})
         else:
             universe = result.get("universe", {})
             conclusion = (

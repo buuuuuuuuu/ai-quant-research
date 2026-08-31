@@ -13,6 +13,13 @@ class ResearchTool:
 
 
 RESEARCH_TOOLS = {
+    "list_stock_pools": ResearchTool(
+        "list_stock_pools",
+        "查看股票池",
+        "只读列出可用于研究的股票池、版本和成员数量。",
+        (),
+        background=False,
+    ),
     "run_factor_backtest": ResearchTool(
         "run_factor_backtest",
         "财务因子历史回测",
@@ -48,7 +55,12 @@ RESEARCH_TOOLS = {
 
 ALLOWED_RESEARCH_TOOLS = frozenset(RESEARCH_TOOLS)
 COPILOT_RESEARCH_TOOLS = frozenset(
-    {"run_factor_backtest", "run_factor_lab", "build_point_in_time_universe"}
+    {
+        "list_stock_pools",
+        "run_factor_backtest",
+        "run_factor_lab",
+        "build_point_in_time_universe",
+    }
 )
 
 

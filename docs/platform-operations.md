@@ -16,8 +16,16 @@ owner 和 heartbeat 租约；启动只回收超过租约期限的任务，不会
 仍在执行的任务误判为失败。已完成任务和回测结果继续可见。
 
 Schema v12 增加 `document_event_extract` claim 和独立 extraction fencing。升级后先确认
-`data status` 的 schema 版本为 12，再提交事件提取；备份、同步、文档解析和事件写入继续
+`data status` 的 schema 版本至少为 12，再提交事件提取；备份、同步、文档解析和事件写入继续
 使用 `.operations.lock` → DuckDB access lock 的既定顺序。
+
+Schema v13 增加自定义股票池和 `stock_pool_sync` 任务。升级会校验所有旧
+`saved_watchlist`；无效 JSON、重复代码或缺失证券主数据将回滚并给出具体记录 ID，需先修复
+源数据，不能跳过或静默删除。升级前后创建并验证备份，升级后确认默认池、迁移池和 revision 数量。
+
+股票池修改只持有短时 DuckDB access lock 和事务；缺失数据同步在网络阶段不持有该锁，
+但沿用 operation lock 与 owner/heartbeat/fencing。统一锁顺序为 operation lock（长任务需要时）
+再进入 DuckDB access lock，禁止反向获取。
 
 ## Web 登录
 

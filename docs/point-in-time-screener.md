@@ -56,6 +56,10 @@ uv run ai-quant screen \
 - `POST /api/v1/screens/runs/{run_id}/watchlists`：保存最终入选股票池。
 - `GET /api/v1/watchlists`：查看已保存候选池。
 
+Schema v13 起，保存候选池还会创建同 ID 的 `screen_snapshot` stock pool，保留真实 `as_of`、
+`history_verified` 和 warning。旧 watchlist API 继续只读兼容；新研究入口应优先使用 stock pool ID
+和明确 revision。
+
 ## 持久化与复现
 
 Schema v9 新增：

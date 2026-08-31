@@ -63,6 +63,9 @@ CORE_RELATIONS = (
     "document_event",
     "document_event_evidence",
     "document_event_research_run",
+    "stock_pool",
+    "stock_pool_member",
+    "stock_pool_revision",
 )
 
 DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0

@@ -1,0 +1,11 @@
+.stock-pool-section { margin: 4rem 0; scroll-margin-top: 90px; }
+.stock-pool-grid { display: grid; grid-template-columns: minmax(250px, .7fr) minmax(0, 1.8fr); gap: 1rem; }
+.stock-pool-grid > .panel { padding: 22px; }
+.stock-pool-list-item { width: 100%; display: flex; flex-direction: column; gap: .3rem; padding: .8rem; margin-top: .6rem; text-align: left; border: 1px solid var(--line); background: var(--paper); cursor: pointer; }
+.stock-pool-list-item.archived { opacity: .6; }
+.stock-pool-list-item span { color: var(--muted); font-size: .8rem; }
+.stock-pool-detail-head, .stock-pool-actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+.stock-pool-members { margin-top: 1rem; }
+.stock-pool-members input { min-width: 5rem; }
+#stock-pool-search-results { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0; }
+@media (max-width: 900px) { .stock-pool-grid { grid-template-columns: 1fr; } }

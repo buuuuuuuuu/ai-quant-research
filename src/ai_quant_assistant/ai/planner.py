@@ -9,7 +9,6 @@ from urllib.request import Request, urlopen
 
 from ai_quant_assistant.ai.tool_registry import COPILOT_RESEARCH_TOOLS, copilot_tool_catalog
 from ai_quant_assistant.config import Settings
-from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
 PROMPT_VERSION = "m6a-v1"
 FORBIDDEN_PATTERNS = (
@@ -43,8 +42,8 @@ class Planner(Protocol):
 
 def _base_spec(question: str) -> dict[str, Any]:
     symbols = list(dict.fromkeys(re.findall(r"(?<!\d)(\d{6})(?!\d)", question)))
-    if not symbols:
-        symbols = list(DEFAULT_RESEARCH_SYMBOLS)
+    pool_match = re.search(r"\b((?:pool|watchlist)-[a-zA-Z0-9-]+)\b", question)
+    revision_match = re.search(r"(?:revision|版本)\s*[#:]?\s*(\d+)", question, re.IGNORECASE)
     dates = re.findall(r"(?:19|20)\d{2}-\d{2}-\d{2}", question)
     start_date = dates[0] if dates else "2015-01-01"
     end_date = dates[1] if len(dates) > 1 else date.today().isoformat()
@@ -58,9 +57,11 @@ def _base_spec(question: str) -> dict[str, Any]:
     if not factors:
         factors = ["roe"]
     top_match = re.search(r"(?:top|前)\s*(\d{1,3})", lowered, re.IGNORECASE)
-    top_n = int(top_match.group(1)) if top_match else min(3, len(symbols))
+    top_n = int(top_match.group(1)) if top_match else min(3, len(symbols) or 3)
     return {
         "symbols": symbols,
+        "stock_pool_id": pool_match.group(1) if pool_match else None,
+        "stock_pool_revision": int(revision_match.group(1)) if revision_match else None,
         "start_date": start_date,
         "end_date": end_date,
         "adjustment": adjustment,
@@ -127,7 +128,11 @@ class RuleBasedPlanner:
         else:
             universe_mode = "explicit"
 
-        if any(word in lowered for word in ("股票池", "指数成分", "行业覆盖")) and not any(
+        if any(word in lowered for word in ("列出股票池", "查看股票池", "有哪些股票池")):
+            tool_name = "list_stock_pools"
+            spec = {}
+            title = "可用股票池"
+        elif any(word in lowered for word in ("股票池", "指数成分", "行业覆盖")) and not any(
             word in lowered for word in ("回测", "因子", "ic")
         ):
             tool_name = "build_point_in_time_universe"
@@ -193,6 +198,16 @@ class RuleBasedPlanner:
                 "require_verified_industry": "可信行业" in question,
             }
             title = f"{factor.upper()} Point-in-Time 因子回测"
+
+        if tool_name in {"run_factor_backtest", "run_factor_lab"}:
+            if common["stock_pool_id"]:
+                spec.pop("symbols", None)
+                spec["stock_pool_id"] = common["stock_pool_id"]
+                if common["stock_pool_revision"] is not None:
+                    spec["stock_pool_revision"] = common["stock_pool_revision"]
+            elif not common["symbols"]:
+                spec.pop("symbols", None)
+                assumptions.append("未指定股票代码或股票池，执行时冻结数据库默认股票池。")
 
         if not re.search(r"(?:19|20)\d{2}-\d{2}-\d{2}", question):
             assumptions.append(f"未指定日期，暂按 {common['start_date']} 至 {common['end_date']}。")

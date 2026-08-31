@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
-SCHEMA_VERSION = 12
+from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
+
+SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,6 +15,140 @@ class Migration:
     version: int
     name: str
     statements: tuple[str, ...]
+    handler: Any | None = None
+
+
+def _security_id(symbol: str) -> str:
+    return f"{'SSE' if symbol.startswith('6') else 'SZSE'}.{symbol}"
+
+
+def _symbols_sha256(symbols: list[str]) -> str:
+    canonical = json.dumps(symbols, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _migrate_stock_pools_v13(connection: Any) -> None:
+    default_symbols = list(DEFAULT_RESEARCH_SYMBOLS)
+    connection.execute(
+        """
+        INSERT INTO stock_pool (
+            pool_id, name, description, source_type, history_verified, warning,
+            status, is_default, current_revision
+        ) SELECT ?, ?, ?, 'system_default', FALSE, ?, 'active', TRUE, 1
+        WHERE NOT EXISTS (SELECT 1 FROM stock_pool WHERE pool_id = ?)
+        """,
+        [
+            "pool-default-research",
+            "默认研究股票池",
+            "由 M9-A 从原 DEFAULT_RESEARCH_SYMBOLS 初始化",
+            "手工维护的当前股票池不代表历史指数成分，历史研究可能存在幸存者偏差。",
+            "pool-default-research",
+        ],
+    )
+    if connection.execute(
+        "SELECT COUNT(*) FROM stock_pool_revision WHERE pool_id = 'pool-default-research'"
+    ).fetchone()[0] == 0:
+        connection.executemany(
+            """
+            INSERT INTO stock_pool_member (pool_id, security_id, display_order)
+            VALUES ('pool-default-research', ?, ?)
+            """,
+            [(_security_id(symbol), index) for index, symbol in enumerate(default_symbols, 1)],
+        )
+        connection.execute(
+            """
+            INSERT INTO stock_pool_revision (
+                pool_id, revision_no, symbols_json, symbols_sha256,
+                change_type, change_summary
+            ) VALUES ('pool-default-research', 1, ?, ?, 'initialized', ?)
+            """,
+            [
+                json.dumps(default_symbols, ensure_ascii=False),
+                _symbols_sha256(default_symbols),
+                f"从兼容常量初始化 {len(default_symbols)} 只股票",
+            ],
+        )
+
+    rows = connection.execute(
+        """
+        SELECT watchlist_id, name, screen_run_id, as_of, symbols_json,
+               history_verified, warning, created_at
+        FROM saved_watchlist ORDER BY created_at, watchlist_id
+        """
+    ).fetchall()
+    for row in rows:
+        watchlist_id = str(row[0])
+        if connection.execute(
+            "SELECT COUNT(*) FROM stock_pool WHERE pool_id = ?", [watchlist_id]
+        ).fetchone()[0]:
+            continue
+        try:
+            decoded = json.loads(str(row[4]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"saved_watchlist {watchlist_id} contains invalid JSON; migration aborted"
+            ) from exc
+        if not isinstance(decoded, list) or not decoded:
+            raise ValueError(
+                f"saved_watchlist {watchlist_id} must contain a non-empty symbol array"
+            )
+        symbols = [str(item).strip() for item in decoded]
+        invalid = [item for item in symbols if len(item) != 6 or not item.isdigit()]
+        if invalid:
+            raise ValueError(
+                f"saved_watchlist {watchlist_id} contains invalid symbols: {invalid}"
+            )
+        if len(set(symbols)) != len(symbols):
+            raise ValueError(
+                f"saved_watchlist {watchlist_id} contains duplicate symbols; migration aborted"
+            )
+        known = {
+            str(item[0])
+            for item in connection.execute(
+                "SELECT symbol FROM security_master WHERE symbol IN (SELECT * FROM UNNEST(?))",
+                [symbols],
+            ).fetchall()
+        }
+        missing = [symbol for symbol in symbols if symbol not in known]
+        if missing:
+            raise ValueError(
+                f"saved_watchlist {watchlist_id} references symbols missing from security_master: {missing}"
+            )
+        connection.execute(
+            """
+            INSERT INTO stock_pool (
+                pool_id, name, description, source_type, source_screen_run_id,
+                as_of, history_verified, warning, status, is_default,
+                current_revision, created_at, updated_at
+            ) VALUES (?, ?, '', 'screen_snapshot', ?, ?, ?, ?, 'active', FALSE, 1, ?, ?)
+            """,
+            [row[0], row[1], row[2], row[3], row[5], row[6], row[7], row[7]],
+        )
+        connection.executemany(
+            """
+            INSERT INTO stock_pool_member (pool_id, security_id, display_order, added_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (watchlist_id, _security_id(symbol), index, row[7], row[7])
+                for index, symbol in enumerate(symbols, 1)
+            ],
+        )
+        connection.execute(
+            """
+            INSERT INTO stock_pool_revision (
+                pool_id, revision_no, symbols_json, symbols_sha256,
+                change_type, change_summary, created_at
+            ) VALUES (?, 1, ?, ?, 'watchlist_migrated', ?, ?)
+            """,
+            [
+                watchlist_id,
+                json.dumps(symbols, ensure_ascii=False),
+                _symbols_sha256(symbols),
+                f"由 saved_watchlist {watchlist_id} 迁移，保留原标识",
+                row[7],
+            ],
+        )
 
 
 MIGRATIONS = (
@@ -1027,6 +1165,104 @@ MIGRATIONS = (
             """,
         ),
     ),
+    Migration(
+        version=13,
+        name="versioned_custom_stock_pools_and_research_scope",
+        statements=(
+            """
+            CREATE TABLE stock_pool (
+                pool_id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                description VARCHAR NOT NULL DEFAULT '',
+                source_type VARCHAR NOT NULL CHECK (source_type IN (
+                    'system_default', 'manual', 'screen_snapshot', 'imported'
+                )),
+                source_screen_run_id VARCHAR,
+                as_of TIMESTAMPTZ,
+                history_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                warning VARCHAR,
+                status VARCHAR NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'archived')),
+                is_default BOOLEAN NOT NULL DEFAULT FALSE,
+                current_revision INTEGER NOT NULL DEFAULT 1 CHECK (current_revision >= 1),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE INDEX stock_pool_status_updated_idx
+            ON stock_pool (status, updated_at)
+            """,
+            """
+            CREATE TABLE stock_pool_member (
+                pool_id VARCHAR NOT NULL,
+                security_id VARCHAR NOT NULL,
+                display_order INTEGER NOT NULL CHECK (display_order >= 1),
+                note VARCHAR NOT NULL DEFAULT '',
+                added_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (pool_id, security_id)
+            )
+            """,
+            """
+            CREATE INDEX stock_pool_member_order_idx
+            ON stock_pool_member (pool_id, display_order, security_id)
+            """,
+            """
+            CREATE TABLE stock_pool_revision (
+                pool_id VARCHAR NOT NULL,
+                revision_no INTEGER NOT NULL CHECK (revision_no >= 1),
+                symbols_json VARCHAR NOT NULL,
+                symbols_sha256 VARCHAR NOT NULL,
+                change_type VARCHAR NOT NULL,
+                change_summary VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (pool_id, revision_no)
+            )
+            """,
+            """
+            CREATE TABLE operation_task_v13 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL CHECK (task_type IN (
+                    'backtest', 'sync', 'backup', 'copilot', 'document_ingest',
+                    'document_event_extract', 'stock_pool_sync'
+                )),
+                status VARCHAR NOT NULL
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                claim_key VARCHAR UNIQUE,
+                owner_id VARCHAR,
+                heartbeat_at TIMESTAMPTZ
+            )
+            """,
+            """
+            INSERT INTO operation_task_v13
+            SELECT * FROM operation_task
+            """,
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP INDEX operation_task_claim_status_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v13 RENAME TO operation_task",
+            """
+            CREATE INDEX operation_task_type_created_idx
+            ON operation_task (task_type, created_at)
+            """,
+            """
+            CREATE INDEX operation_task_claim_status_idx
+            ON operation_task (claim_key, status)
+            """,
+        ),
+        handler=_migrate_stock_pools_v13,
+    ),
 )
 
 
@@ -1052,6 +1288,8 @@ def apply_migrations(connection: Any) -> list[int]:
         try:
             for statement in migration.statements:
                 connection.execute(statement)
+            if migration.handler is not None:
+                migration.handler(connection)
             connection.execute(
                 "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
                 [migration.version, migration.name],

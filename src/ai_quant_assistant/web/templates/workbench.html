@@ -6,6 +6,7 @@
   <meta name="description" content="A 股本地数据、财务因子选股与 Point-in-Time 组合回测工作台">
   <title>澄明 · A 股研究工作台</title>
   <link rel="stylesheet" href="/assets/workbench.css?v={{ version }}">
+  <link rel="stylesheet" href="/assets/stock-pools.css?v={{ version }}">
 </head>
 <body>
   <header class="topbar">
@@ -16,6 +17,7 @@
     <nav aria-label="工具导航">
       <a href="#copilot">AI 研究</a>
       <a id="open-data-explorer" href="#data-explorer">数据浏览</a>
+      <a href="#stock-pools">股票池管理</a>
       <a href="#screener">条件选股</a>
       <a href="#operations">平台运维</a>
       <a href="#universe">股票池</a>
@@ -135,6 +137,14 @@
       <div id="record-detail-content"><p class="empty-state">正在读取…</p></div>
     </dialog>
 
+    <section id="stock-pools" class="stock-pool-section" aria-labelledby="stock-pool-title">
+      <div class="section-heading"><div><p class="eyebrow">VERSIONED RESEARCH UNIVERSE</p><h2 id="stock-pool-title">股票池管理</h2><p class="muted">每次变更生成不可变 revision；研究提交时冻结实际代码和摘要，后续修改不会污染历史结果。</p></div><button id="stock-pool-refresh" class="icon-button" type="button" aria-label="刷新股票池">↻</button></div>
+      <div class="stock-pool-grid">
+        <aside class="panel"><form id="stock-pool-create-form"><label class="field"><span>新股票池名称</span><input id="stock-pool-create-name" maxlength="120" required></label><label class="field"><span>描述</span><textarea id="stock-pool-create-description" maxlength="1000"></textarea></label><label class="field"><span>初始股票代码</span><textarea id="stock-pool-create-symbols" rows="3" placeholder="每行或空格分隔，单次最多 200 只"></textarea></label><button class="primary-button" type="submit"><span>创建股票池</span><b>↗</b></button></form><div id="stock-pool-list"><p class="empty-state">正在读取股票池…</p></div></aside>
+        <article class="panel"><div id="stock-pool-detail"><p class="empty-state">从左侧选择股票池。</p></div><p id="stock-pool-message" class="muted" aria-live="polite"></p></article>
+      </div>
+    </section>
+
     <section id="screener" class="screener-section" aria-labelledby="screener-title">
       <div class="section-heading">
         <div><p class="eyebrow">POINT-IN-TIME SCREENER</p><h2 id="screener-title">条件选股与候选池</h2><p class="muted">只使用筛选日结束前已公开的财报和已发布行情；缺失值不会填零，观察快照不会伪装成历史。</p></div>
@@ -148,8 +158,9 @@
             <label class="field"><span>筛选时点</span><input id="screen-as-of" type="date" required></label>
             <label class="field"><span>股票池模式</span><select id="screen-universe-mode"><option value="explicit">显式股票列表</option><option value="all_available">全部本地可用股票</option><option value="historical_index">可信历史指数成分</option><option value="observed_index">首次观察指数快照</option></select></label>
             <label class="field"><span>指数基准</span><input id="screen-benchmark" value="csi000300"></label>
+            <label class="field"><span>研究股票池</span><select id="screen-stock-pool"><option value="manual">手动输入</option></select></label>
           </div>
-          <label class="field field-full"><span>显式股票代码 <small>其他股票池模式下作为二次过滤</small></span><textarea id="screen-symbols" rows="3">600519 000001 601318 000858 600036 000333 600276 601888 002594 300750</textarea></label>
+          <label class="field field-full"><span>显式股票代码 <small>选择手动输入时使用</small></span><textarea id="screen-symbols" rows="3" placeholder="六位代码，空格或换行分隔"></textarea></label>
           <div class="screen-condition-head"><h3>筛选条件</h3><button id="screen-add-condition" class="secondary-button" type="button">增加条件</button></div>
           <div id="screen-conditions" class="screen-conditions"></div>
           <div class="form-grid screen-options">
@@ -207,8 +218,11 @@
         </div>
 
         <label class="field field-full">
-          <span>股票池 <small>空格或换行分隔，最多 500 只</small></span>
-          <textarea id="symbols" rows="4" required>600519 000001 601318 000858 600036 000333 600276 601888 002594 300750</textarea>
+          <span>股票池来源</span><select id="research-stock-pool"><option value="manual">手动输入股票代码</option></select><small id="research-stock-pool-preview">选择股票池后显示冻结 revision 与实际成员。</small>
+        </label>
+        <label class="field field-full">
+          <span>手动股票代码 <small>空格或换行分隔，最多 500 只</small></span>
+          <textarea id="symbols" rows="4" placeholder="六位代码"></textarea>
         </label>
 
         <div class="form-grid">

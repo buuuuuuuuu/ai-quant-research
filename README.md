@@ -45,9 +45,9 @@ ai-quant-research/
 └── tests/                   # 单元与端到端测试
 ```
 
-## A 股本地数据库（M0–M8）
+## A 股本地数据库（M0–M9）
 
-数据平台提供 DuckDB Schema v12、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v13、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -59,7 +59,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v11 数据库执行同一命令时会自动升级到 Schema v12，不删除已发布的
+已有 Schema v1–v12 数据库执行同一命令时会自动升级到 Schema v13，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 Schema v10 引入的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。
@@ -70,6 +70,10 @@ Schema v12 在已解析正文上提供业绩预告/快报、分红派息、股�
 增减持五类离线规则提取。每个结构化字段绑定页码、正文块、逐字 quote 和 SHA-256，需
 审核为 `accepted` 后才能复用现有事件研究引擎；研究按公告真实 `published_at` 做
 Point-in-Time 过滤，并保存事件、公告、文档和原文证据。
+
+Schema v13 将运行时固定十只股票替换为可自定义、可归档、带不可变 revision 的股票池。
+研究提交时冻结 pool/revision、实际代码与 SHA-256；旧 `saved_watchlist` 保留兼容读取并迁移为
+`screen_snapshot` 股票池。使用方式和升级诊断见 [docs/stock-pools.md](docs/stock-pools.md)。
 
 初始化并写入离线样例：
 
@@ -188,7 +192,7 @@ uv run ai-quant backtest \
 CSV、五工作表 Excel、HTML 净值报告和运行清单，统一写入
 `artifacts/backtests/<run_id>/`。
 
-默认股票池仍然仅代表显式研究样本。导入带有真实生效与发布时间的指数历史成分后，可以
+数据库默认池和手工池仍然只代表当前研究样本。导入带有真实生效与发布时间的指数历史成分后，可以
 使用 `--universe-mode historical_index` 在每个信号日动态过滤真实历史成员；未提供可信
 历史时该模式直接拒绝执行，不会把当前指数快照冒充过去的成分。
 
@@ -436,7 +440,7 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v12 会持久化回测、Copilot、条件选股、候选股票池、公告文档与事件提取任务、
+Schema v13 会持久化回测、Copilot、条件选股、版本化股票池、公告文档与事件提取任务、
 逐字段证据、事件研究输入、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与
 指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256

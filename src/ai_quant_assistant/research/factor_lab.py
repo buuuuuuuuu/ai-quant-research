@@ -79,6 +79,7 @@ class FactorLabService:
             industry_neutralization=spec.industry_neutralization,
             max_industry_weight=spec.max_industry_weight,
             require_verified_industry=spec.require_verified_industry,
+            stock_pool=spec.stock_pool,
         )
 
     def _cross_sections(

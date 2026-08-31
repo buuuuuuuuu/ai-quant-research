@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.domain.models import (
-    DEFAULT_RESEARCH_SYMBOLS,
     REPORT_TYPES,
     AnnouncementSyncSpec,
     BatchEventStudySpec,
@@ -52,6 +52,7 @@ from ai_quant_assistant.storage.operations import (
     OperationsDashboard,
 )
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
+from ai_quant_assistant.storage.stock_pools import StockPoolService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 from ai_quant_assistant.storage.universe import UniverseRepository
@@ -78,7 +79,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch = subcommands.add_parser("batch-event-study", help="批量运行半年报公告事件研究")
     batch.add_argument("--source", choices=["fixture", "akshare", "local"], default="local")
-    batch.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    batch_selection = batch.add_mutually_exclusive_group()
+    batch_selection.add_argument("--symbols", nargs="+")
+    batch_selection.add_argument("--stock-pool-id")
+    batch.add_argument("--stock-pool-revision", type=int)
     batch.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
     batch.add_argument("--end-date", type=_date, default=date.today())
     batch.add_argument("--benchmark", default="csi000300")
@@ -91,7 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     backtest = subcommands.add_parser("backtest", help="运行 Point-in-Time 财务因子组合回测")
     backtest.add_argument("--source", choices=["local"], default="local")
-    backtest.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    backtest_selection = backtest.add_mutually_exclusive_group()
+    backtest_selection.add_argument("--symbols", nargs="+")
+    backtest_selection.add_argument("--stock-pool-id")
+    backtest.add_argument("--stock-pool-revision", type=int)
     backtest.add_argument("--start-date", type=_date, required=True)
     backtest.add_argument("--end-date", type=_date, default=date.today())
     backtest.add_argument("--factor", choices=list(FINANCIAL_METRICS), default="roe")
@@ -121,7 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     lab = subcommands.add_parser("factor-lab", help="运行多因子研究、IC 分析与样本外参数扫描")
     lab.add_argument("--source", choices=["local"], default="local")
-    lab.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    lab_selection = lab.add_mutually_exclusive_group()
+    lab_selection.add_argument("--symbols", nargs="+")
+    lab_selection.add_argument("--stock-pool-id")
+    lab.add_argument("--stock-pool-revision", type=int)
     lab.add_argument("--start-date", type=_date, required=True)
     lab.add_argument("--end-date", type=_date, default=date.today())
     lab.add_argument(
@@ -167,7 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="条件格式：roe:gte:12 debt_asset_ratio:lt:60；区间使用 eps:between:1:3",
     )
-    screen.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    screen_selection = screen.add_mutually_exclusive_group()
+    screen_selection.add_argument("--symbols", nargs="+")
+    screen_selection.add_argument("--stock-pool-id")
+    screen.add_argument("--stock-pool-revision", type=int)
     screen.add_argument(
         "--universe-mode",
         choices=["explicit", "all_available", "historical_index", "observed_index"],
@@ -315,7 +328,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backfill.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
     backfill.add_argument("--end-date", type=_date, default=date.today())
-    backfill.add_argument("--symbols", nargs="+", default=list(DEFAULT_RESEARCH_SYMBOLS))
+    backfill_selection = backfill.add_mutually_exclusive_group()
+    backfill_selection.add_argument("--symbols", nargs="+")
+    backfill_selection.add_argument("--stock-pool-id")
+    backfill.add_argument("--stock-pool-revision", type=int)
     backfill.add_argument("--benchmark", default="csi000300")
     backfill.add_argument(
         "--adjustments", nargs="+", choices=["none", "qfq", "hfq"], default=["qfq"]
@@ -329,6 +345,43 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--refresh", action="store_true")
     backfill.add_argument("--data-dir", type=Path)
     backfill.add_argument("--duckdb-path", type=Path)
+
+    stock_pool = subcommands.add_parser("stock-pool", help="管理可版本化自定义股票池")
+    stock_pool_commands = stock_pool.add_subparsers(dest="stock_pool_command", required=True)
+    stock_pool_list = stock_pool_commands.add_parser("list", help="列出股票池")
+    stock_pool_list.add_argument("--include-archived", action="store_true")
+    stock_pool_show = stock_pool_commands.add_parser("show", help="显示股票池详情")
+    stock_pool_show.add_argument("pool_id")
+    stock_pool_show.add_argument("--revision", type=int)
+    stock_pool_create = stock_pool_commands.add_parser("create", help="创建手工股票池")
+    stock_pool_create.add_argument("--name", required=True)
+    stock_pool_create.add_argument("--description", default="")
+    stock_pool_create.add_argument("--symbols", nargs="*", default=[])
+    stock_pool_update = stock_pool_commands.add_parser("update", help="修改股票池元数据")
+    stock_pool_update.add_argument("pool_id")
+    stock_pool_update.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_update.add_argument("--name")
+    stock_pool_update.add_argument("--description")
+    stock_pool_add = stock_pool_commands.add_parser("add", help="添加成员")
+    stock_pool_add.add_argument("pool_id")
+    stock_pool_add.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_add.add_argument("--symbols", nargs="+", required=True)
+    stock_pool_remove = stock_pool_commands.add_parser("remove", help="移除成员")
+    stock_pool_remove.add_argument("pool_id")
+    stock_pool_remove.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_remove.add_argument("--security-ids", nargs="+", required=True)
+    stock_pool_archive = stock_pool_commands.add_parser("archive", help="归档股票池")
+    stock_pool_archive.add_argument("pool_id")
+    stock_pool_archive.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_default = stock_pool_commands.add_parser("set-default", help="设置默认股票池")
+    stock_pool_default.add_argument("pool_id")
+    stock_pool_default.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_duplicate = stock_pool_commands.add_parser("duplicate", help="复制股票池")
+    stock_pool_duplicate.add_argument("pool_id")
+    stock_pool_duplicate.add_argument("--expected-revision", type=int, required=True)
+    stock_pool_duplicate.add_argument("--name", required=True)
+    stock_pool_revisions = stock_pool_commands.add_parser("revisions", help="查看历史版本")
+    stock_pool_revisions.add_argument("pool_id")
 
     operations = subcommands.add_parser("ops", help="运行同步、备份与平台运维任务")
     operation_commands = operations.add_subparsers(dest="ops_command", required=True)
@@ -389,6 +442,16 @@ def build_parser() -> argparse.ArgumentParser:
         operation_audit,
         operation_check,
         operation_quality,
+        stock_pool_list,
+        stock_pool_show,
+        stock_pool_create,
+        stock_pool_update,
+        stock_pool_add,
+        stock_pool_remove,
+        stock_pool_archive,
+        stock_pool_default,
+        stock_pool_duplicate,
+        stock_pool_revisions,
     ):
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--duckdb-path", type=Path)
@@ -403,6 +466,31 @@ def _local_database(args: argparse.Namespace, settings: Settings) -> LocalDataba
     return LocalDatabase(path=duckdb_path, layout=DataLayout.from_root(data_dir))
 
 
+def _resolve_cli_stock_selection(
+    args: argparse.Namespace, database: LocalDatabase
+) -> tuple[tuple[str, ...], dict[str, object]]:
+    if args.stock_pool_revision is not None and args.stock_pool_id is None:
+        raise ValueError("--stock-pool-revision requires --stock-pool-id")
+    if args.symbols is not None:
+        symbols = tuple(dict.fromkeys(item.strip() for item in args.symbols))
+        canonical = json.dumps(list(symbols), ensure_ascii=False, separators=(",", ":"))
+        return symbols, {
+            "pool_id": None,
+            "pool_revision": None,
+            "resolved_symbols": list(symbols),
+            "symbols_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "resolved_at": datetime.now(UTC).isoformat(),
+            "source_type": "explicit",
+            "as_of": None,
+            "history_verified": False,
+            "warning": "显式股票列表可能存在幸存者偏差。",
+        }
+    context = StockPoolService(database).resolve(
+        args.stock_pool_id, revision=args.stock_pool_revision
+    )
+    return tuple(context["resolved_symbols"]), context
+
+
 def main() -> None:
     args = build_parser().parse_args()
     settings = Settings.from_env()
@@ -410,6 +498,61 @@ def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.command == "stock-pool":
+        service = StockPoolService(_local_database(args, settings))
+        command = args.stock_pool_command
+        if command == "list":
+            payload = {
+                "stock_pools": service.list(include_archived=args.include_archived)
+            }
+        elif command == "show":
+            payload = service.get(args.pool_id, revision=args.revision)
+        elif command == "create":
+            payload = service.create(
+                args.name, description=args.description, symbols=args.symbols, actor="cli"
+            )
+        elif command == "update":
+            payload = service.update(
+                args.pool_id,
+                expected_revision=args.expected_revision,
+                name=args.name,
+                description=args.description,
+                actor="cli",
+            )
+        elif command == "add":
+            payload = service.add_members(
+                args.pool_id,
+                args.symbols,
+                expected_revision=args.expected_revision,
+                actor="cli",
+            )
+        elif command == "remove":
+            payload = service.remove_members(
+                args.pool_id,
+                args.security_ids,
+                expected_revision=args.expected_revision,
+                actor="cli",
+            )
+        elif command == "archive":
+            payload = service.archive(
+                args.pool_id, expected_revision=args.expected_revision, actor="cli"
+            )
+        elif command == "set-default":
+            payload = service.set_default(
+                args.pool_id, expected_revision=args.expected_revision, actor="cli"
+            )
+        elif command == "duplicate":
+            payload = service.duplicate(
+                args.pool_id,
+                expected_revision=args.expected_revision,
+                name=args.name,
+                actor="cli",
+            )
+        else:
+            payload = {"revisions": service.revisions(args.pool_id)}
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+
     if args.command == "data":
         database = _local_database(args, settings)
         if args.data_command == "init":
@@ -563,6 +706,7 @@ def main() -> None:
                     )
                 )
             else:
+                symbols, stock_pool_context = _resolve_cli_stock_selection(args, database)
                 service = ResearchBackfillService(
                     database=database,
                     layout=database.layout,
@@ -573,12 +717,13 @@ def main() -> None:
                     ResearchBackfillSpec(
                         start_date=args.start_date,
                         end_date=args.end_date,
-                        symbols=tuple(args.symbols),
+                        symbols=symbols,
                         benchmark_symbol=args.benchmark,
                         adjustments=tuple(args.adjustments),
                         report_types=tuple(args.types),
                         windows=tuple(args.windows),
                         resume=not args.no_resume,
+                        stock_pool=stock_pool_context,
                     )
                 )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
@@ -613,13 +758,14 @@ def main() -> None:
                 )
             )
         database = _local_database(args, settings)
+        symbols, stock_pool_context = _resolve_cli_stock_selection(args, database)
         service = PointInTimeScreener(database)
         payload = service.run(
             ScreenSpec(
                 name=args.name,
                 as_of=args.as_of,
                 conditions=tuple(conditions),
-                symbols=tuple(args.symbols),
+                symbols=symbols,
                 universe_mode=args.universe_mode,
                 benchmark_symbol=args.benchmark,
                 classification_system=args.classification_system,
@@ -630,6 +776,7 @@ def main() -> None:
                 sort_by=args.sort_by,
                 sort_direction=args.sort_direction,
                 top_n=args.top_n,
+                stock_pool=stock_pool_context,
             )
         )
         if args.save_watchlist:
@@ -749,11 +896,12 @@ def main() -> None:
         database = LocalDatabase(
             path=settings.duckdb_path, layout=DataLayout.from_root(settings.data_dir)
         )
+        symbols, stock_pool_context = _resolve_cli_stock_selection(args, database)
         service = FactorLabService(
             database=database, artifact_dir=args.artifact_dir or settings.artifact_dir
         )
         spec = FactorLabSpec(
-            symbols=tuple(args.symbols),
+            symbols=symbols,
             start_date=args.start_date,
             end_date=args.end_date,
             factors=tuple(components),
@@ -778,6 +926,7 @@ def main() -> None:
             industry_neutralization=args.industry_neutralization,
             max_industry_weight=args.max_industry_weight,
             require_verified_industry=args.require_verified_industry,
+            stock_pool=stock_pool_context,
         )
         print(json.dumps(service.run(spec), ensure_ascii=False, indent=2, default=str))
         return
@@ -787,13 +936,14 @@ def main() -> None:
             path=settings.duckdb_path,
             layout=DataLayout.from_root(settings.data_dir),
         )
+        symbols, stock_pool_context = _resolve_cli_stock_selection(args, database)
         service = FactorBacktestService(
             database=database,
             artifact_dir=args.artifact_dir or settings.artifact_dir,
         )
         payload = service.run(
             FactorBacktestSpec(
-                symbols=tuple(args.symbols),
+                symbols=symbols,
                 start_date=args.start_date,
                 end_date=args.end_date,
                 factor=args.factor,
@@ -813,6 +963,7 @@ def main() -> None:
                 industry_neutralization=args.industry_neutralization,
                 max_industry_weight=args.max_industry_weight,
                 require_verified_industry=args.require_verified_industry,
+                stock_pool=stock_pool_context,
             )
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
@@ -853,9 +1004,16 @@ def main() -> None:
             artifact_dir=artifact_dir,
             database=database,
         )
+        selection_database = database or LocalDatabase(
+            path=settings.duckdb_path,
+            layout=DataLayout.from_root(settings.data_dir),
+        )
+        symbols, stock_pool_context = _resolve_cli_stock_selection(
+            args, selection_database
+        )
         payload = batch_service.run(
             BatchEventStudySpec(
-                symbols=tuple(args.symbols),
+                symbols=symbols,
                 start_date=args.start_date,
                 end_date=args.end_date,
                 benchmark_symbol=args.benchmark,
@@ -863,6 +1021,7 @@ def main() -> None:
                 adjustment=args.adjustment,
                 round_trip_cost_bps=args.cost_bps,
                 min_events=args.min_events,
+                stock_pool=stock_pool_context,
             )
         )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))

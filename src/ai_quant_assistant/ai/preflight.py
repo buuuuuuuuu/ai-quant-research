@@ -10,6 +10,8 @@ from ai_quant_assistant.storage.database import LocalDatabase
 
 def validate_tool_spec(tool_name: str, spec: dict[str, Any]) -> dict[str, Any]:
     require_allowed_tool(tool_name)
+    if tool_name == "list_stock_pools":
+        return {}
     if tool_name == "run_factor_backtest":
         return FactorBacktestRequest.model_validate(spec).model_dump(mode="json")
     if tool_name == "run_factor_lab":
@@ -54,6 +56,16 @@ class CoveragePreflight:
             }
         if status.get("schema_version", 0) < status.get("expected_schema_version", 8):
             blockers.append("数据库迁移未完成，请先运行 ai-quant data init。")
+        if tool_name == "list_stock_pools":
+            return {
+                "status": "ready",
+                "ready": True,
+                "required_datasets": [],
+                "checks": [],
+                "blockers": [],
+                "warnings": [],
+                "lineage": {},
+            }
 
         symbols = tuple(spec.get("symbols", []))
         start_date = spec.get("start_date")
@@ -62,6 +74,9 @@ class CoveragePreflight:
         factors = [spec.get("factor")] if spec.get("factor") else []
         factors.extend(item["code"] for item in spec.get("factors", []))
         factors = list(dict.fromkeys(item for item in factors if item))
+        pool_context = spec.get("stock_pool") or {}
+        if pool_context.get("warning"):
+            warnings.append(str(pool_context["warning"]))
         with self.database.connect(read_only=True) as connection:
             if symbols:
                 placeholders = ",".join("?" for _ in symbols)

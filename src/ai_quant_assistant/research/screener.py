@@ -12,6 +12,7 @@ import pandas as pd
 from ai_quant_assistant.domain.models import normalize_benchmark_symbol
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.storage.database import LocalDatabase
+from ai_quant_assistant.storage.stock_pools import StockPoolService
 from ai_quant_assistant.storage.universe import UniverseRepository
 
 SCREEN_OPERATORS = {"gt", "gte", "lt", "lte", "between"}
@@ -82,6 +83,7 @@ class ScreenSpec:
     sort_by: str | None = None
     sort_direction: str = "desc"
     top_n: int | None = None
+    stock_pool: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols if item.strip()))
@@ -153,6 +155,7 @@ class ScreenSpec:
             "sort_by": self.sort_by,
             "sort_direction": self.sort_direction,
             "top_n": self.top_n,
+            "stock_pool": self.stock_pool,
         }
 
 
@@ -671,6 +674,17 @@ class PointInTimeScreener:
                 if "historical" in item.lower() or "survivorship" in item.lower()
             ),
             "The saved universe is not verified historical index membership.",
+        )
+        StockPoolService(self.database).create(
+            name,
+            symbols=symbols,
+            source_type="screen_snapshot",
+            source_screen_run_id=run_id,
+            as_of=run["as_of"],
+            history_verified=bool(diagnostics.get("history_verified")),
+            warning=warning,
+            pool_id=watchlist_id,
+            actor="screener",
         )
         with self.database.connect() as connection:
             connection.execute(

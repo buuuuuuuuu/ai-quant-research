@@ -8,13 +8,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Any
 from uuid import uuid4
 
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.domain.models import (
-    DEFAULT_RESEARCH_SYMBOLS,
     REPORT_TYPES,
     AnnouncementSyncSpec,
     BenchmarkSyncSpec,
@@ -92,7 +91,14 @@ class IncrementalSyncService:
         self.operation_lock = operation_lock
         self.audit = audit
 
-    def run(self, *, as_of: date | None = None, task_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        as_of: date | None = None,
+        task_id: str | None = None,
+        owner_id: str | None = None,
+        symbols: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
         today = as_of or date.today()
         task = (
             self.tasks.get(task_id)
@@ -100,17 +106,47 @@ class IncrementalSyncService:
             else self.tasks.create("sync", spec={"as_of": today.isoformat()}, message="等待增量同步")
         )
         task_id = task["task_id"]
-        self.tasks.update(
-            task_id,
-            status="running",
-            progress=1,
-            message="正在准备增量同步",
-            started_at=datetime.now(UTC).isoformat(),
-        )
+        progress_value = 1
+        progress_message = "正在准备增量同步"
+        if owner_id is None:
+            self.tasks.update(
+                task_id,
+                status="running",
+                progress=progress_value,
+                message=progress_message,
+                started_at=datetime.now(UTC).isoformat(),
+            )
+        elif not self.tasks.start(task_id, owner_id=owner_id, message=progress_message):
+            raise RuntimeError("stock pool sync task was already claimed by another worker")
+        heartbeat_stop = Event()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(15):
+                if owner_id is not None:
+                    self.tasks.progress(
+                        task_id,
+                        owner_id=owner_id,
+                        progress=progress_value,
+                        message=progress_message,
+                    )
+
+        heartbeat_thread = Thread(target=heartbeat, daemon=True, name=f"heartbeat-{task_id}")
+        if owner_id is not None:
+            heartbeat_thread.start()
+
+        def report(value: int, message: str) -> None:
+            nonlocal progress_value, progress_message
+            progress_value, progress_message = value, message
+            if owner_id is None:
+                self.tasks.update(task_id, progress=value, message=message)
+            elif not self.tasks.progress(
+                task_id, owner_id=owner_id, progress=value, message=message
+            ):
+                raise RuntimeError("stock pool sync task lease is no longer owned by this worker")
         try:
             with self.operation_lock.hold():
                 self.database.initialize()
-                symbols = self._symbols()
+                selected_symbols = symbols or self._symbols()
                 market_start = self._start_date(
                     "published_daily_bar", "trade_date", today, self.settings.sync_lookback_days
                 )
@@ -151,17 +187,17 @@ class IncrementalSyncService:
                     rate_limit_seconds=self.settings.data_sync_rate_limit_seconds,
                 )
                 stages: dict[str, dict[str, Any]] = {}
-                self.tasks.update(task_id, progress=10, message=f"同步 {len(symbols)} 只股票行情")
+                report(10, f"同步 {len(selected_symbols)} 只股票行情")
                 stages["daily_bar"] = market.run(
                     DataSyncSpec(
                         start_date=market_start,
                         end_date=today,
-                        symbols=symbols,
+                        symbols=selected_symbols,
                         adjustments=("qfq",),
                     )
                 )
                 self._require_published("daily_bar", stages["daily_bar"])
-                self.tasks.update(task_id, progress=35, message="同步指数基准行情")
+                report(35, "同步指数基准行情")
                 stages["benchmark_daily_bar"] = research.sync_benchmarks(
                     BenchmarkSyncSpec(
                         start_date=benchmark_start,
@@ -170,26 +206,30 @@ class IncrementalSyncService:
                     )
                 )
                 self._require_published("benchmark_daily_bar", stages["benchmark_daily_bar"])
-                self.tasks.update(task_id, progress=60, message="同步上市公司公告")
+                report(60, "同步上市公司公告")
                 stages["announcement"] = research.sync_announcements(
                     AnnouncementSyncSpec(
                         start_date=announcement_start,
                         end_date=today,
-                        symbols=symbols,
+                        symbols=selected_symbols,
                         report_types=REPORT_TYPES,
                     )
                 )
                 self._require_published("announcement", stages["announcement"])
-                self.tasks.update(task_id, progress=80, message="同步 Point-in-Time 财务指标")
+                report(80, "同步 Point-in-Time 财务指标")
                 stages["financial_metric"] = financial.run(
-                    FinancialSyncSpec(start_date=financial_start, end_date=today, symbols=symbols)
+                    FinancialSyncSpec(
+                        start_date=financial_start,
+                        end_date=today,
+                        symbols=selected_symbols,
+                    )
                 )
                 self._require_published("financial_metric", stages["financial_metric"])
                 result = {
                     "status": "succeeded",
                     "task_id": task_id,
                     "as_of": today.isoformat(),
-                    "symbols": list(symbols),
+                    "symbols": list(selected_symbols),
                     "provider": self.provider.name,
                     "windows": {
                         "daily_bar": market_start.isoformat(),
@@ -199,31 +239,47 @@ class IncrementalSyncService:
                     },
                     "stages": stages,
                 }
-            self.tasks.update(
+            if owner_id is None:
+                self.tasks.update(
+                    task_id,
+                    status="succeeded",
+                    progress=100,
+                    message="全部数据集同步完成",
+                    completed_at=datetime.now(UTC).isoformat(),
+                    result_json=result,
+                )
+            elif not self.tasks.succeed(
                 task_id,
-                status="succeeded",
-                progress=100,
+                owner_id=owner_id,
                 message="全部数据集同步完成",
-                completed_at=datetime.now(UTC).isoformat(),
-                result_json=result,
-            )
+                result=result,
+            ):
+                raise RuntimeError("stock pool sync task completion was fenced")
             if self.audit is not None:
                 self.audit.record(
                     "sync_completed",
                     object_type="operation_task",
                     object_id=task_id,
-                    details={"symbols": list(symbols)},
+                    details={"symbols": list(selected_symbols)},
                 )
             return result
         except Exception as exc:
             logger.exception("incremental synchronization task %s failed", task_id)
-            self.tasks.update(
-                task_id,
-                status="failed",
-                message="增量同步失败",
-                error=str(exc),
-                completed_at=datetime.now(UTC).isoformat(),
-            )
+            if owner_id is None:
+                self.tasks.update(
+                    task_id,
+                    status="failed",
+                    message="增量同步失败",
+                    error=str(exc),
+                    completed_at=datetime.now(UTC).isoformat(),
+                )
+            else:
+                self.tasks.fail(
+                    task_id,
+                    owner_id=owner_id,
+                    message="增量同步失败",
+                    error=str(exc),
+                )
             if self.audit is not None:
                 self.audit.record(
                     "sync_failed",
@@ -233,6 +289,10 @@ class IncrementalSyncService:
                     details={"error": str(exc)},
                 )
             raise
+        finally:
+            heartbeat_stop.set()
+            if owner_id is not None:
+                heartbeat_thread.join(timeout=1)
 
     def _symbols(self) -> tuple[str, ...]:
         if self.settings.sync_symbols:
@@ -241,7 +301,11 @@ class IncrementalSyncService:
             rows = connection.execute(
                 "SELECT symbol FROM security_master WHERE status = 'active' ORDER BY symbol"
             ).fetchall()
-        return tuple(str(item[0]) for item in rows) or DEFAULT_RESEARCH_SYMBOLS
+        if rows:
+            return tuple(str(item[0]) for item in rows)
+        from ai_quant_assistant.storage.stock_pools import StockPoolService
+
+        return tuple(StockPoolService(self.database).resolve()["resolved_symbols"])
 
     def _start_date(self, table: str, column: str, today: date, lookback_days: int) -> date:
         with self.database.connect(read_only=True) as connection:

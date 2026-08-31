@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, screenRun: null };
+const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, screenRun: null, stockPools: [], stockPool: null };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -16,10 +16,64 @@ async function requestJson(url, options = {}) {
 }
 
 const datasetLabels = { daily_bar: "股票行情", benchmark_daily_bar: "指数基准", announcement: "定期公告", financial_metric: "财务指标", data_platform_fixture: "样例数据" };
-const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究", document_ingest: "公告文档解析", document_event_extract: "公告事件提取" };
+const taskTypeLabels = { sync: "增量同步", backup: "数据库备份", backtest: "策略回测", factor_lab: "因子实验", copilot: "AI 研究", document_ingest: "公告文档解析", document_event_extract: "公告事件提取", stock_pool_sync: "股票池缺失数据同步" };
 const documentEventTypeLabels = { performance_forecast: "业绩预告 / 快报", dividend: "分红派息", share_repurchase: "股份回购", major_contract: "重大合同", shareholder_change: "股东增减持" };
 const taskStatusLabels = { queued: "等待执行", running: "正在运行", succeeded: "执行成功", failed: "执行失败", published: "已发布" };
-const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", point_in_time_screen_succeeded: "完成条件选股", screen_watchlist_saved: "保存候选股票池", document_event_extraction_requested: "发起公告事件提取", document_event_reviewed: "审核公告事件", document_event_study_completed: "完成公告事件研究", alert_acknowledged: "确认运行告警" };
+const auditActionLabels = { login_succeeded: "管理员登录", login_failed: "登录失败", login_rate_limited: "登录限流", logout: "管理员退出", sync_requested: "发起增量同步", sync_completed: "增量同步完成", sync_failed: "增量同步失败", backup_requested: "发起数据库备份", backup_created: "数据库备份完成", backup_verified: "验证数据库备份", backup_restored: "恢复数据库备份", backup_pruned: "清理过期备份", backtest_requested: "发起策略回测", factor_lab_requested: "发起因子研究", copilot_conversation_created: "创建 AI 研究对话", copilot_plan_created: "生成 AI 研究计划", copilot_plan_confirmed: "确认 AI 研究计划", copilot_plan_execution_requested: "执行 AI 研究计划", point_in_time_screen_succeeded: "完成条件选股", screen_watchlist_saved: "保存候选股票池", stock_pool_created: "创建股票池", stock_pool_updated: "修改股票池", stock_pool_member_added: "添加股票池成员", stock_pool_member_removed: "移除股票池成员", stock_pool_duplicated: "复制股票池", stock_pool_archived: "归档股票池", stock_pool_default_changed: "切换默认股票池", stock_pool_sync_requested: "同步股票池缺失数据", document_event_extraction_requested: "发起公告事件提取", document_event_reviewed: "审核公告事件", document_event_study_completed: "完成公告事件研究", alert_acknowledged: "确认运行告警" };
+
+function splitStockSymbols(value) {
+  return value.split(/[\s,，;；]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function selectedPool(selectId) {
+  const option = $(`${selectId} option:checked`);
+  if (!option || option.value === "manual") return null;
+  return {stock_pool_id: option.value, stock_pool_revision: Number(option.dataset.revision)};
+}
+
+function stockPoolOptions() {
+  return '<option value="manual">手动输入股票代码</option>' + state.stockPools.filter((pool) => pool.status === "active").map((pool) => `<option value="${escapeHtml(pool.pool_id)}" data-revision="${escapeHtml(pool.current_revision)}" ${pool.is_default ? "selected" : ""}>${escapeHtml(pool.name)}${pool.is_default ? " · 默认" : ""} · ${formatNumber(pool.member_count)} 只 · r${escapeHtml(pool.current_revision)}</option>`).join("");
+}
+
+async function loadStockPools(selectPoolId = null) {
+  try {
+    state.stockPools = await requestJson("/api/v1/stock-pools?include_archived=true&limit=200");
+    const list = $("#stock-pool-list");
+    list.innerHTML = state.stockPools.length ? state.stockPools.map((pool) => `<button type="button" class="stock-pool-list-item ${pool.status === "archived" ? "archived" : ""}" data-pool-id="${escapeHtml(pool.pool_id)}"><strong>${escapeHtml(pool.name)} ${pool.is_default ? '<span class="quality-pill">默认</span>' : ""}</strong><span>${escapeHtml(pool.source_type)} · ${formatNumber(pool.member_count)} 只 · r${escapeHtml(pool.current_revision)} · ${escapeHtml(pool.status)}</span></button>`).join("") : '<p class="empty-state">暂无股票池。</p>';
+    list.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => loadStockPoolDetail(button.dataset.poolId)));
+    ["#research-stock-pool", "#screen-stock-pool"].forEach((selector) => {const current = $(selector).value; $(selector).innerHTML = stockPoolOptions(); if ([...$(selector).options].some((option) => option.value === current)) $(selector).value = current;});
+    const targetId = selectPoolId || state.stockPool?.pool_id || state.stockPools.find((pool) => pool.is_default)?.pool_id;
+    if (targetId) await loadStockPoolDetail(targetId);
+  } catch (error) { $("#stock-pool-list").innerHTML = `<p class="negative">${escapeHtml(error.message)}</p>`; }
+}
+
+async function loadStockPoolDetail(poolId) {
+  const pool = await requestJson(`/api/v1/stock-pools/${encodeURIComponent(poolId)}`);
+  state.stockPool = pool;
+  const members = pool.members || [];
+  $("#stock-pool-detail").innerHTML = `<div class="stock-pool-detail-head"><div><p class="eyebrow">${escapeHtml(pool.source_type)} · REVISION ${escapeHtml(pool.current_revision)}</p><h3>${escapeHtml(pool.name)}</h3><p>${escapeHtml(pool.description || "暂无描述")}</p></div><span class="quality-pill">${escapeHtml(pool.status)}</span></div>${pool.warning ? `<p class="screen-warnings">${escapeHtml(pool.warning)}</p>` : ""}<div class="form-grid"><label class="field"><span>名称</span><input id="stock-pool-name" maxlength="120" value="${escapeHtml(pool.name)}"></label><label class="field"><span>描述</span><input id="stock-pool-description" maxlength="1000" value="${escapeHtml(pool.description)}"></label></div><div class="stock-pool-actions"><button id="stock-pool-save" class="secondary-button" type="button">保存元数据</button><button id="stock-pool-default" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>设为默认</button><button id="stock-pool-duplicate" class="secondary-button" type="button">复制</button><button id="stock-pool-sync" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>同步缺失数据</button><button id="stock-pool-archive" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>归档</button></div><label class="field"><span>搜索证券代码或名称</span><input id="stock-pool-security-search" type="search" maxlength="120" placeholder="600519 或 贵州茅台"></label><div id="stock-pool-search-results"></div><label class="field"><span>批量添加六位代码</span><textarea id="stock-pool-add-symbols" rows="2" placeholder="单次最多 200 只"></textarea></label><button id="stock-pool-add" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>添加成员</button><button id="stock-pool-remove-selected" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除勾选成员</button><div class="table-shell stock-pool-members"><table><thead><tr><th></th><th>代码 / 名称</th><th>交易所 / 状态</th><th>数据覆盖</th><th>备注</th><th>顺序</th><th></th></tr></thead><tbody>${members.map((member) => `<tr data-security-id="${escapeHtml(member.security_id)}"><td><input class="stock-pool-member-select" type="checkbox"></td><td>${escapeHtml(member.symbol)} · ${escapeHtml(member.name)}</td><td>${escapeHtml(member.exchange)} · ${escapeHtml(member.status)}</td><td>${escapeHtml(member.coverage.start_date || "—")} → ${escapeHtml(member.coverage.end_date || "—")} · ${formatNumber(member.coverage.rows)} 行</td><td><input class="stock-pool-member-note" maxlength="500" value="${escapeHtml(member.note)}"></td><td><input class="stock-pool-member-order" type="number" min="1" max="500" value="${escapeHtml(member.display_order)}"></td><td><button class="stock-pool-member-save" type="button" ${pool.status === "archived" ? "disabled" : ""}>保存</button><button class="stock-pool-member-remove" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除</button></td></tr>`).join("")}</tbody></table></div>`;
+  bindStockPoolDetail();
+}
+
+async function stockPoolMutation(url, options) {
+  const message = $("#stock-pool-message"); message.textContent = "正在保存…";
+  try {const pool = await requestJson(url, options); message.textContent = `已保存 revision ${pool.current_revision}`; await loadStockPools(pool.pool_id); return pool;}
+  catch (error) {message.textContent = error.message; message.classList.add("negative"); throw error;}
+}
+
+function bindStockPoolDetail() {
+  const pool = state.stockPool, jsonHeaders = {"Content-Type":"application/json"};
+  $("#stock-pool-save").addEventListener("click", () => stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}`, {method:"PATCH",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,name:$("#stock-pool-name").value,description:$("#stock-pool-description").value})}));
+  $("#stock-pool-default").addEventListener("click", () => stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/set-default`, {method:"POST",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision})}));
+  $("#stock-pool-duplicate").addEventListener("click", () => {const name=window.prompt("新股票池名称",`${pool.name} 副本`);if(name)stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/duplicate`,{method:"POST",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,name})});});
+  $("#stock-pool-archive").addEventListener("click", () => {if(window.confirm(`确认归档“${pool.name}”？历史研究仍可查询。`))stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}?expected_revision=${pool.current_revision}`,{method:"DELETE"});});
+  $("#stock-pool-sync").addEventListener("click", async () => {if(!window.confirm(`确认同步 ${pool.member_count} 只股票的缺失数据？此操作可能访问公网。`))return;const task=await requestJson(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/sync-missing`,{method:"POST",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,as_of:new Date().toLocaleDateString("en-CA")})});$("#stock-pool-message").textContent=`同步任务 ${task.task_id} 已提交或复用`;});
+  $("#stock-pool-add").addEventListener("click", () => stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/members`,{method:"POST",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,symbols:splitStockSymbols($("#stock-pool-add-symbols").value)})}));
+  $("#stock-pool-remove-selected").addEventListener("click",()=>{const ids=$$(".stock-pool-member-select:checked").map((item)=>item.closest("tr").dataset.securityId);if(ids.length&&window.confirm(`确认移除 ${ids.length} 个成员？`))stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/members/remove`,{method:"POST",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,security_ids:ids})});});
+  $$(".stock-pool-member-save").forEach((button)=>button.addEventListener("click",()=>{const row=button.closest("tr");stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/members/${encodeURIComponent(row.dataset.securityId)}`,{method:"PATCH",headers:jsonHeaders,body:JSON.stringify({expected_revision:pool.current_revision,note:row.querySelector(".stock-pool-member-note").value,display_order:Number(row.querySelector(".stock-pool-member-order").value)})});}));
+  $$(".stock-pool-member-remove").forEach((button)=>button.addEventListener("click",()=>{const row=button.closest("tr");if(window.confirm("确认移除此成员？"))stockPoolMutation(`/api/v1/stock-pools/${encodeURIComponent(pool.pool_id)}/members/${encodeURIComponent(row.dataset.securityId)}?expected_revision=${pool.current_revision}`,{method:"DELETE"});}));
+  let timer;$("#stock-pool-security-search").addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(async()=>{const query=$("#stock-pool-security-search").value.trim();if(!query){$("#stock-pool-search-results").innerHTML="";return;}try{const items=await requestJson(`/api/v1/stock-pools/securities/search?query=${encodeURIComponent(query)}&limit=10`);$("#stock-pool-search-results").innerHTML=items.map((item)=>`<button type="button" data-symbol="${escapeHtml(item.symbol)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.status)}</button>`).join("");$$("#stock-pool-search-results button").forEach((button)=>button.addEventListener("click",()=>{$("#stock-pool-add-symbols").value=button.dataset.symbol;}));}catch(error){$("#stock-pool-search-results").textContent=error.message;}},250);});
+}
 
 function operationTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "暂无记录";
@@ -158,8 +212,9 @@ async function loadHistory() {
 
 function formPayload() {
   const symbols = $("#symbols").value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean);
+  const pool = selectedPool("#research-stock-pool");
   return {
-    symbols,
+    ...(pool || {symbols}),
     start_date: $("#start-date").value,
     end_date: $("#end-date").value,
     factor: $("#factor").value,
@@ -435,7 +490,8 @@ function splitScreenList(selector) {
 function screenPayload() {
   const conditions=$$(".screen-condition").map((row)=>{const operator=row.querySelector(".screen-condition-operator").value;return {field:row.querySelector(".screen-condition-field").value,operator,value:Number(row.querySelector(".screen-condition-value").value),upper_value:operator==="between"?Number(row.querySelector(".screen-condition-upper").value):null};});
   const topN=$("#screen-top-n").value.trim();
-  return {name:$("#screen-name").value.trim(),as_of:$("#screen-as-of").value,conditions,symbols:splitScreenList("#screen-symbols"),universe_mode:$("#screen-universe-mode").value,benchmark_symbol:$("#screen-benchmark").value.trim(),classification_system:"provider",include_industries:splitScreenList("#screen-include-industries"),exclude_industries:splitScreenList("#screen-exclude-industries"),require_verified_industry:$("#screen-require-industry").value==="true",missing_policy:$("#screen-missing-policy").value,sort_by:$("#screen-sort-by").value,sort_direction:$("#screen-sort-direction").value,top_n:topN?Number(topN):null};
+  const pool=selectedPool("#screen-stock-pool");
+  return {name:$("#screen-name").value.trim(),as_of:$("#screen-as-of").value,conditions,...(pool||{symbols:splitScreenList("#screen-symbols")}),universe_mode:$("#screen-universe-mode").value,benchmark_symbol:$("#screen-benchmark").value.trim(),classification_system:"provider",include_industries:splitScreenList("#screen-include-industries"),exclude_industries:splitScreenList("#screen-exclude-industries"),require_verified_industry:$("#screen-require-industry").value==="true",missing_policy:$("#screen-missing-policy").value,sort_by:$("#screen-sort-by").value,sort_direction:$("#screen-sort-direction").value,top_n:topN?Number(topN):null};
 }
 
 function renderScreenPreflight(payload) {
@@ -491,8 +547,8 @@ async function saveScreenWatchlist() {
 
 function sendScreenSymbols(target) {
   const symbols=(state.screenRun?.items||[]).filter((item)=>item.selected).map((item)=>item.symbol);if(!symbols.length)return;
-  if(target==="backtest"){$("#symbols").value=symbols.join(" ");$("#top-n").value=Math.min(Number($("#top-n").value)||1,symbols.length);$("#backtest").scrollIntoView({behavior:"smooth"});}
-  else if(target==="lab"){$("#lab-symbols").value=symbols.join(" ");$("#factor-lab").scrollIntoView({behavior:"smooth"});}
+  if(target==="backtest"){$("#research-stock-pool").value="manual";$("#symbols").disabled=false;$("#symbols").value=symbols.join(" ");$("#top-n").value=Math.min(Number($("#top-n").value)||1,symbols.length);$("#backtest").scrollIntoView({behavior:"smooth"});}
+  else if(target==="lab"){$("#research-stock-pool").value="manual";$("#symbols").disabled=false;$("#symbols").value=symbols.join(" ");$("#factor-lab").scrollIntoView({behavior:"smooth"});}
   else {$("#copilot-question").value=`基于条件选股运行 ${state.screenRun.run_id} 的入选股票 ${symbols.join(" ")}，设计一个可复现的因子研究计划，并保留该筛选运行作为股票池来源。`;$("#copilot").scrollIntoView({behavior:"smooth"});}
 }
 
@@ -761,6 +817,10 @@ $("#screen-save-watchlist").addEventListener("click",saveScreenWatchlist);
 $("#screen-to-copilot").addEventListener("click",()=>sendScreenSymbols("copilot"));
 $("#screen-to-backtest").addEventListener("click",()=>sendScreenSymbols("backtest"));
 $("#screen-to-lab").addEventListener("click",()=>sendScreenSymbols("lab"));
+$("#stock-pool-refresh").addEventListener("click",()=>loadStockPools());
+$("#stock-pool-create-form").addEventListener("submit",async(event)=>{event.preventDefault();try{const created=await requestJson("/api/v1/stock-pools",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("#stock-pool-create-name").value,description:$("#stock-pool-create-description").value,symbols:splitStockSymbols($("#stock-pool-create-symbols").value),source_type:"manual"})});event.target.reset();await loadStockPools(created.pool_id);}catch(error){$("#stock-pool-message").textContent=error.message;$("#stock-pool-message").classList.add("negative");}});
+$("#research-stock-pool").addEventListener("change",async()=>{const pool=selectedPool("#research-stock-pool");$("#symbols").disabled=Boolean(pool);if(!pool){$("#research-stock-pool-preview").textContent="手动输入不会被视为历史指数成分。";return;}const detail=await requestJson(`/api/v1/stock-pools/${encodeURIComponent(pool.stock_pool_id)}?revision=${pool.stock_pool_revision}`);$("#research-stock-pool-preview").textContent=`冻结 r${pool.stock_pool_revision} · ${detail.symbols.length} 只：${detail.symbols.join(" ")}`;});
+$("#screen-stock-pool").addEventListener("change",()=>{$("#screen-symbols").disabled=Boolean(selectedPool("#screen-stock-pool"));});
 $("#backtest-form").addEventListener("submit", submitBacktest);
 $("#copilot-form").addEventListener("submit", submitCopilotQuestion);
 $("#copilot-new").addEventListener("click", createCopilotConversation);
@@ -782,4 +842,4 @@ $("#explorer-filters").addEventListener("submit", (event) => {event.preventDefau
 let explorerSearchTimer;
 $("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory();
+loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory(); loadStockPools();

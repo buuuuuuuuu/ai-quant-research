@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai_quant_assistant.domain.models import (
-    DEFAULT_RESEARCH_SYMBOLS,
     BatchEventStudySpec,
     EventStudySpec,
     FactorBacktestSpec,
@@ -20,6 +19,20 @@ from ai_quant_assistant.research.screener import (
     ScreenCondition,
     ScreenSpec,
 )
+
+
+class StockPoolSelectableRequest(BaseModel):
+    stock_pool_id: str | None = Field(default=None, min_length=1, max_length=128)
+    stock_pool_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_pool_revision(self) -> StockPoolSelectableRequest:
+        if self.stock_pool_revision is not None and self.stock_pool_id is None:
+            raise ValueError("stock_pool_revision requires stock_pool_id")
+        symbols = getattr(self, "symbols", None)
+        if self.stock_pool_id is not None and symbols is not None:
+            raise ValueError("stock_pool_id and symbols cannot be provided together")
+        return self
 
 
 class InterimReportEventStudyRequest(BaseModel):
@@ -70,9 +83,9 @@ class ResearchRunResponse(BaseModel):
     snapshots: dict[str, dict[str, Any]]
 
 
-class BatchInterimReportEventStudyRequest(BaseModel):
+class BatchInterimReportEventStudyRequest(StockPoolSelectableRequest):
     source: Literal["fixture", "akshare", "local"] = "local"
-    symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=1)
+    symbols: list[str] | None = Field(default=None, min_length=1, max_length=500)
     start_date: date = date(2012, 1, 1)
     end_date: date = Field(default_factory=date.today)
     benchmark_symbol: str = "csi000300"
@@ -83,7 +96,9 @@ class BatchInterimReportEventStudyRequest(BaseModel):
 
     @field_validator("symbols")
     @classmethod
-    def validate_symbols(cls, symbols: list[str]) -> list[str]:
+    def validate_symbols(cls, symbols: list[str] | None) -> list[str] | None:
+        if symbols is None:
+            return None
         normalized = list(dict.fromkeys(item.strip() for item in symbols))
         if any(len(item) != 6 or not item.isdigit() for item in normalized):
             raise ValueError("symbols must contain six-digit A-share codes")
@@ -103,9 +118,14 @@ class BatchInterimReportEventStudyRequest(BaseModel):
             raise ValueError("start_date must not be later than end_date")
         return self
 
-    def to_spec(self) -> BatchEventStudySpec:
+    def to_spec(
+        self,
+        *,
+        resolved_symbols: list[str] | tuple[str, ...] | None = None,
+        stock_pool: dict[str, Any] | None = None,
+    ) -> BatchEventStudySpec:
         return BatchEventStudySpec(
-            symbols=tuple(self.symbols),
+            symbols=tuple(resolved_symbols or self.symbols or ()),
             start_date=self.start_date,
             end_date=self.end_date,
             benchmark_symbol=self.benchmark_symbol,
@@ -113,6 +133,7 @@ class BatchInterimReportEventStudyRequest(BaseModel):
             adjustment=self.adjustment,
             round_trip_cost_bps=self.round_trip_cost_bps,
             min_events=self.min_events,
+            stock_pool=stock_pool,
         )
 
 
@@ -133,8 +154,8 @@ class BatchResearchRunResponse(BaseModel):
     artifacts: dict[str, str]
 
 
-class FactorBacktestRequest(BaseModel):
-    symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=1)
+class FactorBacktestRequest(StockPoolSelectableRequest):
+    symbols: list[str] | None = Field(default=None, min_length=1, max_length=500)
     start_date: date = date(2015, 1, 1)
     end_date: date = Field(default_factory=date.today)
     factor: str = "roe"
@@ -159,7 +180,9 @@ class FactorBacktestRequest(BaseModel):
 
     @field_validator("symbols")
     @classmethod
-    def validate_backtest_symbols(cls, symbols: list[str]) -> list[str]:
+    def validate_backtest_symbols(cls, symbols: list[str] | None) -> list[str] | None:
+        if symbols is None:
+            return None
         normalized = list(dict.fromkeys(item.strip() for item in symbols))
         if len(normalized) > 500:
             raise ValueError("symbols must contain no more than 500 items")
@@ -179,13 +202,18 @@ class FactorBacktestRequest(BaseModel):
     def validate_backtest_range(self) -> FactorBacktestRequest:
         if self.start_date >= self.end_date:
             raise ValueError("start_date must be earlier than end_date")
-        if self.top_n > len(self.symbols):
+        if self.symbols is not None and self.top_n > len(self.symbols):
             raise ValueError("top_n must not exceed the number of symbols")
         return self
 
-    def to_spec(self) -> FactorBacktestSpec:
+    def to_spec(
+        self,
+        *,
+        resolved_symbols: list[str] | tuple[str, ...] | None = None,
+        stock_pool: dict[str, Any] | None = None,
+    ) -> FactorBacktestSpec:
         return FactorBacktestSpec(
-            symbols=tuple(self.symbols),
+            symbols=tuple(resolved_symbols or self.symbols or ()),
             start_date=self.start_date,
             end_date=self.end_date,
             factor=self.factor,
@@ -205,6 +233,7 @@ class FactorBacktestRequest(BaseModel):
             industry_neutralization=self.industry_neutralization,
             max_industry_weight=self.max_industry_weight,
             require_verified_industry=self.require_verified_industry,
+            stock_pool=stock_pool,
         )
 
 
@@ -229,10 +258,8 @@ class FactorComponentRequest(BaseModel):
         return FactorComponent(code=self.code, weight=self.weight, direction=self.direction)
 
 
-class FactorLabRequest(BaseModel):
-    symbols: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), min_length=2, max_length=500
-    )
+class FactorLabRequest(StockPoolSelectableRequest):
+    symbols: list[str] | None = Field(default=None, min_length=2, max_length=500)
     start_date: date = date(2015, 1, 1)
     end_date: date = Field(default_factory=date.today)
     factors: list[FactorComponentRequest] = Field(
@@ -273,7 +300,8 @@ class FactorLabRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_lab(self) -> FactorLabRequest:
-        self.to_spec()
+        if self.symbols is not None:
+            self.to_spec()
         count = (
             (len(self.factors) + (1 if len(self.factors) > 1 else 0))
             * len(set(self.top_n_values))
@@ -286,9 +314,14 @@ class FactorLabRequest(BaseModel):
             )
         return self
 
-    def to_spec(self) -> FactorLabSpec:
+    def to_spec(
+        self,
+        *,
+        resolved_symbols: list[str] | tuple[str, ...] | None = None,
+        stock_pool: dict[str, Any] | None = None,
+    ) -> FactorLabSpec:
         return FactorLabSpec(
-            symbols=tuple(self.symbols),
+            symbols=tuple(resolved_symbols or self.symbols or ()),
             start_date=self.start_date,
             end_date=self.end_date,
             factors=tuple(item.to_component() for item in self.factors),
@@ -313,6 +346,7 @@ class FactorLabRequest(BaseModel):
             industry_neutralization=self.industry_neutralization,
             max_industry_weight=self.max_industry_weight,
             require_verified_industry=self.require_verified_industry,
+            stock_pool=stock_pool,
         )
 
 
@@ -359,13 +393,11 @@ class ScreenConditionRequest(BaseModel):
         )
 
 
-class PointInTimeScreenRequest(BaseModel):
+class PointInTimeScreenRequest(StockPoolSelectableRequest):
     name: str = Field(default="未命名条件选股", min_length=1, max_length=120)
     as_of: date = Field(default_factory=date.today)
     conditions: list[ScreenConditionRequest] = Field(min_length=1, max_length=12)
-    symbols: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_RESEARCH_SYMBOLS), max_length=500
-    )
+    symbols: list[str] | None = Field(default=None, max_length=500)
     universe_mode: Literal["explicit", "all_available", "historical_index", "observed_index"] = (
         "explicit"
     )
@@ -381,7 +413,9 @@ class PointInTimeScreenRequest(BaseModel):
 
     @field_validator("symbols")
     @classmethod
-    def validate_screen_symbols(cls, symbols: list[str]) -> list[str]:
+    def validate_screen_symbols(cls, symbols: list[str] | None) -> list[str] | None:
+        if symbols is None:
+            return None
         normalized = list(dict.fromkeys(item.strip() for item in symbols if item.strip()))
         if any(len(item) != 6 or not item.isdigit() for item in normalized):
             raise ValueError("symbols must contain six-digit A-share codes")
@@ -399,15 +433,21 @@ class PointInTimeScreenRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_screen(self) -> PointInTimeScreenRequest:
-        self.to_spec()
+        if self.symbols is not None or self.universe_mode != "explicit":
+            self.to_spec()
         return self
 
-    def to_spec(self) -> ScreenSpec:
+    def to_spec(
+        self,
+        *,
+        resolved_symbols: list[str] | tuple[str, ...] | None = None,
+        stock_pool: dict[str, Any] | None = None,
+    ) -> ScreenSpec:
         return ScreenSpec(
             name=self.name,
             as_of=self.as_of,
             conditions=tuple(item.to_condition() for item in self.conditions),
-            symbols=tuple(self.symbols),
+            symbols=tuple(resolved_symbols or self.symbols or ()),
             universe_mode=self.universe_mode,
             benchmark_symbol=self.benchmark_symbol,
             classification_system=self.classification_system,
@@ -418,11 +458,81 @@ class PointInTimeScreenRequest(BaseModel):
             sort_by=self.sort_by,
             sort_direction=self.sort_direction,
             top_n=self.top_n,
+            stock_pool=stock_pool,
         )
 
 
 class SaveWatchlistRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+
+
+class StockPoolCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    source_type: Literal["manual", "imported"] = "manual"
+    symbols: list[str] = Field(default_factory=list, max_length=200)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if any(not re.fullmatch(r"\d{6}", value) for value in normalized):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return normalized
+
+
+class StockPoolUpdateRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_change(self) -> StockPoolUpdateRequest:
+        if self.name is None and self.description is None:
+            raise ValueError("name or description is required")
+        return self
+
+
+class StockPoolMembersAddRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    symbols: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if not normalized or any(not re.fullmatch(r"\d{6}", value) for value in normalized):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return normalized
+
+
+class StockPoolMembersRemoveRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    security_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class StockPoolMemberUpdateRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=500)
+    display_order: int | None = Field(default=None, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def require_change(self) -> StockPoolMemberUpdateRequest:
+        if self.note is None and self.display_order is None:
+            raise ValueError("note or display_order is required")
+        return self
+
+
+class StockPoolRevisionRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
+class StockPoolDuplicateRequest(StockPoolRevisionRequest):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class StockPoolSyncRequest(StockPoolRevisionRequest):
+    as_of: date = Field(default_factory=date.today)
 
 
 class DocumentQuestionRequest(BaseModel):

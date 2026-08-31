@@ -134,6 +134,13 @@ Schema v12 增加：
 - 提取计算和行情获取在 DuckDB 锁外完成，最终 fencing 校验/事务写入和备份复制复用现有
   access lock；锁顺序仍为 `.operations.lock` → DuckDB access lock。
 
+Schema v13 增加：
+
+- `stock_pool`、`stock_pool_member`、`stock_pool_revision`：自定义股票池、规范化成员和不可变版本；
+- `operation_task.task_type=stock_pool_sync`：按冻结 revision 去重的数据补齐任务；
+- 原 `saved_watchlist` 保留并迁移为同 ID 的 `screen_snapshot` 池；
+- 默认股票池成为数据库数据，固定十只常量只负责首次初始化和测试 fixture。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期

@@ -48,6 +48,10 @@
 sha256 对按 security_id 排序的五字段规范化目录 JSON 计算，并非行情或历史成分摘要。
 这些记录和主数据变更原子提交，无须 v14 迁移。
 
+证券主数据整批写入使用单条 `INSERT … SELECT … ON CONFLICT`，输入中的重复
+`security_id` 或 `(symbol, exchange)` 在写入前明确拒绝。数据库唯一约束继续生效，
+字段转换或约束失败不会提交部分主数据；该实现不新增或重建任何持久化表。
+
 ## trading_calendar
 
 | 字段 | 类型 | 约束 | 含义 |

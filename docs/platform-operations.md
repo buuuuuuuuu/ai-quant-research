@@ -85,6 +85,16 @@ uv run ai-quant ops audit --limit 20
 批次、成功审计及任务终态在同一事务提交。已知停牌/退市信息和未返回证券保留。
 备份仍沿用 operation → access 锁顺序；下载目录期间不阻塞备份和股票池编辑。
 
+若旧版本目录更新在 `SyncRepository.upsert_security_master` 的 `executemany` 处出现
+DuckDB `OutOfMemoryException`，先更新包含集合式写入修复的代码，再重试一次目录更新。
+修复以单条 SQL 发布整批目录，不分批提交，也不提高 DuckDB 内存额度，Schema 仍为 v13。
+失败任务保留诊断，旧 worker fencing、审计和任务终态的事务一致性保持不变。
+
+`free -h` 是执行命令时的系统内存快照，不能代表失败任务的峰值；已有 Swap 也不能绕过
+DuckDB 自身的内存额度。不要仅根据该错误提高额度、关闭 Swap 或反复触发全市场同步。
+确认更新后的提交号，结合任务 ID 和 `journalctl -u ai-quant-web.service` 的最新堆栈排查；
+升级前的旧搜索错误不应与新进程日志混为一谈。
+
 备份默认保存到自动识别的数据目录下的 `backups/`。流程先持有长任务互斥锁，再持有
 DuckDB 跨进程 access lock，并执行 `CHECKPOINT`、复制数据库、重新打开验证 Schema、
 计算 SHA-256，最后原子发布

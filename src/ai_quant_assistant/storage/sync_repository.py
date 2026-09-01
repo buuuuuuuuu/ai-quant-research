@@ -79,8 +79,22 @@ class SyncRepository:
                 [error[:4000], batch_id],
             )
 
-    def upsert_security_master(self, frame: pd.DataFrame, batch_id: str) -> None:
+    def upsert_security_master(
+        self,
+        frame: pd.DataFrame,
+        batch_id: str,
+        *,
+        connection: Any = None,
+        preserve_listing_state: bool = False,
+    ) -> None:
         if frame.empty:
+            return
+        if connection is None:
+            with self.database.connect() as owned_connection:
+                self.upsert_security_master(
+                    frame, batch_id, connection=owned_connection,
+                    preserve_listing_state=preserve_listing_state,
+                )
             return
         rows = [
             [
@@ -97,9 +111,16 @@ class SyncRepository:
             ]
             for row in frame.itertuples(index=False)
         ]
-        with self.database.connect() as connection:
-            connection.executemany(
-                """
+        # A current code/name directory cannot prove a change to a known
+        # suspension/delisting. Explicit-symbol placeholders must never erase
+        # a name, listing state or provenance obtained from the real directory.
+        listing_update = (
+            "delist_date = security_master.delist_date, status = security_master.status,"
+            if preserve_listing_state
+            else "delist_date = EXCLUDED.delist_date, status = EXCLUDED.status,"
+        )
+        connection.executemany(
+            f"""
                 INSERT INTO security_master (
                     security_id, symbol, exchange, name, list_date, delist_date,
                     status, industry, source, source_batch_id
@@ -109,15 +130,15 @@ class SyncRepository:
                     exchange = EXCLUDED.exchange,
                     name = EXCLUDED.name,
                     list_date = COALESCE(EXCLUDED.list_date, security_master.list_date),
-                    delist_date = EXCLUDED.delist_date,
-                    status = EXCLUDED.status,
+                    {listing_update}
                     industry = COALESCE(EXCLUDED.industry, security_master.industry),
                     source = EXCLUDED.source,
                     source_batch_id = EXCLUDED.source_batch_id,
                     updated_at = now()
-                """,
-                rows,
-            )
+                WHERE EXCLUDED.source <> 'requested-symbol-fallback'
+            """,
+            rows,
+        )
 
     def upsert_trading_calendar(self, frame: pd.DataFrame, batch_id: str) -> None:
         if frame.empty:

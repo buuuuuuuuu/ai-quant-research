@@ -52,6 +52,7 @@ from ai_quant_assistant.storage.operations import (
     OperationsDashboard,
 )
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
+from ai_quant_assistant.storage.security_master_refresh import SecurityMasterRefreshService
 from ai_quant_assistant.storage.stock_pools import StockPoolService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
@@ -346,6 +347,16 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--data-dir", type=Path)
     backfill.add_argument("--duckdb-path", type=Path)
 
+    security_refresh = data_commands.add_parser(
+        "sync-security-master", help="仅更新证券主数据；不下载历史行情、不改股票池"
+    )
+    security_refresh.add_argument(
+        "--confirm", action="store_true", required=True,
+        help="明确确认访问公网更新证券目录",
+    )
+    security_refresh.add_argument("--data-dir", type=Path)
+    security_refresh.add_argument("--duckdb-path", type=Path)
+
     stock_pool = subcommands.add_parser("stock-pool", help="管理可版本化自定义股票池")
     stock_pool_commands = stock_pool.add_subparsers(dest="stock_pool_command", required=True)
     stock_pool_list = stock_pool_commands.add_parser("list", help="列出股票池")
@@ -555,6 +566,14 @@ def main() -> None:
 
     if args.command == "data":
         database = _local_database(args, settings)
+        if args.data_command == "sync-security-master":
+            service = SecurityMasterRefreshService.from_settings(database, settings)
+            task, created = service.prepare(actor="cli")
+            payload = service.run(task["task_id"]) if created else task
+            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+            if payload["status"] == "failed":
+                raise SystemExit(1)
+            return
         if args.data_command == "init":
             payload = database.initialize()
             if args.with_fixture:

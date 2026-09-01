@@ -37,6 +37,17 @@
 `symbol + exchange` 唯一。历史名称和行业变更在后续版本使用历史表建模，不覆盖本表的
 当前快照职责。
 
+`data sync-security-master --confirm` / Web 目录更新只补充当前代码、名称和来源，
+不会删除本次未返回证券，也不会覆盖已有上市日、退市日和停牌/退市状态。
+显式行情同步生成的 `requested-symbol-fallback` 占位行只可插入缺失身份，不能覆盖已有
+主数据。目录更新与成员修改独立，不改变 `stock_pool_revision` 或历史可信标记。
+
+目录发布复用 `sync_batch.dataset=security_master`，`batch_id=security-master-{task_id}`。
+`operation_task.task_type=sync`、`spec_json.dataset=security_master`；result_json 和成功
+审计保存 row_count、added_count、updated_count、sha256、provider_sources、warning。
+sha256 对按 security_id 排序的五字段规范化目录 JSON 计算，并非行情或历史成分摘要。
+这些记录和主数据变更原子提交，无须 v14 迁移。
+
 ## trading_calendar
 
 | 字段 | 类型 | 约束 | 含义 |

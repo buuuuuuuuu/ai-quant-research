@@ -141,6 +141,14 @@ Schema v13 增加：
 - 原 `saved_watchlist` 保留并迁移为同 ID 的 `screen_snapshot` 池；
 - 默认股票池成为数据库数据，固定十只常量只负责首次初始化和测试 fixture。
 
+证券目录与研究股票池是两个不同集合。目录更新复用既有 AkShare Provider、`sync` 任务、
+`sync_batch` 和审计表，不增表；只允许明确确认后访问公网获取目录，不自动修改成员。
+`ops sync` 的默认范围改为数据库默认股票池（显式请求和 `AI_QUANT_SYNC_SYMBOLS` 优先），
+避免补齐全市场目录后定时任务意外扩大范围。显式行情同步的占位主数据不再覆盖真实名称。
+目录更新在网络阶段不持有锁，在发布阶段按 operation → access → transaction 的顺序校验
+claim/owner/heartbeat 并原子写入数据、成功审计及任务结果。旧 worker 不能覆盖新结果；
+保存当前目录不等于建立可信历史证券全集，不升级股票池历史可信状态。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期

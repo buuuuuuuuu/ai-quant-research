@@ -297,12 +297,8 @@ class IncrementalSyncService:
     def _symbols(self) -> tuple[str, ...]:
         if self.settings.sync_symbols:
             return self.settings.sync_symbols
-        with self.database.connect(read_only=True) as connection:
-            rows = connection.execute(
-                "SELECT symbol FROM security_master WHERE status = 'active' ORDER BY symbol"
-            ).fetchall()
-        if rows:
-            return tuple(str(item[0]) for item in rows)
+        # Refreshing the security directory must not silently expand the next
+        # scheduled synchronization to every listed company.
         from ai_quant_assistant.storage.stock_pools import StockPoolService
 
         return tuple(StockPoolService(self.database).resolve()["resolved_symbols"])

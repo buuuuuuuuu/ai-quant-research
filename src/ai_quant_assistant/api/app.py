@@ -45,6 +45,7 @@ from ai_quant_assistant.api.schemas import (
     PointInTimeScreenRequest,
     ResearchRunResponse,
     SaveWatchlistRequest,
+    SecurityMasterRefreshRequest,
     StockPoolCreateRequest,
     StockPoolDuplicateRequest,
     StockPoolMembersAddRequest,
@@ -54,6 +55,7 @@ from ai_quant_assistant.api.schemas import (
     StockPoolSyncRequest,
     StockPoolUpdateRequest,
 )
+from ai_quant_assistant.api.security_master_tasks import SecurityMasterTaskManager
 from ai_quant_assistant.api.stock_pool_tasks import StockPoolSyncTaskManager
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.documents import (
@@ -87,6 +89,7 @@ from ai_quant_assistant.storage.operations import (
     IncrementalSyncService,
     OperationsDashboard,
 )
+from ai_quant_assistant.storage.security_master_refresh import SecurityMasterRefreshService
 from ai_quant_assistant.storage.stock_pools import StockPoolConflictError, StockPoolService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 from ai_quant_assistant.storage.universe import UniverseRepository
@@ -147,6 +150,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit=audit_repository,
     )
     stock_pools = StockPoolService(database)
+    security_master_tasks = SecurityMasterTaskManager(
+        SecurityMasterRefreshService.from_settings(
+            database, resolved_settings, task_repository, operation_lock,
+        )
+    )
     stock_pool_sync_tasks = StockPoolSyncTaskManager(
         pools=stock_pools,
         repository=task_repository,
@@ -206,6 +214,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     web_root = Path(__file__).resolve().parents[1] / "web"
     templates = Jinja2Templates(directory=web_root / "templates")
+    asset_version = hashlib.sha256(
+        b"".join(
+            (web_root / "static" / name).read_bytes()
+            for name in ("workbench.js", "workbench.css", "stock-pools.css")
+        )
+    ).hexdigest()[:16]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -217,6 +231,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         document_tasks.shutdown()
         document_event_tasks.shutdown()
         stock_pool_sync_tasks.shutdown()
+        security_master_tasks.shutdown()
 
     app = FastAPI(
         title="AI 量化研究助手 API",
@@ -248,6 +263,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_event_tasks = document_event_tasks
     app.state.stock_pools = stock_pools
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
+    app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
 
     def resolve_stock_selection(request: Any) -> tuple[list[str], dict[str, Any]]:
@@ -384,6 +400,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             context={
                 "version": __version__,
                 "factors": factors,
+                "asset_version": asset_version,
                 "screen_fields": screener.fields()["fields"],
                 "auth_enabled": authenticator.enabled,
                 "username": resolved_settings.web_username,
@@ -1113,6 +1130,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: Annotated[int, Query(ge=1, le=50)] = 20,
     ) -> list[dict[str, Any]]:
         return stock_pools.search_securities(query, limit=limit)
+
+    @app.post("/api/v1/stock-pools/securities/refresh", status_code=202)
+    def refresh_security_master(request: SecurityMasterRefreshRequest) -> dict[str, Any]:
+        return security_master_tasks.submit(actor=resolved_settings.web_username)
 
     @app.get("/api/v1/stock-pools/{pool_id}")
     def get_stock_pool(

@@ -96,15 +96,20 @@ class StockPoolService:
         with self.database.connect(read_only=True) as connection:
             rows = connection.execute(
                 """
+                WITH matched AS (
                 SELECT security.security_id, security.symbol, security.name,
                        security.exchange, security.status,
-                       MIN(bar.trade_date), MAX(bar.trade_date), COUNT(bar.trade_date)
+                       MIN(bar.trade_date) AS start_date, MAX(bar.trade_date) AS end_date,
+                       COUNT(bar.trade_date) AS price_rows
                 FROM security_master AS security
                 LEFT JOIN published_daily_bar AS bar
                   ON bar.security_id = security.security_id AND bar.adjustment = 'qfq'
                 WHERE security.symbol ILIKE ? OR security.name ILIKE ?
-                GROUP BY ALL
-                ORDER BY CASE WHEN security.symbol = ? THEN 0 ELSE 1 END, security.symbol
+                GROUP BY security.security_id, security.symbol, security.name,
+                         security.exchange, security.status
+                )
+                SELECT * FROM matched
+                ORDER BY CASE WHEN symbol = ? THEN 0 ELSE 1 END, symbol
                 LIMIT ?
                 """,
                 [f"%{normalized}%", f"%{normalized}%", normalized, max(1, min(limit, 50))],

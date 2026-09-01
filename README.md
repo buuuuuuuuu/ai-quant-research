@@ -75,6 +75,17 @@ Schema v13 将运行时固定十只股票替换为可自定义、可归档、带
 研究提交时冻结 pool/revision、实际代码与 SHA-256；旧 `saved_watchlist` 保留兼容读取并迁移为
 `screen_snapshot` 股票池。使用方式和升级诊断见 [docs/stock-pools.md](docs/stock-pools.md)。
 
+股票池搜索只查询本地证券目录。如果添加提示 `missing from security_master`，先在
+Web“股票池管理”点击“更新证券主数据”并确认，完成后重新搜索和添加。也可显式运行：
+
+```bash
+uv run ai-quant data sync-security-master --confirm
+```
+
+此操作仅补充证券代码、名称和来源，不下载历史行情、不自动添加成员、不扩大定时同步范围。
+`ops sync` 和定时同步优先使用显式股票配置，否则使用数据库默认股票池；需要新成员的
+行情、公告或财务数据时，另行确认“同步缺失数据”。本次修复不新增 Schema 迁移，仍为 v13。
+
 初始化并写入离线样例：
 
 ```bash
@@ -133,7 +144,7 @@ uv run ai-quant data backfill-research \
   --adjustments qfq
 ```
 
-省略 `--symbols` 时使用上面十只显式研究样本；它们不代表历史沪深 300 成分股，以免误把
+省略 `--symbols` 和 `--stock-pool-id` 时使用数据库默认股票池；它不代表历史沪深 300 成分股，以免误把
 当前成分当作历史成分造成幸存者偏差。回填自动为研究窗口预留股票/指数后续交易日，并为
 年报等延迟披露预留 180 天公告区间。相同请求复用各数据集批次，只重试失败分区。
 

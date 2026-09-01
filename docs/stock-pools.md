@@ -40,6 +40,46 @@ ai-quant backtest --stock-pool-id pool-... --stock-pool-revision 3 --start-date 
 
 Web“股票池管理”支持新建、查看来源和覆盖、搜索与批量添加、备注/顺序修改、批量移除、复制、归档、默认切换和确认后同步。动态文本统一 HTML 转义。
 
+## 证券目录与添加失败排查
+
+证券搜索只查本地 `security_master`，不会因输入代码访问公网。早期仅同步十只股票的
+数据库可能缺少其他证券，已有名称也可能是行情同步生成的代码占位符。
+
+1. 搜索无结果、添加返回 `symbols missing from security_master`：点击本区域上方
+   **更新证券主数据**，确认后等待任务完成，再重新搜索或添加；不要绕过主数据校验手工造记录。
+2. 添加返回 422：查看添加按钮下方的具体原因，输入不会被清空；退市或异常状态仍禁止添加。
+3. 返回 409：股票池 revision 已变化，先刷新核对再提交，不自动覆盖其他页面的修改。
+4. 更新失败：错误和 task_id 显示在目录按钮旁，可在运维面板查看；网络恢复或其他长任务结束后重试。
+
+目录更新入口为 `POST /api/v1/stock-pools/securities/refresh`，请求体必须为
+`{"confirm": true}`，返回 202 和持久化任务；缺失确认、false 或非布尔值返回 422，且不会调用数据源。
+任务状态使用现有 `GET /api/v1/ops/tasks/{task_id}` 查询。CLI 等价操作：
+
+```bash
+ai-quant data sync-security-master --confirm
+```
+
+只调用现有 Provider 的证券目录接口，可能使用其既有备用接口；不调用历史行情、公告、
+财务或交易日历同步。成员和 revision 保持不变，用户随后自行添加并确认“同步缺失数据”。
+定时同步不会按补齐后的全市场目录展开：请求中的显式 symbols 优先，其次
+`AI_QUANT_SYNC_SYMBOLS`，最后为数据库默认股票池。低层 `data sync` 省略 symbols 的
+原有全市场行为不变，**不要把它当成仅更新证券目录的命令**。
+
+目录任务使用既有 `sync` 类型与 `spec.dataset=security_master`；跨进程唯一 claim
+复用 queued/running 任务，owner、15 秒 heartbeat 和 30 分钟租约保护发布。成功后释放 claim，
+下一次明确操作可获取新目录；失败/过期允许重试，旧 worker 不能发布。
+网络请求不持有 operation lock 或 DuckDB access lock；发布遵循
+`operation lock → DuckDB access lock → transaction`，在一个事务中校验 fencing 并写入
+主数据、同步批次、成功审计及任务终态。其他长任务占用 operation lock 时快速失败，
+提示待其结束后重试；不无限等待。校验或事务失败时不留下半更新目录。
+
+已有未返回证券不删除，已知上市日、停牌/退市状态和退市日保留。拒绝空目录、重复身份、
+身份冲突、代码占位名称和过期缓存。后续显式行情同步不会覆盖真实目录名称及来源。
+当前目录不能证明历史成分或历史可知状态，不会改变股票池 `history_verified` 或历史 revision。
+
+前端为保存操作提供忙碌状态、防重复点击和就近错误消息；搜索响应有过期保护。
+静态资源 URL 使用内容哈希，部署后重新加载页面即可获取修复，不依赖包版本号变化。
+
 ## v12 → v13
 
 升级事务先创建规范化表并扩展 `operation_task` 的 `stock_pool_sync` 类型，再执行受校验的数据迁移：

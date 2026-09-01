@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A 股本地数据、财务因子选股与 Point-in-Time 组合回测工作台">
   <title>澄明 · A 股研究工作台</title>
-  <link rel="stylesheet" href="/assets/workbench.css?v={{ version }}">
-  <link rel="stylesheet" href="/assets/stock-pools.css?v={{ version }}">
+  <link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/assets/stock-pools.css?v={{ asset_version }}">
 </head>
 <body>
   <header class="topbar">
@@ -139,9 +139,11 @@
 
     <section id="stock-pools" class="stock-pool-section" aria-labelledby="stock-pool-title">
       <div class="section-heading"><div><p class="eyebrow">VERSIONED RESEARCH UNIVERSE</p><h2 id="stock-pool-title">股票池管理</h2><p class="muted">每次变更生成不可变 revision；研究提交时冻结实际代码和摘要，后续修改不会污染历史结果。</p></div><button id="stock-pool-refresh" class="icon-button" type="button" aria-label="刷新股票池">↻</button></div>
+      <div class="security-master-actions"><button id="security-master-refresh" class="secondary-button" type="button">更新证券主数据</button><span class="muted">只更新代码和名称目录；不下载历史行情、不自动添加成员。</span></div>
+      <p id="security-master-message" class="stock-pool-message" role="status" aria-live="polite"></p>
       <div class="stock-pool-grid">
         <aside class="panel"><form id="stock-pool-create-form"><label class="field"><span>新股票池名称</span><input id="stock-pool-create-name" maxlength="120" required></label><label class="field"><span>描述</span><textarea id="stock-pool-create-description" maxlength="1000"></textarea></label><label class="field"><span>初始股票代码</span><textarea id="stock-pool-create-symbols" rows="3" placeholder="每行或空格分隔，单次最多 200 只"></textarea></label><button class="primary-button" type="submit"><span>创建股票池</span><b>↗</b></button></form><div id="stock-pool-list"><p class="empty-state">正在读取股票池…</p></div></aside>
-        <article class="panel"><div id="stock-pool-detail"><p class="empty-state">从左侧选择股票池。</p></div><p id="stock-pool-message" class="muted" aria-live="polite"></p></article>
+        <article class="panel"><p id="stock-pool-message" class="stock-pool-message" data-stock-pool-message role="status" aria-live="polite"></p><div id="stock-pool-detail"><p class="empty-state">从左侧选择股票池。</p></div></article>
       </div>
     </section>
 
@@ -319,6 +321,6 @@
   </main>
 
   <footer><span>澄明 A 股研究工作台 · v{{ version }}</span><span>仅供量化研究，不构成投资建议</span></footer>
-  <script src="/assets/workbench.js?v={{ version }}" defer></script>
+  <script src="/assets/workbench.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

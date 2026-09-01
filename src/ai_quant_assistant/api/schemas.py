@@ -535,6 +535,18 @@ class StockPoolSyncRequest(StockPoolRevisionRequest):
     as_of: date = Field(default_factory=date.today)
 
 
+class SecurityMasterRefreshRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    confirm: bool = Field(strict=True)
+
+    @field_validator("confirm")
+    @classmethod
+    def require_confirmation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("请明确确认更新证券主数据；该操作会访问公网")
+        return value
+
+
 class DocumentQuestionRequest(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=6)
     question: str = Field(min_length=1, max_length=2_000)

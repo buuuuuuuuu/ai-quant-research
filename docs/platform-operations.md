@@ -62,10 +62,28 @@ uv run ai-quant ops quality
 uv run ai-quant ops audit --limit 20
 ```
 
-股票池默认取数据库中状态为 `active` 的证券；也可通过 `AI_QUANT_SYNC_SYMBOLS` 指定。
+同步范围优先取请求显式 `symbols`，其次为 `AI_QUANT_SYNC_SYMBOLS`，否则解析数据库默认
+股票池并冻结本次代码列表。不会自动把 `security_master` 的所有 active 证券当成同步范围。
 日线和指数根据最近已发布交易日回看 7 天，公告默认回看 120 天，财务报告默认回看
 400 天；如果最近记录较旧，会自动补齐期间缺口。同步依次执行股票、指数、公告、财务
 四个阶段，失败时保留任务、阶段进度和数据源错误。
+
+### 仅补充证券目录（Schema 仍为 v13）
+
+当股票池搜索缺少新证券或名称仍显示代码时，通过 Web“更新证券主数据”明确确认，或在
+应用部署目录、服务用户和既有生产环境配置下执行 `ai-quant data sync-security-master --confirm`。
+不要在 `/root` 源码目录下切换成服务用户执行，避免工作目录权限错误；不要用全市场
+`data sync` 代替目录更新。
+
+任务仅获取代码/名称目录，不拉历史行情，不自动新增成员；完成后重新搜索、添加，再按需
+确认“同步缺失数据”。任务采用 `sync` 类型并在 spec 中标明 `dataset=security_master`，
+可通过 `ops tasks` 和 Web 运维面板检查。并发更新复用活动任务，失败或租约过期可重试；
+同步/备份占用 operation lock 时发布快速失败，待其结束后重试。
+
+审计动作包括 `security_master_refresh_requested` 和 `security_master_refreshed`。
+成功记录包含 task_id、批次、来源、规范化目录 SHA-256、新增/更新数量；主数据写入、
+批次、成功审计及任务终态在同一事务提交。已知停牌/退市信息和未返回证券保留。
+备份仍沿用 operation → access 锁顺序；下载目录期间不阻塞备份和股票池编辑。
 
 备份默认保存到自动识别的数据目录下的 `backups/`。流程先持有长任务互斥锁，再持有
 DuckDB 跨进程 access lock，并执行 `CHECKPOINT`、复制数据库、重新打开验证 Schema、

@@ -6,6 +6,9 @@
 .stock-pool-list-item span { color: var(--muted); font-size: .8rem; }
 .stock-pool-detail-head, .stock-pool-actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
 .stock-pool-members { margin-top: 1rem; }
+.security-master-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.stock-pool-message:not(:empty) { padding: .75rem; border: 1px solid currentColor; border-radius: .4rem; overflow-wrap: anywhere; scroll-margin-top: 90px; }
+#stock-pool-detail[aria-busy="true"] { opacity: .75; }
 .stock-pool-members input { min-width: 5rem; }
 #stock-pool-search-results { display: flex; flex-wrap: wrap; gap: .4rem; margin: .5rem 0; }
 @media (max-width: 900px) { .stock-pool-grid { grid-template-columns: 1fr; } }

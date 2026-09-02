@@ -384,8 +384,16 @@ def test_expired_owner_and_restart_cannot_overwrite_completed_result(setup):
             [task["task_id"]],
         )
     restarted = ManagedStockService(db, service.settings, lambda _: provider)
-    retry, created = submit(restarted)
+    # A restart may cross midnight: the expired claim must not block a later
+    # end date when the caller supplies the current management revision.
+    retry, created = restarted.request(
+        "003816",
+        end=date(2024, 1, 12),
+        expected_revision=1,
+        confirm=True,
+    )
     assert created and retry["task_id"] != task["task_id"]
+    assert restarted.get("SZSE.003816")["target_end"] == "2024-01-12"
     with db.connect(read_only=True) as c, pytest.raises(ManagedStockConflict):
         service.fence(c, task["task_id"], "dead-owner", task["spec"])
     done = restarted.run(retry["task_id"])

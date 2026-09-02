@@ -255,7 +255,12 @@ class ManagedStockService:
             ):
                 raise ManagedStockConflict("已纳入管理；修改目标范围需携带 expected_revision")
             if asset["task"] and asset["task"]["status"] in {"queued", "running"}:
-                if not same_range:
+                live = connection.execute(
+                    """SELECT 1 FROM operation_task WHERE task_id=?
+                       AND COALESCE(heartbeat_at, started_at, updated_at) > ?""",
+                    [asset["last_task_id"], datetime.now(UTC) - timedelta(seconds=LEASE_SECONDS)],
+                ).fetchone()
+                if not same_range and live:
                     raise ManagedStockConflict("当前有同步任务，先等待完成或移出管理")
             elif (
                 same_range

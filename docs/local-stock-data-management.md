@@ -49,7 +49,8 @@ Copilot 沿用只读股票池/研究工具白名单，未新增可下载或移�
 
 管理记录、任务 claim 和请求审计在一个短数据库事务中提交。任务使用既有 `sync` 类型，
 `spec.dataset=managed_stock`，固定 none/qfq；股票级唯一 claim 比配置级去重更严格，避免不同目标
-同时覆盖同一股票。有活动任务时相同配置复用；更改范围要求 expected_revision 且不能与活动任务竞争。
+同时覆盖同一股票。有活动任务时相同配置复用；更改范围要求 expected_revision 且不能与有效租约任务竞争。
+租约已经过期时允许携带当前 revision 扩展结束日期重试，覆盖重启跨日场景；释放旧 claim 与新任务提交同事务。
 成功任务重复请求会重新检查实际覆盖（包括跨收盘时点），覆盖不足则新建任务；失败/过期租约可重试。
 
 owner、heartbeat（15 秒）、30 分钟租约和 management generation 共同 fencing。

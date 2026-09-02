@@ -134,6 +134,26 @@ Schema v12 增加：
 - 提取计算和行情获取在 DuckDB 锁外完成，最终 fencing 校验/事务写入和备份复制复用现有
   access lock；锁顺序仍为 `.operations.lock` → DuckDB access lock。
 
+Schema v13 增加：
+
+- `stock_pool`、`stock_pool_member`、`stock_pool_revision`：自定义股票池、规范化成员和不可变版本；
+- `operation_task.task_type=stock_pool_sync`：按冻结 revision 去重的数据补齐任务；
+- 原 `saved_watchlist` 保留并迁移为同 ID 的 `screen_snapshot` 池；
+- 默认股票池成为数据库数据，固定十只常量只负责首次初始化和测试 fixture。
+
+证券目录与研究股票池是两个不同集合。目录更新复用既有 AkShare Provider、`sync` 任务、
+`sync_batch` 和审计表，不增表；只允许明确确认后访问公网获取目录，不自动修改成员。
+`ops sync` 的默认范围改为数据库默认股票池（显式请求和 `AI_QUANT_SYNC_SYMBOLS` 优先），
+避免补齐全市场目录后定时任务意外扩大范围。显式行情同步的占位主数据不再覆盖真实名称。
+目录更新在网络阶段不持有锁，在发布阶段按 operation → access → transaction 的顺序校验
+claim/owner/heartbeat 并原子写入数据、成功审计及任务结果。旧 worker 不能覆盖新结果；
+保存当前目录不等于建立可信历史证券全集，不升级股票池历史可信状态。
+
+目录写入通过连接内注册的 DataFrame 执行单条集合式 upsert，替代同事务逐条
+`executemany`，降低完整证券目录的写入内存开销。注册关系使用内部生成的唯一名称并在
+成功/异常路径注销，业务值不拼入 SQL；可空日期/行业显式转换，输入重复键先行拒绝。
+外层事务、fencing、operation → access 锁顺序和统一成功提交点不变，不以分批提交换取低内存。
+
 现有 `snapshot_catalog` 由研究服务继续维护，后续迁移会在兼容现有数据的前提下统一。
 
 ## 数据生命周期

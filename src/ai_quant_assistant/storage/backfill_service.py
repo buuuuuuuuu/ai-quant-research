@@ -117,6 +117,7 @@ class ResearchBackfillService:
             else "published",
             "provider": self.provider.name,
             "symbols": list(spec.symbols),
+            "stock_pool": spec.stock_pool,
             "benchmark_symbol": spec.benchmark_symbol,
             "report_types": list(spec.report_types),
             "start_date": spec.start_date.isoformat(),

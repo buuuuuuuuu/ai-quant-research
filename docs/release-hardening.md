@@ -1,5 +1,13 @@
 # 生产发布加固与恢复手册（M4-B）
 
+## M9-A / Schema v13 升级注意
+
+升级前先停止 Web、同步和备份 writer，创建并验证 v12 备份，再执行 `ai-quant data init`。
+迁移会严格校验 `saved_watchlist`；诊断无效 JSON、重复 symbol 或缺失 `security_master` 时，
+保持 v12 不变并终止发布，不允许跳过记录。升级成功后确认 `schema_version=13`、
+`pool-default-research`、watchlist 同 ID 映射和 revision 数量，再创建并验证升级后备份。
+回滚应用代码前必须恢复 v12 备份，旧二进制不能直接写入 v13 catalog。
+
 ## M8-B / Schema v12 升级注意
 
 v11→v12 迁移新增公告事件、逐字段证据、事件提取运行和事件研究结果表，并在原表上增加

@@ -192,12 +192,13 @@ class FinancialSyncSpec:
 class ResearchBackfillSpec:
     start_date: date
     end_date: date
-    symbols: tuple[str, ...] = DEFAULT_RESEARCH_SYMBOLS
+    symbols: tuple[str, ...]
     benchmark_symbol: str = "csi000300"
     adjustments: tuple[str, ...] = ("qfq",)
     report_types: tuple[str, ...] = REPORT_TYPES
     windows: tuple[int, ...] = (5, 10, 20)
     resume: bool = True
+    stock_pool: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.start_date > self.end_date:
@@ -232,6 +233,7 @@ class BatchEventStudySpec:
     adjustment: str = "qfq"
     round_trip_cost_bps: float = 20.0
     min_events: int = 1
+    stock_pool: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -273,6 +275,7 @@ class BatchEventStudySpec:
             "adjustment": self.adjustment,
             "round_trip_cost_bps": self.round_trip_cost_bps,
             "min_events": self.min_events,
+            "stock_pool": self.stock_pool,
         }
 
 
@@ -319,6 +322,7 @@ class FactorBacktestSpec:
     industry_neutralization: str = "none"
     max_industry_weight: float = 1.0
     require_verified_industry: bool = False
+    stock_pool: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -404,6 +408,7 @@ class FactorLabSpec:
     industry_neutralization: str = "none"
     max_industry_weight: float = 1.0
     require_verified_industry: bool = False
+    stock_pool: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))

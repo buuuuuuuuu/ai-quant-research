@@ -79,8 +79,22 @@ class SyncRepository:
                 [error[:4000], batch_id],
             )
 
-    def upsert_security_master(self, frame: pd.DataFrame, batch_id: str) -> None:
+    def upsert_security_master(
+        self,
+        frame: pd.DataFrame,
+        batch_id: str,
+        *,
+        connection: Any = None,
+        preserve_listing_state: bool = False,
+    ) -> None:
         if frame.empty:
+            return
+        if connection is None:
+            with self.database.connect() as owned_connection:
+                self.upsert_security_master(
+                    frame, batch_id, connection=owned_connection,
+                    preserve_listing_state=preserve_listing_state,
+                )
             return
         rows = [
             [
@@ -97,27 +111,58 @@ class SyncRepository:
             ]
             for row in frame.itertuples(index=False)
         ]
-        with self.database.connect() as connection:
-            connection.executemany(
-                """
+        # A current code/name directory cannot prove a change to a known
+        # suspension/delisting. Explicit-symbol placeholders must never erase
+        # a name, listing state or provenance obtained from the real directory.
+        listing_update = (
+            "delist_date = security_master.delist_date, status = security_master.status,"
+            if preserve_listing_state
+            else "delist_date = EXCLUDED.delist_date, status = EXCLUDED.status,"
+        )
+        incoming = pd.DataFrame(
+            rows,
+            columns=[
+                "security_id", "symbol", "exchange", "name", "list_date", "delist_date",
+                "status", "industry", "source", "source_batch_id",
+            ],
+            dtype=object,
+        )
+        # A set-based upsert must not silently choose among duplicate source
+        # identities; reject the batch before touching any persisted rows.
+        for key in (["security_id"], ["symbol", "exchange"]):
+            if incoming.duplicated(key).any():
+                raise ValueError(f"security master batch contains duplicate {', '.join(key)}")
+        # Repeating this upsert per row in a transaction exhausts memory for a
+        # full directory. Scan a connection-local frame in
+        # one statement instead; the caller still owns its transaction/fencing.
+        relation = f"_security_master_incoming_{uuid4().hex}"
+        connection.register(relation, incoming)
+        try:
+            connection.execute(
+                f"""
                 INSERT INTO security_master (
                     security_id, symbol, exchange, name, list_date, delist_date,
                     status, industry, source, source_batch_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                )
+                SELECT security_id, symbol, exchange, name,
+                       CAST(list_date AS DATE), CAST(delist_date AS DATE), status,
+                       CAST(industry AS VARCHAR), source, source_batch_id
+                FROM {relation}
                 ON CONFLICT (security_id) DO UPDATE SET
                     symbol = EXCLUDED.symbol,
                     exchange = EXCLUDED.exchange,
                     name = EXCLUDED.name,
                     list_date = COALESCE(EXCLUDED.list_date, security_master.list_date),
-                    delist_date = EXCLUDED.delist_date,
-                    status = EXCLUDED.status,
+                    {listing_update}
                     industry = COALESCE(EXCLUDED.industry, security_master.industry),
                     source = EXCLUDED.source,
                     source_batch_id = EXCLUDED.source_batch_id,
                     updated_at = now()
-                """,
-                rows,
+                WHERE EXCLUDED.source <> 'requested-symbol-fallback'
+                """
             )
+        finally:
+            connection.unregister(relation)
 
     def upsert_trading_calendar(self, frame: pd.DataFrame, batch_id: str) -> None:
         if frame.empty:

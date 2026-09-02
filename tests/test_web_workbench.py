@@ -54,6 +54,7 @@ def test_workbench_home_and_static_assets_are_served(tmp_path) -> None:
     with TestClient(create_app(_settings(tmp_path))) as client:
         home = client.get("/")
         stylesheet = client.get("/assets/workbench.css")
+        stock_stylesheet = client.get("/assets/stock-pools.css")
         javascript = client.get("/assets/workbench.js")
         metadata = client.get("/api")
 
@@ -61,12 +62,15 @@ def test_workbench_home_and_static_assets_are_served(tmp_path) -> None:
     assert "澄明 · A 股研究工作台" in home.text
     assert "配置财务因子回测" in home.text
     assert "AI RESEARCH COPILOT" in home.text
+    assert "股票池管理" in home.text
     assert home.headers["content-type"].startswith("text/html")
     assert stylesheet.status_code == 200
     assert "--forest" in stylesheet.text
+    assert stock_stylesheet.status_code == 200
     assert javascript.status_code == 200
     assert "pollTask" in javascript.text
     assert "confirmCopilotPlan" in javascript.text
+    assert "loadStockPools" in javascript.text
     assert metadata.json()["workbench"] == "/"
 
 

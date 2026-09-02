@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -43,7 +45,18 @@ from ai_quant_assistant.api.schemas import (
     PointInTimeScreenRequest,
     ResearchRunResponse,
     SaveWatchlistRequest,
+    SecurityMasterRefreshRequest,
+    StockPoolCreateRequest,
+    StockPoolDuplicateRequest,
+    StockPoolMembersAddRequest,
+    StockPoolMembersRemoveRequest,
+    StockPoolMemberUpdateRequest,
+    StockPoolRevisionRequest,
+    StockPoolSyncRequest,
+    StockPoolUpdateRequest,
 )
+from ai_quant_assistant.api.security_master_tasks import SecurityMasterTaskManager
+from ai_quant_assistant.api.stock_pool_tasks import StockPoolSyncTaskManager
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.documents import (
     DocumentEventService,
@@ -76,6 +89,8 @@ from ai_quant_assistant.storage.operations import (
     IncrementalSyncService,
     OperationsDashboard,
 )
+from ai_quant_assistant.storage.security_master_refresh import SecurityMasterRefreshService
+from ai_quant_assistant.storage.stock_pools import StockPoolConflictError, StockPoolService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 from ai_quant_assistant.storage.universe import UniverseRepository
 
@@ -134,6 +149,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_lock=operation_lock,
         audit=audit_repository,
     )
+    stock_pools = StockPoolService(database)
+    security_master_tasks = SecurityMasterTaskManager(
+        SecurityMasterRefreshService.from_settings(
+            database, resolved_settings, task_repository, operation_lock,
+        )
+    )
+    stock_pool_sync_tasks = StockPoolSyncTaskManager(
+        pools=stock_pools,
+        repository=task_repository,
+        sync_service=sync_service,
+        audit=audit_repository,
+    )
     operation_manager = OperationsTaskManager(
         repository=task_repository,
         sync_service=sync_service,
@@ -172,6 +199,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         repository=copilot_repository,
         planner=create_planner(resolved_settings),
         preflight=CoveragePreflight(database),
+        stock_pools=stock_pools,
     )
     copilot_tasks = CopilotTaskManager(
         plans=copilot_repository,
@@ -181,10 +209,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         factor_lab=FactorLabService(database=database, artifact_dir=resolved_settings.artifact_dir),
         universe=UniverseRepository(database),
+        stock_pools=stock_pools,
         operation_lock=operation_lock,
     )
     web_root = Path(__file__).resolve().parents[1] / "web"
     templates = Jinja2Templates(directory=web_root / "templates")
+    asset_version = hashlib.sha256(
+        b"".join(
+            (web_root / "static" / name).read_bytes()
+            for name in ("workbench.js", "workbench.css", "stock-pools.css")
+        )
+    ).hexdigest()[:16]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -195,6 +230,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_manager.shutdown()
         document_tasks.shutdown()
         document_event_tasks.shutdown()
+        stock_pool_sync_tasks.shutdown()
+        security_master_tasks.shutdown()
 
     app = FastAPI(
         title="AI 量化研究助手 API",
@@ -224,7 +261,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_tasks = document_tasks
     app.state.document_event_service = document_event_service
     app.state.document_event_tasks = document_event_tasks
+    app.state.stock_pools = stock_pools
+    app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
+    app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
+
+    def resolve_stock_selection(request: Any) -> tuple[list[str], dict[str, Any]]:
+        requested = getattr(request, "symbols", None)
+        pool_id = getattr(request, "stock_pool_id", None)
+        revision = getattr(request, "stock_pool_revision", None)
+        if requested is not None:
+            symbols = list(dict.fromkeys(str(item).strip() for item in requested))
+            canonical = json.dumps(symbols, ensure_ascii=False, separators=(",", ":"))
+            return symbols, {
+                "pool_id": None,
+                "pool_revision": None,
+                "resolved_symbols": symbols,
+                "symbols_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                "resolved_at": datetime.now(UTC).isoformat(),
+                "source_type": "explicit",
+                "as_of": None,
+                "history_verified": False,
+                "warning": (
+                    "显式或手工股票列表不代表历史时点真实成分，历史研究可能存在幸存者偏差。"
+                ),
+            }
+        context = stock_pools.resolve(pool_id, revision=revision)
+        return list(context["resolved_symbols"]), context
 
     @app.middleware("http")
     async def require_authenticated_session(request: Request, call_next):
@@ -337,6 +400,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             context={
                 "version": __version__,
                 "factors": factors,
+                "asset_version": asset_version,
                 "screen_fields": screener.fields()["fields"],
                 "auth_enabled": authenticator.enabled,
                 "username": resolved_settings.web_username,
@@ -921,14 +985,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/v1/screens/preflight")
     def screen_preflight(request: PointInTimeScreenRequest) -> dict[str, Any]:
         try:
-            return screener.preflight(request.to_spec())
+            symbols, context = resolve_stock_selection(request)
+            return screener.preflight(
+                request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/v1/screens/runs", status_code=201)
     def create_screen_run(request: PointInTimeScreenRequest) -> dict[str, Any]:
         try:
-            run = screener.run(request.to_spec())
+            symbols, context = resolve_stock_selection(request)
+            run = screener.run(request.to_spec(resolved_symbols=symbols, stock_pool=context))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         audit_repository.record(
@@ -1032,6 +1104,218 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def list_saved_watchlists(limit: int = 50) -> list[dict[str, Any]]:
         return screener.list_watchlists(limit=limit)
 
+    @app.get("/api/v1/stock-pools")
+    def list_stock_pools(
+        include_archived: bool = False,
+        limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    ) -> list[dict[str, Any]]:
+        return stock_pools.list(include_archived=include_archived, limit=limit)
+
+    @app.post("/api/v1/stock-pools", status_code=201)
+    def create_stock_pool(request: StockPoolCreateRequest) -> dict[str, Any]:
+        try:
+            return stock_pools.create(
+                request.name,
+                description=request.description,
+                source_type=request.source_type,
+                symbols=request.symbols,
+                actor=resolved_settings.web_username,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/stock-pools/securities/search")
+    def search_stock_pool_securities(
+        query: Annotated[str, Query(min_length=1, max_length=120)],
+        limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    ) -> list[dict[str, Any]]:
+        return stock_pools.search_securities(query, limit=limit)
+
+    @app.post("/api/v1/stock-pools/securities/refresh", status_code=202)
+    def refresh_security_master(request: SecurityMasterRefreshRequest) -> dict[str, Any]:
+        return security_master_tasks.submit(actor=resolved_settings.web_username)
+
+    @app.get("/api/v1/stock-pools/{pool_id}")
+    def get_stock_pool(
+        pool_id: str, revision: Annotated[int | None, Query(ge=1)] = None
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.get(pool_id, revision=revision)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+
+    @app.patch("/api/v1/stock-pools/{pool_id}")
+    def update_stock_pool(pool_id: str, request: StockPoolUpdateRequest) -> dict[str, Any]:
+        try:
+            return stock_pools.update(
+                pool_id,
+                expected_revision=request.expected_revision,
+                name=request.name,
+                description=request.description,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/stock-pools/{pool_id}")
+    def archive_stock_pool(
+        pool_id: str, expected_revision: Annotated[int, Query(ge=1)]
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.archive(
+                pool_id,
+                expected_revision=expected_revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/stock-pools/{pool_id}/members")
+    def add_stock_pool_members(
+        pool_id: str, request: StockPoolMembersAddRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.add_members(
+                pool_id,
+                request.symbols,
+                expected_revision=request.expected_revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/api/v1/stock-pools/{pool_id}/members/{security_id}")
+    def update_stock_pool_member(
+        pool_id: str, security_id: str, request: StockPoolMemberUpdateRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.update_member(
+                pool_id,
+                security_id,
+                expected_revision=request.expected_revision,
+                note=request.note,
+                display_order=request.display_order,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool member not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/stock-pools/{pool_id}/members/remove")
+    def remove_stock_pool_members(
+        pool_id: str, request: StockPoolMembersRemoveRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.remove_members(
+                pool_id,
+                request.security_ids,
+                expected_revision=request.expected_revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool member not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/stock-pools/{pool_id}/members/{security_id}")
+    def remove_stock_pool_member(
+        pool_id: str,
+        security_id: str,
+        expected_revision: Annotated[int, Query(ge=1)],
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.remove_member(
+                pool_id,
+                security_id,
+                expected_revision=expected_revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool member not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/stock-pools/{pool_id}/revisions")
+    def list_stock_pool_revisions(
+        pool_id: str, limit: Annotated[int, Query(ge=1, le=100)] = 100
+    ) -> list[dict[str, Any]]:
+        try:
+            return stock_pools.revisions(pool_id, limit=limit)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+
+    @app.post("/api/v1/stock-pools/{pool_id}/set-default")
+    def set_default_stock_pool(
+        pool_id: str, request: StockPoolRevisionRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.set_default(
+                pool_id,
+                expected_revision=request.expected_revision,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/stock-pools/{pool_id}/duplicate", status_code=201)
+    def duplicate_stock_pool(
+        pool_id: str, request: StockPoolDuplicateRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pools.duplicate(
+                pool_id,
+                expected_revision=request.expected_revision,
+                name=request.name,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/v1/stock-pools/{pool_id}/sync-missing", status_code=202)
+    def synchronize_stock_pool(
+        pool_id: str, request: StockPoolSyncRequest
+    ) -> dict[str, Any]:
+        try:
+            return stock_pool_sync_tasks.submit(
+                pool_id,
+                expected_revision=request.expected_revision,
+                as_of=request.as_of,
+                actor=resolved_settings.web_username,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except StockPoolConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.get("/api/v1/ops/status")
     def operations_status() -> dict[str, Any]:
         return dashboard.status()
@@ -1131,13 +1415,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/backtests", status_code=202)
     def create_backtest(request: FactorBacktestRequest) -> dict[str, Any]:
-        task = task_manager.submit(request.to_spec())
+        try:
+            symbols, context = resolve_stock_selection(request)
+            task = task_manager.submit(
+                request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         audit_repository.record(
             "backtest_requested",
             actor=resolved_settings.web_username,
             object_type="operation_task",
             object_id=task["task_id"],
-            details={"factor": request.factor, "symbol_count": len(request.symbols)},
+            details={"factor": request.factor, "symbol_count": len(symbols)},
         )
         return task
 
@@ -1181,13 +1473,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/factor-lab", status_code=202)
     def create_factor_lab(request: FactorLabRequest) -> dict[str, Any]:
-        task = factor_lab_manager.submit(request.to_spec())
+        try:
+            symbols, context = resolve_stock_selection(request)
+            task = factor_lab_manager.submit(
+                request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         audit_repository.record(
             "factor_lab_requested",
             actor=resolved_settings.web_username,
             object_type="operation_task",
             object_id=task["task_id"],
-            details={"factor_count": len(request.factors), "symbol_count": len(request.symbols)},
+            details={"factor_count": len(request.factors), "symbol_count": len(symbols)},
         )
         return task
 
@@ -1266,7 +1566,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             database=local_database,
         )
         try:
-            return service.run(request.to_spec())
+            symbols, context = resolve_stock_selection(request)
+            return service.run(
+                request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except QuantResearchError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:

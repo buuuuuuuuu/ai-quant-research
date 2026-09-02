@@ -326,6 +326,34 @@ class AkShareProvider:
             raise ProviderError("index constituent snapshot endpoint returned no members")
         return result
 
+    def get_listing_date(self, symbol: str) -> tuple[date, str]:
+        """Fetch explicit listing-date evidence, never infer it from first price."""
+        self._exchange_symbol(symbol)
+        frame = load_or_fetch(
+            cache=self.cache, namespace="listing_date", params={"symbol": symbol},
+            fetcher=lambda: self._akshare().stock_individual_info_em(
+                symbol=symbol, timeout=self.timeout_seconds,
+            ),
+            retries=self.retries, refresh=self.refresh,
+        )
+        if frame.attrs.get("cache_status") == "stale_fallback":
+            raise ProviderError("listing date refresh failed; stale evidence rejected")
+        if not {"item", "value"}.issubset(frame.columns):
+            raise ProviderError("listing-date fields missing from company information")
+        values = frame.loc[frame["item"].astype(str).str.strip().isin(
+            ["上市时间", "上市日期"]
+        ), "value"]
+        if len(values) != 1:
+            raise ProviderError("missing or conflicting listing-date evidence")
+        raw = str(values.iloc[0]).strip().removesuffix(".0")
+        try:
+            listed = pd.to_datetime(raw, format="%Y%m%d").date()
+        except ValueError as exc:
+            raise ProviderError("invalid listing-date evidence") from exc
+        if not date(1990, 1, 1) <= listed <= date.today():
+            raise ProviderError("listing date out of range")
+        return listed, "akshare:stock_individual_info_em:上市时间"
+
     def get_trading_calendar(self) -> pd.DataFrame:
         def fetch() -> pd.DataFrame:
             raw = self._akshare().tool_trade_date_hist_sina()

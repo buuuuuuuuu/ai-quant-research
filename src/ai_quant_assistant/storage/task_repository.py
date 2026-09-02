@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from typing import Any
@@ -89,6 +90,7 @@ class OperationTaskRepository:
         spec: dict[str, Any],
         message: str,
         stale_after_seconds: float = 1_800,
+        connection: Any = None,
     ) -> tuple[dict[str, Any], bool]:
         """Atomically claim a deduplicated task or return the live owner.
 
@@ -99,11 +101,16 @@ class OperationTaskRepository:
 
         if not claim_key.strip():
             raise ValueError("task claim key must not be empty")
-        self.initialize()
+        if connection is None:
+            self.initialize()
         task_id = f"task-{uuid4().hex}"
         now = datetime.now(UTC)
         stale_before = now - timedelta(seconds=max(1.0, stale_after_seconds))
-        with self.lock, self.database.connect() as connection:
+        # A supplied connection belongs to a caller's DB-locked transaction.
+        # Never acquire the process-local repository lock after that DB lock.
+        lock = self.lock if connection is None else nullcontext()
+        context = self.database.connect() if connection is None else nullcontext(connection)
+        with lock, context as connection:
             row = connection.execute(
                 f"SELECT {', '.join(TASK_COLUMNS)} FROM operation_task WHERE claim_key = ?",
                 [claim_key],
@@ -157,7 +164,10 @@ class OperationTaskRepository:
                     claim_key,
                 ],
             )
-        task = self.get(task_id)
+            task = self._decode(connection.execute(
+                f"SELECT {', '.join(TASK_COLUMNS)} FROM operation_task WHERE task_id = ?",
+                [task_id],
+            ).fetchone())
         task["reused"] = False
         return task, True
 

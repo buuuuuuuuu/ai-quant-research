@@ -1,5 +1,15 @@
 # A 股本地数据库架构（M0 + M1 + M2 + M3 + M4）
 
+## M9-B 本地管理边界（Schema v14）
+
+证券目录仅供身份检索；managed_stock 是明确维护的本地股票清单；stock_pool_member 只引用共享行情。
+DataExplorer 新管理 API 原子提交管理记录、任务 claim 和审计，返回后由有界持久队列驱动原
+MarketDataSyncService 年分区引擎；none/qfq 分别按股票和交易日历检查历史缺口，不再使用全表最新日期。
+股票池所有新增/复制/筛选保存入口在同一个 DB 事务中检查管理状态，归档引用检查使用同一共享锁。
+管理 revision/generation 与 operation_task owner/heartbeat 联合 fencing 每次仓储连接和完成事务。
+网络不持有 DB access lock；单数据目录下载槽限制内存，不阻塞备份网络阶段。具体锁顺序、故障语义、
+迁移及保守停牌诊断见 [M9-B 说明](local-stock-data-management.md)。既有研究引擎和 PIT 输入冻结不变。
+
 ## 目标与边界
 
 本阶段把现有“每次研究临时抓取并保存快照”的能力扩展为可初始化、可迁移、可检查、

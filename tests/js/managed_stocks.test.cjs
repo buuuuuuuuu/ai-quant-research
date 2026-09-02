@@ -1,0 +1,94 @@
+const assert = require("node:assert/strict");
+const {readFileSync} = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+const source = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/managed-stocks.js"), "utf8");
+
+function harness(responder, confirmed = true) {
+  const elements = new Map(), calls = [], timers = new Map();
+  let index = 0;
+  function element(key) {
+    if (!elements.has(key)) elements.set(key, {value:"", checked:false, textContent:"", innerHTML:"", disabled:false, hidden:false, listeners:{},
+      classList:{toggle() {}}, querySelectorAll:() => [], addEventListener(name, fn) {this.listeners[name] = fn;}});
+    return elements.get(key);
+  }
+  const context = vm.createContext({
+    $:element, URLSearchParams, window:{confirm:() => confirmed}, state:{explorerDataset:"prices"},
+    escapeHtml:(s) => String(s).replace(/[&<>"']/g, (v) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[v])),
+    splitStockSymbols:(s) => s.trim().split(/[\s,]+/).filter(Boolean),
+    explorerPagination() {},
+    setTimeout:(fn) => {const id = ++index; timers.set(id, fn); return id;}, clearTimeout:(id) => timers.delete(id),
+    requestJson:async (url, options = {}) => {calls.push({url, options}); return responder(url, options);},
+  });
+  vm.runInContext(source, context);
+  element("#managed-symbol").value = "003816";
+  element("#managed-start").value = "2012-01-01";
+  element("#managed-end").value = "2024-01-05";
+  return {context, element, calls, timers};
+}
+const empty = () => ({items:[], pagination:{page:1,page_size:30,total:0}});
+
+test("cancelled add/archive/restore never sends a network request", async () => {
+  const h = harness(() => assert.fail("no request"), false);
+  await h.context.addManagedStock({preventDefault() {}});
+  await h.context.managedAction({security_id:"SZSE.003816",revision:1}, "archive");
+  await h.context.managedAction({security_id:"SZSE.003816",revision:2}, "restore");
+  assert.equal(h.calls.length, 0);
+});
+
+test("confirmed asynchronous add is single-stock, has a busy guard and visible task", async () => {
+  let finish;
+  const h = harness((url, options) => options.method === "POST" ? new Promise((resolve) => {finish = resolve;}) : empty());
+  const first = h.context.addManagedStock({preventDefault() {}});
+  await h.context.addManagedStock({preventDefault() {}});
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), {symbol:"003816",start:"2012-01-01",end:"2024-01-05",confirm:true,auto_update:false});
+  finish({task_id:"task-one",status:"queued"});
+  await first;
+  assert.match(h.element("#managed-message").textContent, /task-one.*等待同步/);
+  assert.equal(h.element("#managed-add").disabled, false);
+});
+
+test("422 and 409 failures are visible text, not unhandled promises or executable HTML", async () => {
+  for (const status of [422,409]) {
+    const h = harness(() => {throw Object.assign(new Error("<script>controlled failure</script>"), {status});});
+    await assert.doesNotReject(h.context.addManagedStock({preventDefault() {}}));
+    assert.match(h.element("#managed-message").textContent, /controlled failure/);
+    assert.equal(h.element("#managed-message").innerHTML, "");
+    assert.equal(h.element("#managed-add").disabled, false);
+  }
+});
+
+test("restore carries revision but never submits a follow-up download", async () => {
+  const h = harness((url, options) => options.method ? {status:"active"} : empty());
+  await h.context.managedAction({security_id:"SZSE.003816",revision:2}, "restore");
+  assert.equal(h.calls.filter((call) => call.options.method).length, 1);
+  assert.equal(h.calls[0].options.method, "PATCH");
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), {action:"restore",expected_revision:2,confirm:true});
+});
+
+test("stock pool chooser only queries local ready stocks and never downloads", async () => {
+  const h = harness(empty);
+  h.element("#pool-ready-query").value = "中国";
+  h.element("#pool-ready-query").listeners.input();
+  await [...h.timers.values()][0]();
+  assert.match(h.calls[0].url, /ready_only=true/);
+  assert.equal(h.calls[0].options.method, undefined);
+  assert.match(h.element("#pool-ready-results").innerHTML, /数据浏览/);
+});
+
+test("rows escape names, task errors and coverage; older list responses cannot win", async () => {
+  const h = harness(empty);
+  const html = h.context.managedRows([{security_id:"SZSE.003816",symbol:"003816",name:"<img onerror=bad>",status:"active",availability:"partial",revision:1,coverage:{adjustments:{},issues:["<svg>"]},task:{task_id:"task",status:"failed",progress:20,error:"<script>"}}]);
+  assert.doesNotMatch(html, /<img|<svg|<script>/);
+  assert.match(html, /&lt;img/);
+  assert.match(html, /部分完成/);
+  let resolve;
+  const race = harness((url) => url.includes("page=1&") ? new Promise((done) => {resolve = done;}) : empty());
+  const old = race.context.loadManagedStocks(1);
+  await race.context.loadManagedStocks(2);
+  resolve({items:[{security_id:"bad"}],pagination:{page:1,page_size:30,total:1}});
+  await old;
+  assert.match(race.element("#managed-list").innerHTML, /尚无匹配/);
+});

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 import pandas as pd
@@ -31,6 +34,9 @@ class MarketDataSyncService:
         layout: DataLayout,
         provider: SyncDataProvider,
         rate_limit_seconds: float = 0.2,
+        partition_selector: Callable[[dict[str, Any]], bool] | None = None,
+        raw_namespace: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         if rate_limit_seconds < 0:
             raise ValueError("rate_limit_seconds must be non-negative")
@@ -39,6 +45,13 @@ class MarketDataSyncService:
         self.provider = provider
         self.rate_limit_seconds = rate_limit_seconds
         self.repository = SyncRepository(database)
+        self.partition_selector = partition_selector
+        if raw_namespace is not None and (not raw_namespace or not all(
+            character.isalnum() or character in "-_" for character in raw_namespace
+        )):
+            raise ValueError("invalid raw namespace")
+        self.raw_namespace = raw_namespace
+        self.progress_callback = progress_callback
 
     @staticmethod
     def _partition_ranges(start_date: date, end_date: date) -> list[tuple[date, date]]:
@@ -80,10 +93,18 @@ class MarketDataSyncService:
             / partition["symbol"]
             / partition["adjustment"]
         )
+        if self.raw_namespace:
+            target_dir = target_dir / self.raw_namespace
         target_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{partition['start_date']}_{partition['end_date']}.parquet"
         target = target_dir / filename
-        frame.to_parquet(target, index=False)
+        with NamedTemporaryFile(dir=target_dir, suffix=".tmp", delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+        try:
+            frame.to_parquet(temporary_path, index=False)
+            os.replace(temporary_path, target)
+        finally:
+            temporary_path.unlink(missing_ok=True)
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
         return target, digest
 
@@ -141,6 +162,8 @@ class MarketDataSyncService:
             for adjustment in spec.adjustments
             for range_start, range_end in self._partition_ranges(spec.start_date, spec.end_date)
         ]
+        if self.partition_selector is not None:
+            partitions = [part for part in partitions if self.partition_selector(part)]
         self.repository.plan_partitions(batch_id, partitions)
         calendar_dates = self.repository.calendar_dates(spec.start_date, spec.end_date)
         errors: list[dict[str, str]] = []
@@ -208,6 +231,8 @@ class MarketDataSyncService:
                         "error": str(exc),
                     }
                 )
+            if self.progress_callback is not None:
+                self.progress_callback(index, len(pending))
             if self.rate_limit_seconds:
                 time.sleep(self.rate_limit_seconds)
 

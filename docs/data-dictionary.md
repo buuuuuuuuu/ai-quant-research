@@ -1,4 +1,28 @@
-# A 股本地数据库数据字典（Schema v13）
+# A 股本地数据库数据字典（Schema v14）
+
+## managed_stock（v14）
+
+| 字段 | 类型 / 约束 | 含义 |
+| --- | --- | --- |
+| security_id | VARCHAR PRIMARY KEY | 证券身份，名称/代码/交易所仍属于 security_master |
+| status | active / archived | 逻辑纳入/移出管理；不删除行情 |
+| target_start / target_end | DATE，start≤end | 用户希望维护的历史范围，实际按上市证据和完整交易日裁剪 |
+| auto_update | BOOLEAN | 是否允许日常定时行情维护 |
+| availability | unavailable / partial / ready | 基础行情可用性，独立于下载任务状态 |
+| coverage_json | VARCHAR / JSON | none/qfq 覆盖、缺失样例、上市/日历诊断、迁移说明；更新失败可含先前有效范围 |
+| listing_date / listing_source | DATE / VARCHAR，可空 | 可靠上市日期及证据来源，不以第一根 K 线推断 |
+| last_task_id | VARCHAR，可空 | 最近 operation_task ID |
+| last_success_at | TIMESTAMPTZ，可空 | 最近完整成功时间 |
+| revision / generation | INTEGER≥1 | 管理 CAS 令牌 / 防止旧 worker 发布的代数 |
+| created_at / updated_at | TIMESTAMPTZ | UTC 时间 |
+
+首期数据类型固定 daily_bar、复权固定 none/qfq，由服务和任务 spec 明确表达，不重复建三张行情表。
+任务复用 `operation_task.task_type=sync`，`spec_json.dataset=managed_stock`，含 security_id、symbol、
+目标范围、adjustments、generation、confirmed 和 actor。股票级 claim 保证一个有效下载任务；完成释放 claim，
+是否复用成功任务由实际覆盖决定。管理写入、任务提交和请求审计同事务；完成摘要、任务终态、完成审计同事务。
+
+迁移只新增本表，不改写旧数据或池 revision；旧行情按实际覆盖接管，旧引用缺行情保留并诊断。
+详细状态、API 和锁顺序见 [本地数据管理](local-stock-data-management.md)。
 
 ## 公共约定
 

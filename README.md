@@ -47,7 +47,7 @@ ai-quant-research/
 
 ## A 股本地数据库（M0–M9）
 
-数据平台提供 DuckDB Schema v13、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v14、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -59,7 +59,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v12 数据库执行同一命令时会自动升级到 Schema v13，不删除已发布的
+已有 Schema v1–v13 数据库执行同一命令时会自动升级到 Schema v14，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 Schema v10 引入的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。
@@ -75,16 +75,22 @@ Schema v13 将运行时固定十只股票替换为可自定义、可归档、带
 研究提交时冻结 pool/revision、实际代码与 SHA-256；旧 `saved_watchlist` 保留兼容读取并迁移为
 `screen_snapshot` 股票池。使用方式和升级诊断见 [docs/stock-pools.md](docs/stock-pools.md)。
 
-股票池搜索只查询本地证券目录。如果添加提示 `missing from security_master`，先在
-Web“股票池管理”点击“更新证券主数据”并确认，完成后重新搜索和添加。也可显式运行：
+Schema v14 增加本地股票数据管理：在“数据浏览”搜索证券并确认“添加并同步”，后台自动
+回填日线（默认 2012-01-01 至提交日，按可靠上市日期裁剪，维护 none/qfq）。不下载公告、
+财务或 PDF；股票池新成员只能来自 active 且行情已就绪的受管理股票。移出只归档管理记录，
+保留行情、旧池成员与历史 revision；活动池当前引用会阻止移出。详见
+[本地股票数据管理](docs/local-stock-data-management.md)。
+
+证券目录不等于已有行情。如果搜索提示 `missing from security_master`，先在
+Web“股票池管理”点击“更新证券主数据”并确认，再前往数据浏览添加并回填。也可显式运行：
 
 ```bash
 uv run ai-quant data sync-security-master --confirm
 ```
 
 此操作仅补充证券代码、名称和来源，不下载历史行情、不自动添加成员、不扩大定时同步范围。
-`ops sync` 和定时同步优先使用显式股票配置，否则使用数据库默认股票池；需要新成员的
-行情、公告或财务数据时，另行确认“同步缺失数据”。本次修复不新增 Schema 迁移，仍为 v13。
+`ops sync` 和定时同步的日线范围改为 active 且启用自动更新的受管理股票；公告/财务仍
+沿用既有显式配置或默认股票池范围，不因纳入管理而扩大。目录刷新不创建管理记录。
 
 证券目录发布使用单条集合式 upsert，避免全目录逐条写入耗尽 DuckDB 内存；在 128 MB
 DuckDB 内存额度下覆盖 6,000 条证券的新增、重复更新和失败回滚测试。保留原事务、
@@ -455,7 +461,7 @@ uv run ai-quant ops backup
 uv run ai-quant ops tasks --limit 20
 ```
 
-Schema v13 会持久化回测、Copilot、条件选股、版本化股票池、公告文档与事件提取任务、
+Schema v14 会持久化回测、Copilot、条件选股、版本化股票池、本地股票管理、公告文档与事件提取任务、
 逐字段证据、事件研究输入、增量同步、数据库备份任务、运行告警、管理员审计，以及行业与
 指数成分同步批次。同步按现有覆盖区间依次更新股票、
 指数、公告与 Point-in-Time 财务数据；备份执行 DuckDB checkpoint、完整性验证和 SHA-256

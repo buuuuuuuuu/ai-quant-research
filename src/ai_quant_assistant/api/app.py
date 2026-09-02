@@ -24,6 +24,8 @@ from ai_quant_assistant.ai.repository import CopilotRepository
 from ai_quant_assistant.ai.tool_registry import copilot_tool_catalog, require_allowed_tool
 from ai_quant_assistant.api.auth import SESSION_COOKIE, WebAuthenticator, safe_next_path
 from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
+from ai_quant_assistant.api.managed_stock_routes import managed_stock_router
+from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
 from ai_quant_assistant.api.run_repository import BacktestRunRepository, FactorLabRunRepository
 from ai_quant_assistant.api.schemas import (
@@ -78,6 +80,7 @@ from ai_quant_assistant.research.service import InterimReportResearchService
 from ai_quant_assistant.storage.data_explorer import DataExplorer
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.managed_stocks import ManagedStockService
 from ai_quant_assistant.storage.monitoring import (
     OperationAlertRepository,
     OperationAuditRepository,
@@ -150,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit=audit_repository,
     )
     stock_pools = StockPoolService(database)
+    managed_stock_tasks = ManagedStockTaskManager(ManagedStockService(database, resolved_settings))
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,
@@ -217,13 +221,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     asset_version = hashlib.sha256(
         b"".join(
             (web_root / "static" / name).read_bytes()
-            for name in ("workbench.js", "workbench.css", "stock-pools.css")
+            for name in ("workbench.js", "managed-stocks.js", "workbench.css", "stock-pools.css")
         )
     ).hexdigest()[:16]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        managed_stock_tasks.start()
         yield
+        managed_stock_tasks.shutdown()
         task_manager.shutdown()
         factor_lab_manager.shutdown()
         copilot_tasks.shutdown()
@@ -262,6 +268,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_event_service = document_event_service
     app.state.document_event_tasks = document_event_tasks
     app.state.stock_pools = stock_pools
+    app.state.managed_stock_tasks = managed_stock_tasks
+    app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -465,11 +473,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/data/securities")
     def data_securities(
-        query: str = "", dataset: str = "all", page: int = 1, page_size: int = 50
+        query: str = "", dataset: str = "all", page: int = 1, page_size: int = 50,
+        managed_only: bool = False,
     ) -> dict[str, Any]:
         try:
             return data_explorer.securities(
-                query=query, dataset=dataset, page=page, page_size=page_size
+                query=query, dataset=dataset, page=page, page_size=page_size, managed_only=managed_only
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

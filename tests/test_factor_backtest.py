@@ -121,6 +121,16 @@ def _database(tmp_path: Path) -> LocalDatabase:
                     """,
                     [report_id, security_id, period, published, factor, value],
                 )
+        from managed_test_data import admit_fixture
+
+        connection.execute(
+            """INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id)
+               SELECT exchange, CAST(day AS DATE), TRUE, 'fixture-backtest', 'fixture-batch'
+               FROM generate_series(DATE '2024-01-02',DATE '2024-04-10',INTERVAL 1 DAY) days(day)
+               CROSS JOIN (VALUES ('SSE'),('SZSE')) exchanges(exchange)
+               WHERE isodow(day) <= 5 ON CONFLICT DO NOTHING"""
+        )
+        admit_fixture(connection, [item[1] for item in securities])
     return database
 
 

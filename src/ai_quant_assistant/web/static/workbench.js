@@ -62,6 +62,8 @@ async function loadStockPoolDetail(poolId) {
   const members = pool.members || [];
   $("#stock-pool-detail").innerHTML = `<div class="stock-pool-detail-head"><div><p class="eyebrow">${escapeHtml(pool.source_type)} · REVISION ${escapeHtml(pool.current_revision)}</p><h3>${escapeHtml(pool.name)}</h3><p>${escapeHtml(pool.description || "暂无描述")}</p></div><span class="quality-pill">${escapeHtml(pool.status)}</span></div>${pool.warning ? `<p class="screen-warnings">${escapeHtml(pool.warning)}</p>` : ""}<div class="form-grid"><label class="field"><span>名称</span><input id="stock-pool-name" maxlength="120" value="${escapeHtml(pool.name)}"></label><label class="field"><span>描述</span><input id="stock-pool-description" maxlength="1000" value="${escapeHtml(pool.description)}"></label></div><div class="stock-pool-actions"><button id="stock-pool-save" class="secondary-button" type="button">保存元数据</button><button id="stock-pool-default" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>设为默认</button><button id="stock-pool-duplicate" class="secondary-button" type="button">复制</button><button id="stock-pool-sync" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>同步缺失数据</button><button id="stock-pool-archive" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>归档</button></div><label class="field"><span>搜索证券代码或名称</span><input id="stock-pool-security-search" type="search" maxlength="120" placeholder="600519 或 贵州茅台"></label><div id="stock-pool-search-results"></div><label class="field"><span>批量添加六位代码</span><textarea id="stock-pool-add-symbols" rows="2" placeholder="单次最多 200 只"></textarea></label><button id="stock-pool-add" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>添加成员</button><button id="stock-pool-remove-selected" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除勾选成员</button><p id="stock-pool-member-message" class="stock-pool-message" data-stock-pool-message role="status" aria-live="polite"></p><div class="table-shell stock-pool-members"><table><thead><tr><th></th><th>代码 / 名称</th><th>交易所 / 状态</th><th>数据覆盖</th><th>备注</th><th>顺序</th><th></th></tr></thead><tbody>${members.map((member) => `<tr data-security-id="${escapeHtml(member.security_id)}"><td><input class="stock-pool-member-select" type="checkbox"></td><td>${escapeHtml(member.symbol)} · ${escapeHtml(member.name)}</td><td>${escapeHtml(member.exchange)} · ${escapeHtml(member.status)}</td><td>${escapeHtml(member.coverage.start_date || "—")} → ${escapeHtml(member.coverage.end_date || "—")} · ${formatNumber(member.coverage.rows)} 行</td><td><input class="stock-pool-member-note" maxlength="500" value="${escapeHtml(member.note)}"></td><td><input class="stock-pool-member-order" type="number" min="1" max="500" value="${escapeHtml(member.display_order)}"></td><td><button class="stock-pool-member-save" type="button" ${pool.status === "archived" ? "disabled" : ""}>保存</button><button class="stock-pool-member-remove" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除</button></td></tr>`).join("")}</tbody></table></div>`;
   bindStockPoolDetail();
+  const pendingMembers = members.filter((member) => member.admission_warning);
+  if (pendingMembers.length) setStockPoolMessage(`旧成员保留，但本地行情待补齐：${pendingMembers.map((member) => member.symbol).join("、")}。请在数据浏览中查看。`, true);
 }
 
 function setStockPoolMessage(text, isError = false) {
@@ -165,7 +167,7 @@ function bindStockPoolDetail() {
           results.textContent = "本地证券目录未找到匹配项。请先点击本区域上方“更新证券主数据”，完成后重新搜索。";
           return;
         }
-        results.innerHTML = items.map((item) => `<button type="button" data-symbol="${escapeHtml(item.symbol)}" ${item.status !== "active" ? "disabled" : ""}>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.status)}</button>`).join("");
+        results.innerHTML = items.map((item) => `<button type="button" data-symbol="${escapeHtml(item.symbol)}" ${!item.eligible ? "disabled" : ""}>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.admission_warning || "本地行情已就绪")}</button>`).join("");
         results.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {$("#stock-pool-add-symbols").value = button.dataset.symbol;}));
       } catch (error) {
         if (current === generation && search.isConnected) results.textContent = `证券搜索失败：${error.message}`;
@@ -875,7 +877,7 @@ async function loadExplorerEntities(page=1) {
   try {
     const query=new URLSearchParams({page:String(page),page_size:"30"});
     let url="/api/v1/data/benchmarks";
-    if(state.explorerDataset!=="benchmarks"){query.set("dataset",state.explorerDataset);query.set("query",$("#explorer-search").value.trim());url="/api/v1/data/securities";}
+    if(state.explorerDataset!=="benchmarks"){query.set("dataset",state.explorerDataset);query.set("query",$("#explorer-search").value.trim());if(state.explorerDataset==="prices") query.set("managed_only","true");url="/api/v1/data/securities";}
     const payload=await requestJson(`${url}?${query}`), items=payload.items||[];
     target.innerHTML=items.length?items.map((item)=>`<button class="explorer-entity" type="button" data-symbol="${escapeHtml(item.symbol)}"><strong>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</strong><span>${state.explorerDataset==="benchmarks"?`${formatNumber(item.price_rows)} 行 · ${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}`:`行情 ${formatNumber(item.price_rows)} · 公告 ${formatNumber(item.announcement_count)} · 财报 ${formatNumber(item.report_count)}`}</span></button>`).join(""):'<p class="empty-state">没有匹配的已发布数据。</p>';
     target.querySelectorAll("button").forEach((button)=>button.addEventListener("click",()=>selectExplorerEntity(items.find((item)=>item.symbol===button.dataset.symbol))));
@@ -887,6 +889,7 @@ async function loadExplorerEntities(page=1) {
 async function openExplorer(dataset="prices") {
   state.explorerDataset=dataset; state.explorerPage=1;
   $("#data-explorer").hidden=false;
+  if (typeof loadManagedStocks === "function") await loadManagedStocks(1);
   $$("[data-explorer-dataset]").forEach((button)=>button.classList.toggle("active",button.dataset.explorerDataset===dataset && button.closest(".explorer-tabs")));
   $("#explorer-adjustment-field").hidden=dataset!=="prices";
   $("#explorer-report-field").hidden=dataset!=="announcements";

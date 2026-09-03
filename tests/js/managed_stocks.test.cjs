@@ -29,6 +29,22 @@ function harness(responder, confirmed = true) {
 }
 const empty = () => ({items:[], pagination:{page:1,page_size:30,total:0}});
 
+test("failed tasks show escaped stage without a misleading completion percentage", () => {
+  const h = harness(empty);
+  const asset = {security_id:"SSE.688111",symbol:"688111",name:"金山办公",status:"active",availability:"unavailable",revision:2,coverage:{adjustments:{},issues:[]}};
+  for (const progress of [1,99]) {
+    const html = h.context.managedRows([{...asset,task:{task_id:"task-failed",status:"failed",progress,message:"查询上市日期 <svg onload=bad>；行情下载尚未开始"}}]);
+    assert.match(html, /同步失败/);
+    assert.match(html, /行情下载尚未开始/);
+    assert.match(html, /task-failed/);
+    assert.doesNotMatch(html, /\d+%|<svg/);
+    assert.match(html, /&lt;svg/);
+  }
+  const running = h.context.managedRows([{...asset,task:{task_id:"task-running",status:"running",progress:40,message:"历史行情分区 3\/8"}}]);
+  assert.match(running, /40%/);
+  assert.match(running, /历史行情分区 3\/8/);
+});
+
 test("cancelled add/archive/restore never sends a network request", async () => {
   const h = harness(() => assert.fail("no request"), false);
   await h.context.addManagedStock({preventDefault() {}});

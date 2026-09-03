@@ -67,7 +67,8 @@ function managedRows(items) {
     const issues = [...(asset.coverage.issues || []), ...(task?.error ? [task.error] : [])];
     const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", "configure", "archive", "prices", "references"];
     const labels = {restore: "恢复管理", sync: "补齐 / 更新 / 重试", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
-    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])} ${escapeHtml(task.progress)}%<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
+    const progress = task && task.status !== "failed" ? ` ${escapeHtml(task.progress)}%` : "";
+    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
   }).join("");
 }
 

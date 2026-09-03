@@ -21,6 +21,12 @@
 目标范围、adjustments、generation、confirmed 和 actor。股票级 claim 保证一个有效下载任务；完成释放 claim，
 是否复用成功任务由实际覆盖决定。管理写入、任务提交和请求审计同事务；完成摘要、任务终态、完成审计同事务。
 
+`coverage_json.listing_date_verified` 表示是否已确认上市边界。未知时两种复权的 `expected_rows`、
+`missing_count` 为 JSON null，`missing_sample=[]`，而不是把整个目标区间标为确定缺口或视为无缺口；
+实际 `rows/start_date/end_date` 仍保留。`listing_source` 可为已有主数据、东方财富个股信息或上交所单股
+`sse:COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L:LIST_DATE`。来源不可用仍不能 ready。
+任务失败保留最近真实阶段的 progress/message；heartbeat 仅续租，终态仍与管理摘要、审计原子提交。
+
 迁移只新增本表，不改写旧数据或池 revision；旧行情按实际覆盖接管，旧引用缺行情保留并诊断。
 详细状态、API 和锁顺序见 [本地数据管理](local-stock-data-management.md)。
 

@@ -441,17 +441,16 @@ class ManagedStockService:
         if spec.get("dataset") != "managed_stock":
             raise ValueError("not a managed stock task")
         owner = f"managed-worker-{uuid4().hex}"
-        if not self.tasks.start(task_id, owner_id=owner, message="正在回填单股历史行情"):
+        if not self.tasks.start(
+            task_id, owner_id=owner, message="正在查询上市日期（行情下载尚未开始）"
+        ):
             return self.tasks.get(task_id)
         stop = Event()
 
         def heartbeat():
             while not stop.wait(15):
                 try:
-                    if not self.tasks.progress(
-                        task_id, owner_id=owner, progress=5, message="历史行情同步中"
-                    ):
-                        return
+                    self._heartbeat(task_id, owner, spec)
                 except Exception:
                     return
 
@@ -460,6 +459,7 @@ class ManagedStockService:
         error = None
         try:
             self._download(task_id, owner, spec)
+            self._progress(task_id, owner, 95, "正在校验目标覆盖并提交结果")
         except Exception as exc:
             error = str(exc)[:2000]
         try:
@@ -501,14 +501,19 @@ class ManagedStockService:
                        updated_at=CURRENT_TIMESTAMP WHERE security_id=?""",
                     [availability, encoded(report), success, spec["security_id"]],
                 )
+                stage = connection.execute(
+                    "SELECT message FROM operation_task WHERE task_id=?", [task_id]
+                ).fetchone()[0]
                 connection.execute(
-                    """UPDATE operation_task SET status=?, progress=?, message=?, result_json=?, error=?,
+                    """UPDATE operation_task SET status=?,
+                       progress=CASE WHEN ? THEN 100 ELSE LEAST(progress,99) END,
+                       message=?, result_json=?, error=?,
                        completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP,
                        heartbeat_at=CURRENT_TIMESTAMP, claim_key=NULL WHERE task_id=? AND owner_id=?""",
                     [
                         "succeeded" if success else "failed",
-                        100 if success else 99,
-                        "历史行情已就绪" if success else "同步未完整完成，可安全重试",
+                        success,
+                        "历史行情已就绪" if success else f"{stage}；同步未完成，可安全重试",
                         encoded(report) if success else None,
                         error,
                         task_id,
@@ -541,6 +546,21 @@ class ManagedStockService:
             thread.join(timeout=1)
         return self.tasks.get(task_id)
 
+    def _heartbeat(self, task_id: str, owner: str, spec: dict[str, Any]) -> None:
+        # Renew the lease only. Heartbeats must not replace a precise stage with
+        # a generic message, advance progress, or revive an obsolete generation.
+        with self.database.connect() as connection:
+            self.fence(connection, task_id, owner, spec)
+            connection.execute(
+                """UPDATE operation_task SET heartbeat_at=CURRENT_TIMESTAMP,
+                   updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND owner_id=?""",
+                [task_id, owner],
+            )
+
+    def _progress(self, task_id: str, owner: str, value: int, message: str) -> None:
+        if not self.tasks.progress(task_id, owner_id=owner, progress=value, message=message):
+            raise ManagedStockConflict("worker no longer owns the task")
+
     def _download(self, task_id: str, owner: str, spec: dict[str, Any]) -> None:
         provider = self.provider_factory(f"{task_id}-{owner}")
         start = date.fromisoformat(spec["start_date"])
@@ -560,9 +580,12 @@ class ManagedStockService:
                         [listed, spec["security_id"]],
                     )
         if listed is None and hasattr(provider, "get_listing_date"):
-            listed, source = provider.get_listing_date(spec["symbol"])
-            if not isinstance(listed, date) or listed > market_today() or not source:
-                raise ValueError("invalid provider listing-date evidence")
+            try:
+                listed, source = provider.get_listing_date(spec["symbol"])
+                if not isinstance(listed, date) or listed > market_today() or not source:
+                    raise ValueError("invalid provider listing-date evidence")
+            except Exception as exc:
+                raise RuntimeError(f"上市日期查询失败，行情下载尚未开始：{exc}") from exc
             with self.transaction() as connection:
                 self.fence(connection, task_id, owner, spec)
                 connection.execute(
@@ -573,6 +596,7 @@ class ManagedStockService:
             start = max(start, listed)
         if start > end:
             raise ValueError("尚无完整交易日可同步")
+        self._progress(task_id, owner, 10, "正在准备交易日历与行情分区")
         guarded = _FencedDatabase(self, task_id, owner, spec)
 
         def needed(partition):
@@ -605,13 +629,10 @@ class ManagedStockService:
             )
 
         def progress(index, total):
-            if not self.tasks.progress(
-                task_id,
-                owner_id=owner,
-                progress=10 + int(80 * index / total),
-                message=f"历史行情分区 {index}/{total}",
-            ):
-                raise ManagedStockConflict("worker no longer owns the task")
+            self._progress(
+                task_id, owner, 10 + int(80 * index / total),
+                f"历史行情分区 {index}/{total}",
+            )
 
         market = MarketDataSyncService(
             database=guarded,

@@ -53,12 +53,12 @@ def coverage_report(
     if not calendar or calendar[-1] < last_required:
         issues.append("交易日历未覆盖目标结束日期，不能确认完整性")
     first_required = start + timedelta(days=(7 - start.weekday()) if start.weekday() >= 5 else 0)
-    if calendar and calendar[0] > first_required:
+    if listed is not None and calendar and calendar[0] > first_required:
         issues.append("交易日历未覆盖目标开始日期，不能豁免历史区间")
-    if not expected:
+    if listed is not None and not expected:
         issues.append("目标期间没有可验证的交易日或尚未上市")
     if listed is None:
-        issues.append("上市日期未知；上市前空区间不能自动豁免")
+        issues.append("上市日期未知；应有交易日范围和缺口尚不能判定，不自动豁免上市前空区间")
     details = {}
     for adjustment in ADJUSTMENTS:
         observed = {
@@ -71,7 +71,7 @@ def coverage_report(
         }
         missing = sorted(expected - observed)
         unexpected = sorted(observed - expected)
-        if missing:
+        if listed is not None and missing:
             issues.append(f"{adjustment}: {len(missing)} 个未解释的交易日缺口（不自动假定停牌）")
         if unexpected:
             issues.append(f"{adjustment}: {len(unexpected)} 条记录不在已验证交易日历中")
@@ -81,9 +81,9 @@ def coverage_report(
             "rows": len(observed),
             "start_date": str(min(observed)) if observed else None,
             "end_date": str(max(observed)) if observed else None,
-            "expected_rows": len(expected),
-            "missing_count": len(missing),
-            "missing_sample": [str(day) for day in missing[:10]],
+            "expected_rows": len(expected) if listed is not None else None,
+            "missing_count": len(missing) if listed is not None else None,
+            "missing_sample": [str(day) for day in missing[:10]] if listed is not None else [],
         }
     return {
         "availability": "ready"
@@ -92,6 +92,7 @@ def coverage_report(
         if any(d["rows"] for d in details.values())
         else "unavailable",
         "issues": issues,
+        "listing_date_verified": listed is not None,
         "adjustments": details,
         "effective_start": str(start),
         "effective_end": str(end),

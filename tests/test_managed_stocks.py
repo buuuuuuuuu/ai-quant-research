@@ -572,7 +572,7 @@ def test_cli_enqueues_and_cannot_bypass_pool_admission(setup, capsys, monkeypatc
 def test_listing_date_requires_explicit_valid_source(tmp_path, monkeypatch, value):
     from ai_quant_assistant.errors import ProviderError
 
-    frame = pd.DataFrame({"item": ["上市时间"], "value": [value]})
+    frame = pd.DataFrame({"symbol": ["003816"], "listing_date": [value]})
     monkeypatch.setattr(
         "ai_quant_assistant.providers.akshare_provider.load_or_fetch", lambda **kwargs: frame
     )
@@ -582,6 +582,103 @@ def test_listing_date_requires_explicit_valid_source(tmp_path, monkeypatch, valu
     else:
         with pytest.raises(ProviderError):
             provider.get_listing_date("003816")
+
+
+def test_listing_failure_preserves_stage_and_unknown_gaps_then_retry_succeeds(setup, monkeypatch):
+    db, provider, service = setup
+    original = provider.get_listing_date
+
+    def unavailable(symbol):
+        raise RuntimeError("controlled listing source failure")
+
+    monkeypatch.setattr(provider, "get_listing_date", unavailable)
+    task, _ = submit(service)
+    failed = service.run(task["task_id"])
+    assert failed["status"] == "failed" and failed["progress"] == 1
+    assert failed["completed_at"] and failed.get("result") is None
+    assert "行情下载尚未开始" in failed["message"]
+    assert "上市日期查询失败" in failed["error"]
+    assert provider.calls == []
+    asset = service.get("SZSE.003816")
+    assert asset["availability"] == "unavailable" and not asset["eligible"]
+    assert asset["listing_date"] is None and asset["last_success_at"] is None
+    report = asset["coverage"]
+    assert not report["listing_date_verified"]
+    assert not any("个未解释的交易日缺口" in issue for issue in report["issues"])
+    for adjustment in ("none", "qfq"):
+        assert report["adjustments"][adjustment]["missing_count"] is None
+        assert report["adjustments"][adjustment]["expected_rows"] is None
+        assert report["adjustments"][adjustment]["rows"] == 0
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT COUNT(*) FROM operation_audit WHERE action='managed_stock_sync_failed'").fetchone()[0] == 1
+    with pytest.raises(ValueError, match="not ready"):
+        StockPoolService(db).create("blocked by missing evidence", symbols=["003816"])
+
+    monkeypatch.setattr(provider, "get_listing_date", original)
+    retry, created = submit(service, expected_revision=asset["revision"], refresh=True)
+    assert created and retry["task_id"] != task["task_id"]
+    assert service.run(retry["task_id"])["status"] == "succeeded"
+    assert service.tasks.get(task["task_id"]) == failed
+    ready = service.get("SZSE.003816")
+    assert ready["eligible"] and ready["listing_source"] == "fixture:explicit-listing-date"
+
+
+def test_heartbeat_preserves_progress_stage_and_rejects_old_owner_generation(setup):
+    _, _, service = setup
+    task, _ = submit(service)
+    assert service.tasks.start(task["task_id"], owner_id="current", message="查询上市日期")
+    service._progress(task["task_id"], "current", 40, "历史行情分区 3/8")
+    service._heartbeat(task["task_id"], "current", task["spec"])
+    state = service.tasks.get(task["task_id"])
+    assert state["progress"] == 40 and state["message"] == "历史行情分区 3/8"
+    with pytest.raises(ManagedStockConflict):
+        service._heartbeat(task["task_id"], "obsolete", task["spec"])
+    with pytest.raises(ManagedStockConflict):
+        service._heartbeat(task["task_id"], "current", {**task["spec"], "generation": -1})
+    service.change("SZSE.003816", expected_revision=1, action="archive", confirm=True)
+    archived = service.tasks.get(task["task_id"])
+    with pytest.raises(ManagedStockConflict):
+        service._heartbeat(task["task_id"], "current", task["spec"])
+    assert service.tasks.get(task["task_id"]) == archived
+
+
+def test_exchange_fallback_backfills_and_reuses_persisted_evidence(setup, monkeypatch, tmp_path):
+    from http.client import RemoteDisconnected
+    from types import SimpleNamespace
+
+    from ai_quant_assistant.providers.listing_dates import SSE_LISTING_SOURCE
+
+    db, controlled, service = setup
+    with db.connect() as c:
+        c.execute("""INSERT INTO security_master
+            (security_id,symbol,exchange,name,status,source,source_batch_id)
+            VALUES ('SSE.688111','688111','SSE','测试金山办公','active','fixture','fixture')""")
+
+    def disconnected(**kwargs):
+        raise RemoteDisconnected("controlled disconnection")
+
+    monkeypatch.setattr(AkShareProvider, "_akshare", staticmethod(
+        lambda: SimpleNamespace(stock_individual_info_em=disconnected)
+    ))
+    monkeypatch.setattr("ai_quant_assistant.providers.akshare_provider.sse_listing_frame", lambda *args: pd.DataFrame({
+        "item": ["股票代码", "上市日期"], "value": ["688111", str(controlled.listed)],
+    }))
+    provider = AkShareProvider(tmp_path / "listing", retries=1)
+    monkeypatch.setattr(provider, "get_trading_calendar", controlled.get_trading_calendar)
+    monkeypatch.setattr(provider, "get_daily_bars", controlled.get_daily_bars)
+    service.provider_factory = lambda _: provider
+    task, _ = service.request("688111", start=date(2012, 1, 1), end=date(2024, 1, 5), confirm=True)
+    result = service.run(task["task_id"])
+    assert result["status"] == "succeeded", result
+    asset = service.get("SSE.688111")
+    assert asset["listing_source"] == SSE_LISTING_SOURCE and asset["eligible"]
+    assert all(call[1] == controlled.listed for call in controlled.calls)
+    assert {call[3] for call in controlled.calls} == {"none", "qfq"}
+    assert result["progress"] == 100
+    monkeypatch.setattr(provider, "get_listing_date", lambda _: pytest.fail("reuse persisted evidence"))
+    retry, _ = service.request("688111", start=date(2012, 1, 1), end=date(2024, 1, 5), confirm=True,
+                               refresh=True, expected_revision=asset["revision"])
+    assert service.run(retry["task_id"])["status"] == "succeeded"
 
 
 def test_complete_day_cutoff_never_imports_unfinished_today():

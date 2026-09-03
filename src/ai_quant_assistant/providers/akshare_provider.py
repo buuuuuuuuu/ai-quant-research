@@ -8,6 +8,12 @@ import pandas as pd
 
 from ai_quant_assistant.errors import ProviderError
 from ai_quant_assistant.providers.cache import DataFrameCache, load_or_fetch
+from ai_quant_assistant.providers.listing_dates import (
+    SSE_LISTING_SOURCE,
+    explicit_listing_date,
+    sse_listing_frame,
+    validate_listing_frame,
+)
 from ai_quant_assistant.providers.normalization import (
     clip_dates,
     normalize_daily_bars,
@@ -329,30 +335,48 @@ class AkShareProvider:
     def get_listing_date(self, symbol: str) -> tuple[date, str]:
         """Fetch explicit listing-date evidence, never infer it from first price."""
         self._exchange_symbol(symbol)
-        frame = load_or_fetch(
-            cache=self.cache, namespace="listing_date", params={"symbol": symbol},
-            fetcher=lambda: self._akshare().stock_individual_info_em(
+        sources = [(
+            "listing_date_v2", "akshare:stock_individual_info_em:上市时间",
+            lambda: self._akshare().stock_individual_info_em(
                 symbol=symbol, timeout=self.timeout_seconds,
             ),
-            retries=self.retries, refresh=self.refresh,
-        )
-        if frame.attrs.get("cache_status") == "stale_fallback":
-            raise ProviderError("listing date refresh failed; stale evidence rejected")
-        if not {"item", "value"}.issubset(frame.columns):
-            raise ProviderError("listing-date fields missing from company information")
-        values = frame.loc[frame["item"].astype(str).str.strip().isin(
-            ["上市时间", "上市日期"]
-        ), "value"]
-        if len(values) != 1:
-            raise ProviderError("missing or conflicting listing-date evidence")
-        raw = str(values.iloc[0]).strip().removesuffix(".0")
-        try:
-            listed = pd.to_datetime(raw, format="%Y%m%d").date()
-        except ValueError as exc:
-            raise ProviderError("invalid listing-date evidence") from exc
-        if not date(1990, 1, 1) <= listed <= date.today():
-            raise ProviderError("listing date out of range")
-        return listed, "akshare:stock_individual_info_em:上市时间"
+        )]
+        if symbol.startswith("6"):
+            sources.append((
+                "listing_date_sse_v1", SSE_LISTING_SOURCE,
+                lambda: sse_listing_frame(symbol, self.timeout_seconds),
+            ))
+        failures = []
+        for namespace, source, fetch in sources:
+            def validated_fetch(fetch=fetch):
+                result = fetch()
+                listed = validate_listing_frame(result, symbol)
+                # The cache preserves the symbol column as text (including leading
+                # zeros). Do not cache a heterogeneous numeric item/value frame.
+                return pd.DataFrame({"symbol": [symbol], "listing_date": [str(listed)]})
+
+            try:
+                frame = load_or_fetch(
+                    cache=self.cache, namespace=namespace, params={"symbol": symbol},
+                    fetcher=validated_fetch, retries=self.retries, refresh=self.refresh,
+                )
+                if frame.attrs.get("cache_status") == "stale_fallback":
+                    raise ProviderError("listing date refresh failed; stale evidence rejected")
+                if (len(frame) != 1 or not {"symbol", "listing_date"}.issubset(frame.columns)
+                        or str(frame.iloc[0]["symbol"]) != symbol):
+                    raise ProviderError("invalid cached listing-date identity")
+                return explicit_listing_date(frame.iloc[0]["listing_date"]), source
+            except Exception as exc:  # noqa: BLE001 - independent public provider boundary
+                # Endpoint names/types are useful diagnostics; never persist arbitrary
+                # upstream response bodies, proxy credentials or authentication data.
+                causes, cause = [], exc
+                for _ in range(5):
+                    causes.append(type(cause).__name__)
+                    cause = cause.__cause__ or cause.__context__
+                    if cause is None:
+                        break
+                failures.append(f"{source}: {' → '.join(causes)}")
+        raise ProviderError("上市日期来源均不可用或证据无效；" + "；".join(failures))
 
     def get_trading_calendar(self) -> pd.DataFrame:
         def fetch() -> pd.DataFrame:

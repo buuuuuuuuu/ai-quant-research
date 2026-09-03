@@ -43,6 +43,10 @@ def _add_security(database: LocalDatabase, symbol: str, *, status: str = "active
             """,
             [f"{exchange}.{symbol}", symbol, exchange, f"测试{symbol}", status],
         )
+        if status == "active":
+            from managed_test_data import admit_fixture
+
+            admit_fixture(connection, [symbol])
 
 
 def test_stock_pool_crud_revisions_freeze_and_audit(tmp_path) -> None:
@@ -145,6 +149,9 @@ def test_validation_capacity_and_optimistic_concurrency(tmp_path) -> None:
             """,
             [(f"SZSE.{symbol}", symbol, f"测试{symbol}") for symbol in symbols],
         )
+        from managed_test_data import admit_fixture
+
+        admit_fixture(connection, symbols)
     full = service.create("容量池", symbols=symbols[:200])
     full = service.add_members(full["pool_id"], symbols[200:400], expected_revision=1)
     full = service.add_members(full["pool_id"], symbols[400:], expected_revision=2)
@@ -368,8 +375,8 @@ def test_v12_to_v13_watchlist_migration_preserves_data_and_is_repeatable(tmp_pat
     database = LocalDatabase(path, DataLayout.from_root(tmp_path / "data"))
     first, second = database.initialize(), database.initialize()
     migrated = StockPoolService(database).get("watchlist-history")
-    assert first["schema_version"] == SCHEMA_VERSION == 13
-    assert first["applied_migrations"] == [13] and second["applied_migrations"] == []
+    assert first["schema_version"] == SCHEMA_VERSION == 14
+    assert first["applied_migrations"] == [13, 14] and second["applied_migrations"] == []
     assert migrated["source_type"] == "screen_snapshot"
     assert migrated["source_screen_run_id"] == "screen-history"
     assert migrated["symbols"] == ["600519"] and migrated["history_verified"] is True

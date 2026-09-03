@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +149,12 @@ def _migrate_stock_pools_v13(connection: Any) -> None:
                 row[7],
             ],
         )
+
+
+def _migrate_managed_stocks_v14(connection: Any) -> None:
+    from ai_quant_assistant.storage.managed_coverage import seed_managed_stocks
+
+    seed_managed_stocks(connection)
 
 
 MIGRATIONS = (
@@ -1262,6 +1268,33 @@ MIGRATIONS = (
             """,
         ),
         handler=_migrate_stock_pools_v13,
+    ),
+    Migration(
+        version=14,
+        name="managed_stock_data_and_readiness",
+        statements=(
+            """CREATE TABLE managed_stock (
+                security_id VARCHAR PRIMARY KEY,
+                status VARCHAR NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+                target_start DATE NOT NULL,
+                target_end DATE NOT NULL,
+                auto_update BOOLEAN NOT NULL DEFAULT TRUE,
+                availability VARCHAR NOT NULL DEFAULT 'unavailable'
+                    CHECK(availability IN ('unavailable','partial','ready')),
+                coverage_json VARCHAR NOT NULL DEFAULT '{}',
+                listing_date DATE,
+                listing_source VARCHAR,
+                last_task_id VARCHAR,
+                last_success_at TIMESTAMPTZ,
+                revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+                generation INTEGER NOT NULL DEFAULT 1 CHECK(generation >= 1),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK(target_start <= target_end)
+            )""",
+            "CREATE INDEX managed_stock_status_idx ON managed_stock(status, auto_update)",
+        ),
+        handler=_migrate_managed_stocks_v14,
     ),
 )
 

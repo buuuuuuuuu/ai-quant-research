@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 source_dir="${1:-/root/code/ai-quant-research}"
 branch="${2:-main}"
-expected_schema_version="${3:-12}"
+expected_schema_version="${3:-14}"
 remote="${AI_QUANT_GIT_REMOTE:-origin}"
 app_dir="${AI_QUANT_APP_DIR:-/opt/ai-quant/app}"
 state_dir="${AI_QUANT_STATE_DIR:-/var/lib/ai-quant}"
@@ -196,12 +196,16 @@ required = {
     "document_event",
     "document_event_evidence",
     "document_event_research_run",
+    "stock_pool",
+    "stock_pool_member",
+    "stock_pool_revision",
+    "managed_stock",
 }
 missing = sorted(required - set(payload.get("relations", {})))
 if missing:
-    raise SystemExit(f"Schema v12 relations are missing: {missing}")
+    raise SystemExit(f"Required M8/M9 relations are missing: {missing}")
 '
-log "Schema v$expected_schema_version and M8-B relations verified"
+log "Schema v$expected_schema_version and M8/M9 relations verified"
 
 systemctl daemon-reload
 systemctl enable ai-quant-web.service "${timer_units[@]}"

@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import shutil
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -17,7 +18,6 @@ from ai_quant_assistant.domain.models import (
     REPORT_TYPES,
     AnnouncementSyncSpec,
     BenchmarkSyncSpec,
-    DataSyncSpec,
     FinancialSyncSpec,
 )
 from ai_quant_assistant.storage.database import LocalDatabase
@@ -28,7 +28,6 @@ from ai_quant_assistant.storage.monitoring import (
     PlatformMonitor,
 )
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
-from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 
 try:
@@ -147,9 +146,6 @@ class IncrementalSyncService:
             with self.operation_lock.hold():
                 self.database.initialize()
                 selected_symbols = symbols or self._symbols()
-                market_start = self._start_date(
-                    "published_daily_bar", "trade_date", today, self.settings.sync_lookback_days
-                )
                 benchmark_start = self._start_date(
                     "published_benchmark_daily_bar",
                     "trade_date",
@@ -168,12 +164,6 @@ class IncrementalSyncService:
                     today,
                     self.settings.sync_financial_lookback_days,
                 )
-                market = MarketDataSyncService(
-                    database=self.database,
-                    layout=self.database.layout,
-                    provider=self.provider,
-                    rate_limit_seconds=self.settings.data_sync_rate_limit_seconds,
-                )
                 research = ResearchDatasetSyncService(
                     database=self.database,
                     layout=self.database.layout,
@@ -187,15 +177,8 @@ class IncrementalSyncService:
                     rate_limit_seconds=self.settings.data_sync_rate_limit_seconds,
                 )
                 stages: dict[str, dict[str, Any]] = {}
-                report(10, f"同步 {len(selected_symbols)} 只股票行情")
-                stages["daily_bar"] = market.run(
-                    DataSyncSpec(
-                        start_date=market_start,
-                        end_date=today,
-                        symbols=selected_symbols,
-                        adjustments=("qfq",),
-                    )
-                )
+                report(10, "按本地管理范围同步各股票历史缺口")
+                stages["daily_bar"] = self._managed_market_stage(today, symbols)
                 self._require_published("daily_bar", stages["daily_bar"])
                 report(35, "同步指数基准行情")
                 stages["benchmark_daily_bar"] = research.sync_benchmarks(
@@ -232,7 +215,7 @@ class IncrementalSyncService:
                     "symbols": list(selected_symbols),
                     "provider": self.provider.name,
                     "windows": {
-                        "daily_bar": market_start.isoformat(),
+                        "daily_bar": stages["daily_bar"]["windows"],
                         "benchmark_daily_bar": benchmark_start.isoformat(),
                         "announcement": announcement_start.isoformat(),
                         "financial_metric": financial_start.isoformat(),
@@ -293,6 +276,50 @@ class IncrementalSyncService:
             heartbeat_stop.set()
             if owner_id is not None:
                 heartbeat_thread.join(timeout=1)
+
+    def _managed_market_stage(self, today: date, symbols: tuple[str, ...] | None) -> dict[str, Any]:
+        from ai_quant_assistant.providers.akshare_provider import AkShareProvider
+        from ai_quant_assistant.storage.managed_stocks import ManagedStockService
+
+        managed = ManagedStockService(
+            self.database, self.settings,
+            None if isinstance(self.provider, AkShareProvider) else lambda _: self.provider,
+        )
+        # Only price maintenance expands to the explicitly managed universe.
+        # Announcement/financial scopes continue using the existing _symbols().
+        selected = symbols if symbols is not None else managed.scheduled_symbols()
+        tasks, errors, windows = [], [], {}
+        for symbol in selected:
+            with self.database.connect(read_only=True) as connection:
+                row = connection.execute(
+                    """SELECT m.target_start, m.revision, m.auto_update FROM managed_stock m
+                       JOIN security_master s USING(security_id) WHERE s.symbol=?""", [symbol],
+                ).fetchone()
+            start = row[0] if row else date(2012, 1, 1)
+            windows[symbol] = start.isoformat()
+            try:
+                task, created = managed.request(
+                    symbol, start=start, end=today, expected_revision=row[1] if row else None,
+                    confirm=True, auto_update=bool(row[2]) if row else False, actor="ops",
+                )
+                if created or task["status"] == "queued":
+                    task = managed.run(task["task_id"])
+                deadline = time.monotonic() + 30
+                while task["status"] in {"queued", "running"} and time.monotonic() < deadline:
+                    # Another worker may have claimed the same persisted task.
+                    # Never duplicate the download or hold a DB connection here.
+                    Event().wait(0.25)
+                    task = managed.tasks.get(task["task_id"])
+                    if task["status"] == "queued":
+                        task = managed.run(task["task_id"])
+                tasks.append(task["task_id"])
+                if task["status"] != "succeeded":
+                    errors.append({"symbol": symbol, "task_id": task["task_id"],
+                                   "error": task.get("error") or "已有有效任务正在执行，请查看任务"})
+            except (ValueError, RuntimeError) as exc:
+                errors.append({"symbol": symbol, "error": str(exc)})
+        return {"status": "failed" if errors else "published", "symbols": list(selected),
+                "tasks": tasks, "errors": errors, "windows": windows}
 
     def _symbols(self) -> tuple[str, ...]:
         if self.settings.sync_symbols:

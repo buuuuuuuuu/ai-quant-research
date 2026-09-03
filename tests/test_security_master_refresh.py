@@ -283,7 +283,7 @@ def test_directory_does_not_expand_scheduled_sync_or_get_overwritten(tmp_path):
     assert master_rows(database) == before
 
 
-def test_api_requires_confirmation_and_refresh_then_add_works(tmp_path):
+def test_api_requires_confirmation_and_directory_alone_cannot_admit_stock(tmp_path):
     _database(tmp_path)
     app = create_app(_settings(tmp_path))
     provider = DirectoryOnlyProvider()
@@ -322,8 +322,8 @@ def test_api_requires_confirmation_and_refresh_then_add_works(tmp_path):
             == "山东钢铁"
         )
         added = client.post(url, json={"expected_revision": 1, "symbols": ["600022"]})
-        assert added.status_code == 200 and added.json()["symbols"] == ["600022"]
-        assert added.json()["current_revision"] == 2
+        assert added.status_code == 422 and "not ready" in added.json()["detail"]
+        assert client.get(f"/api/v1/stock-pools/{created['pool_id']}").json()["current_revision"] == 1
         home = client.get("/").text
         assert "更新证券主数据" in home
         assert '/assets/workbench.js?v=0.2.0"' not in home

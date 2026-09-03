@@ -216,3 +216,9 @@ def test_benchmark_explorer_and_workbench_drilldown_controls(tmp_path) -> None:
     assert "指数基准" in home.text
     assert "记录质量与数据血缘" in home.text
     assert "下载本页 CSV" in home.text
+    explorer = home.text.split('<section id="data-explorer"', 1)[1].split("</section>", 1)[0]
+    assert "hidden" not in explorer.split(">", 1)[0]
+    assert explorer.index('class="explorer-tabs"') < explorer.index('id="explorer-search"') < explorer.index('id="managed-stock-panel"')
+    assert 'id="close-data-explorer"' not in home.text
+    assert 'id="refresh-data-explorer"' in home.text
+    assert 'id="managed-include-announcements" type="checkbox" checked' in home.text

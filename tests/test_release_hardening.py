@@ -508,7 +508,8 @@ def test_ci_workflow_and_release_version_cover_all_required_checks() -> None:
         "uv run ruff check .",
         "uv run pytest",
         "node --check",
-        "bash -n deploy/scripts/*.sh",
+        'for script in deploy/scripts/*.sh; do bash -n "$script"; done',
+        'for script in src/ai_quant_assistant/web/static/*.js; do node --check "$script"; done',
         "systemd-analyze verify",
         "uv build --wheel",
     ):

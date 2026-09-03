@@ -59,3 +59,9 @@ Schema v8 新增 `copilot_conversation`、`copilot_message`、`research_plan` �
 - `GET /api/v1/copilot/plans/{plan_id}`
 
 生产环境必须继续启用现有 Web 登录、HTTPS、非 root systemd、备份、告警和审计配置。
+# M9-B 本地股票边界补充
+
+证券目录、本地管理与研究股票池是三个独立概念。新增股票需要在数据浏览明确确认单只日线回填，
+仅 active/ready 股票可经 StockPoolService 新增或复制到研究池；旧 revision 和 PIT 预检不变。
+本次不扩展模型工具白名单：Copilot 仍可只读列池并使用冻结 pool/revision 开展已有研究，不能直接纳入、
+下载、移出或恢复股票，也没有未经确认的自动数据补齐工具。缺行情时引导用户前往数据浏览操作。

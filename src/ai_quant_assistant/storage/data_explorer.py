@@ -115,6 +115,7 @@ class DataExplorer:
         dataset: str = "all",
         page: int = 1,
         page_size: int = 50,
+        managed_only: bool = False,
     ) -> dict[str, Any]:
         if dataset not in {"all", "prices", "announcements", "financials"}:
             raise ValueError("unsupported dataset filter")
@@ -147,6 +148,9 @@ class DataExplorer:
             WHERE (security.symbol ILIKE ? OR security.name ILIKE ?)
               AND {availability_filter}
         """
+        if managed_only:
+            joins += """ AND EXISTS (SELECT 1 FROM managed_stock managed
+                         WHERE managed.security_id=security.security_id AND managed.status='active')"""
         with self.database.connect(read_only=True) as connection:
             total = int(
                 connection.execute(

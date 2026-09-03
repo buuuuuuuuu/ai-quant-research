@@ -114,7 +114,17 @@ class StockPoolService:
                 """,
                 [f"%{normalized}%", f"%{normalized}%", normalized, max(1, min(limit, 50))],
             ).fetchall()
-        return [self._security_row(row) for row in rows]
+            managed = dict(connection.execute(
+                "SELECT security_id, status || ':' || availability FROM managed_stock"
+            ).fetchall())
+        results = []
+        for row in rows:
+            item = self._security_row(row)
+            item["management_state"] = managed.get(item["security_id"], "not_managed")
+            item["eligible"] = item["status"] == "active" and item["management_state"] == "active:ready"
+            item["admission_warning"] = None if item["eligible"] else "请先在数据浏览中添加并补齐行情"
+            results.append(item)
+        return results
 
     def create(
         self,
@@ -256,8 +266,10 @@ class StockPoolService:
             try:
                 pool = self._require_current(connection, pool_id, expected_revision)
                 self._require_active(pool)
-                securities = self._validate_symbols(connection, normalized)
                 existing = set(self._current_symbols(connection, pool_id))
+                securities = self._validate_symbols(
+                    connection, [symbol for symbol in normalized if symbol not in existing]
+                )
                 additions = [item for item in securities if item["symbol"] not in existing]
                 if not additions:
                     connection.execute("COMMIT")
@@ -539,6 +551,7 @@ class StockPoolService:
             self._begin(connection)
             try:
                 source = self._require_current(connection, pool_id, expected_revision)
+                self._validate_symbols(connection, self._current_symbols(connection, pool_id))
                 members = connection.execute(
                     """
                     SELECT security_id, display_order, note FROM stock_pool_member
@@ -555,13 +568,14 @@ class StockPoolService:
                     """,
                     [new_id, normalized_name, source[2], source[5], MANUAL_HISTORY_WARNING],
                 )
-                connection.executemany(
-                    """
-                    INSERT INTO stock_pool_member (pool_id, security_id, display_order, note)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    [(new_id, row[0], row[1], row[2]) for row in members],
-                )
+                if members:
+                    connection.executemany(
+                        """
+                        INSERT INTO stock_pool_member (pool_id, security_id, display_order, note)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        [(new_id, row[0], row[1], row[2]) for row in members],
+                    )
                 symbols = self._current_symbols(connection, new_id)
                 self._write_revision(
                     connection,
@@ -684,6 +698,18 @@ class StockPoolService:
         inactive = [symbol for symbol in symbols if str(by_symbol[symbol][4]) != "active"]
         if inactive:
             raise ValueError(f"symbols are not active in security_master: {inactive}")
+        managed = dict(connection.execute(
+            """SELECT s.symbol, m.status || ':' || m.availability FROM managed_stock m
+               JOIN security_master s USING(security_id)
+               WHERE s.symbol IN (SELECT * FROM UNNEST(?))""", [symbols],
+        ).fetchall())
+        unavailable = {symbol: managed.get(symbol, "not_managed") for symbol in symbols
+                       if managed.get(symbol) != "active:ready"}
+        if unavailable:
+            raise ValueError(
+                "stocks are not ready in local data management; 请先在数据浏览中添加并补齐行情: "
+                + json.dumps(unavailable, ensure_ascii=False)
+            )
         return [
             {
                 "security_id": str(by_symbol[symbol][0]),
@@ -724,8 +750,9 @@ class StockPoolService:
             str(row[0])
             for row in connection.execute(
                 """
-                SELECT security.symbol FROM stock_pool_member AS member
-                JOIN security_master AS security USING (security_id)
+                SELECT COALESCE(security.symbol, split_part(member.security_id, '.', 2))
+                FROM stock_pool_member AS member
+                LEFT JOIN security_master AS security USING (security_id)
                 WHERE member.pool_id = ?
                 ORDER BY member.display_order, member.security_id
                 """,
@@ -895,12 +922,15 @@ class StockPoolService:
     def _members(self, connection: Any, pool_id: str) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
-            SELECT member.security_id, security.symbol, security.name, security.exchange,
-                   security.status, member.display_order, member.note,
+            SELECT member.security_id,
+                   COALESCE(security.symbol, split_part(member.security_id, '.', 2)),
+                   COALESCE(security.name, '证券主数据缺失'),
+                   COALESCE(security.exchange, split_part(member.security_id, '.', 1)),
+                   COALESCE(security.status, 'missing'), member.display_order, member.note,
                    member.added_at, member.updated_at,
                    MIN(bar.trade_date), MAX(bar.trade_date), COUNT(bar.trade_date)
             FROM stock_pool_member AS member
-            JOIN security_master AS security USING (security_id)
+            LEFT JOIN security_master AS security USING (security_id)
             LEFT JOIN published_daily_bar AS bar
               ON bar.security_id = member.security_id AND bar.adjustment = 'qfq'
             WHERE member.pool_id = ?
@@ -908,7 +938,17 @@ class StockPoolService:
             """,
             [pool_id],
         ).fetchall()
-        return [self._member_row(row) for row in rows]
+        managed = dict(connection.execute(
+            """SELECT m.security_id, m.status || ':' || m.availability FROM managed_stock m
+               JOIN stock_pool_member p USING(security_id) WHERE p.pool_id=?""", [pool_id],
+        ).fetchall())
+        result = []
+        for row in rows:
+            member = self._member_row(row)
+            member["management_state"] = managed.get(member["security_id"], "not_managed")
+            member["admission_warning"] = None if member["management_state"] == "active:ready" else "本地行情待补齐；保留旧成员"
+            result.append(member)
+        return result
 
     def _members_for_symbols(self, connection: Any, symbols: list[str]) -> list[dict[str, Any]]:
         if not symbols:
@@ -923,7 +963,10 @@ class StockPoolService:
             [symbols],
         ).fetchall()
         by_symbol = {str(row[1]): row for row in rows}
-        return [self._member_row(by_symbol[symbol], order=index) for index, symbol in enumerate(symbols, 1)]
+        return [self._member_row(by_symbol.get(symbol, (
+            f"UNKNOWN.{symbol}", symbol, "证券主数据缺失", "unknown", "missing",
+            index, "", None, None, None, None, 0,
+        )), order=index) for index, symbol in enumerate(symbols, 1)]
 
     @staticmethod
     def _member_row(row: tuple[Any, ...], *, order: int | None = None) -> dict[str, Any]:

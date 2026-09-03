@@ -62,6 +62,20 @@ def _backtest_payload() -> dict:
     }
 
 
+def _enroll_price_fixture(database):
+    from ai_quant_assistant.storage.managed_stocks import ManagedStockService
+
+    with database.connect() as connection:
+        connection.execute(
+            """INSERT INTO security_master
+               (security_id,symbol,exchange,name,list_date,source,source_batch_id)
+               VALUES ('SSE.600519','600519','SSE','测试茅台','2001-08-27','fixture','fixture')"""
+        )
+    ManagedStockService(database).request(
+        "600519", start=date(2024, 8, 13), end=date(2024, 8, 20), confirm=True, expected_revision=1,
+    )
+
+
 def test_v4_catalog_upgrades_without_losing_existing_market_data(tmp_path) -> None:
     directory = tmp_path / "data"
     directory.mkdir()
@@ -223,6 +237,7 @@ def test_incremental_sync_updates_all_four_datasets_and_records_progress(tmp_pat
     settings = _settings(tmp_path, sync_symbols=("600519",))
     database = LocalDatabase(settings.duckdb_path, DataLayout.from_root(settings.data_dir))
     database.initialize()
+    _enroll_price_fixture(database)
     repository = OperationTaskRepository(database)
     service = IncrementalSyncService(
         database=database,
@@ -243,7 +258,7 @@ def test_incremental_sync_updates_all_four_datasets_and_records_progress(tmp_pat
         "announcement",
         "financial_metric",
     }
-    assert result["windows"]["daily_bar"] == "2024-08-13"
+    assert result["windows"]["daily_bar"] == {"600519": "2024-08-13"}
     assert stored["status"] == "succeeded"
     assert stored["progress"] == 100
     assert status["relations"]["published_daily_bar"] > 0
@@ -256,8 +271,10 @@ def test_web_incremental_sync_exposes_background_progress_and_dataset_status(tmp
     settings = _settings(tmp_path, sync_symbols=("600519",))
     database = LocalDatabase(settings.duckdb_path, DataLayout.from_root(settings.data_dir))
     database.initialize()
+    _enroll_price_fixture(database)
     app = create_app(settings)
     app.state.sync_service.provider = FakeFinancialProvider(provider_notice=True)
+    app.state.managed_stock_tasks.service.provider_factory = lambda _: app.state.sync_service.provider
 
     with TestClient(app) as client:
         submitted = client.post("/api/v1/ops/sync", json={"as_of": "2024-08-20"})
@@ -283,6 +300,7 @@ def test_failed_incremental_sync_preserves_provider_error_in_task_history(tmp_pa
     settings = _settings(tmp_path, sync_symbols=("600519",))
     database = LocalDatabase(settings.duckdb_path, DataLayout.from_root(settings.data_dir))
     database.initialize()
+    _enroll_price_fixture(database)
     repository = OperationTaskRepository(database)
     service = IncrementalSyncService(
         database=database,
@@ -292,7 +310,7 @@ def test_failed_incremental_sync_preserves_provider_error_in_task_history(tmp_pa
         operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
     )
 
-    with pytest.raises(ConnectionError, match="calendar unavailable"):
+    with pytest.raises(RuntimeError, match="calendar unavailable"):
         service.run(as_of=date(2024, 8, 20))
 
     failed = repository.list(task_type="sync")[0]

@@ -40,6 +40,8 @@ from ai_quant_assistant.storage.backfill_service import ResearchBackfillService
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.financial_sync_service import FinancialDataSyncService
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.managed_coverage import market_today
+from ai_quant_assistant.storage.managed_stocks import ManagedStockService
 from ai_quant_assistant.storage.monitoring import (
     OperationAlertRepository,
     OperationAuditRepository,
@@ -466,6 +468,34 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         command.add_argument("--data-dir", type=Path)
         command.add_argument("--duckdb-path", type=Path)
+    managed = subcommands.add_parser("data-stock", help="管理本地股票数据与历史回填")
+    managed_commands = managed.add_subparsers(dest="managed_command", required=True)
+    for name in ("list", "show", "add", "sync", "archive", "restore", "configure", "references"):
+        command = managed_commands.add_parser(name)
+        command.add_argument("--data-dir", type=Path)
+        command.add_argument("--duckdb-path", type=Path)
+        if name == "list":
+            command.add_argument("--query", default="")
+            command.add_argument("--include-archived", action="store_true")
+            command.add_argument("--page", type=int, default=1)
+        elif name in {"add", "sync"}:
+            command.add_argument("symbol")
+            command.add_argument("--start-date", type=_date, default=date(2012, 1, 1))
+            command.add_argument("--end-date", type=_date, default=market_today())
+            command.add_argument("--expected-revision", type=int, required=name == "sync")
+            command.add_argument("--confirm", action="store_true", required=True)
+            command.add_argument("--enqueue-only", action="store_true")
+            command.add_argument("--refresh", action="store_true")
+            command.add_argument("--no-auto-update", action="store_true")
+            command.add_argument("--include-announcements", action="store_true",
+                                 help="确认本次同时下载四类定期公告元数据，不下载 PDF")
+        else:
+            command.add_argument("security_id")
+            if name not in {"show", "references"}:
+                command.add_argument("--expected-revision", type=int, required=True)
+                command.add_argument("--confirm", action="store_true", required=True)
+            if name == "configure":
+                command.add_argument("--auto-update", choices=["on", "off"], required=True)
     return parser
 
 
@@ -509,6 +539,33 @@ def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.command == "data-stock":
+        managed = ManagedStockService(_local_database(args, settings), settings)
+        command = args.managed_command
+        if command == "list":
+            payload = managed.list(query=args.query, include_archived=args.include_archived, page=args.page)
+        elif command in {"show", "references"}:
+            payload = getattr(managed, "get" if command == "show" else "references")(args.security_id)
+        elif command in {"add", "sync"}:
+            payload, created = managed.request(
+                args.symbol, start=args.start_date, end=args.end_date,
+                expected_revision=args.expected_revision, confirm=args.confirm,
+                refresh=args.refresh, auto_update=not args.no_auto_update, actor="cli",
+                include_announcements=args.include_announcements,
+            )
+            if payload["status"] == "queued" and not args.enqueue_only:
+                payload = managed.run(payload["task_id"])
+        else:
+            payload = managed.change(
+                args.security_id, expected_revision=args.expected_revision, action=command,
+                confirm=args.confirm, actor="cli",
+                auto_update=args.auto_update == "on" if command == "configure" else None,
+            )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if isinstance(payload, dict) and payload.get("status") == "failed":
+            raise SystemExit(1)
+        return
+
     if args.command == "stock-pool":
         service = StockPoolService(_local_database(args, settings))
         command = args.stock_pool_command
@@ -891,7 +948,7 @@ def main() -> None:
                 operation_lock=operation_lock,
                 audit=audit,
             )
-            payload = service.run(as_of=args.as_of)
+            payload = service.run(as_of=args.as_of, symbols=tuple(args.symbols) if args.symbols else None)
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         if args.ops_command == "check" and args.fail_on_alert and payload["active_count"]:
             raise SystemExit(1)

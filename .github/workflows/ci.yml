@@ -40,13 +40,13 @@ jobs:
         run: uv run pytest
 
       - name: Validate browser JavaScript
-        run: node --check src/ai_quant_assistant/web/static/workbench.js
+        run: for script in src/ai_quant_assistant/web/static/*.js; do node --check "$script"; done
 
       - name: Test stock-pool browser handlers offline
         run: node --test tests/js/*.test.cjs
 
       - name: Validate deployment shell scripts
-        run: bash -n deploy/scripts/*.sh
+        run: for script in deploy/scripts/*.sh; do bash -n "$script"; done
 
       - name: Validate systemd units
         run: systemd-analyze verify deploy/systemd/*.service deploy/systemd/*.timer

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,8 @@ class ResearchDatasetSyncService:
         layout: DataLayout,
         provider: ResearchDataProvider,
         rate_limit_seconds: float = 0.2,
+        raw_namespace: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> None:
         if rate_limit_seconds < 0:
             raise ValueError("rate_limit_seconds must be non-negative")
@@ -48,6 +51,12 @@ class ResearchDatasetSyncService:
         self.provider = provider
         self.rate_limit_seconds = rate_limit_seconds
         self.repository = SyncRepository(database)
+        if raw_namespace is not None and (not raw_namespace or not all(
+            char.isalnum() or char in "-_" for char in raw_namespace
+        )):
+            raise ValueError("invalid raw namespace")
+        self.raw_namespace = raw_namespace
+        self.progress_callback = progress_callback
 
     def sync_benchmarks(self, spec: BenchmarkSyncSpec) -> dict[str, Any]:
         return self._run("benchmark_daily_bar", spec, ("none",))
@@ -254,6 +263,8 @@ class ResearchDatasetSyncService:
         target_dir = (
             self.layout.raw / partition["dataset"] / partition["symbol"] / partition["variant"]
         )
+        if self.raw_namespace:
+            target_dir = target_dir / self.raw_namespace
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"{partition['start_date']}_{partition['end_date']}.parquet"
         frame.to_parquet(target, index=False)
@@ -614,6 +625,8 @@ class ResearchDatasetSyncService:
                 logger.warning("research partition %s failed: %s", partition["partition_key"], exc)
                 self._mark_partition(batch_id, partition["partition_key"], "failed", error=str(exc))
                 errors.append({"partition_key": partition["partition_key"], "error": str(exc)})
+            if self.progress_callback:
+                self.progress_callback(index, len(pending))
             if self.rate_limit_seconds:
                 time.sleep(self.rate_limit_seconds)
 

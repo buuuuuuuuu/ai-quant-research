@@ -61,6 +61,7 @@ class CopilotService:
                     draft["spec"]["stock_pool"] = frozen_context
                 draft["preflight"] = self.preflight.run(draft["tool_name"], draft["spec"])
                 if not draft["preflight"]["ready"]:
+                    draft["preflight"]["data_only_block"] = True
                     draft["blocked"] = True
                     draft["warnings"] = [
                         *draft.get("warnings", []),
@@ -120,7 +121,13 @@ class CopilotService:
         if not plan["tool_name"]:
             raise ValueError("blocked plan has no executable tool")
         preflight = self.preflight.run(plan["tool_name"], plan["spec"])
-        self.repository.update_plan(plan_id, preflight_json=preflight)
+        changes = {"preflight_json": preflight}
+        if plan["status"] == "blocked" and plan.get("preflight", {}).get("data_only_block"):
+            if preflight["ready"]:
+                changes["status"] = "draft"
+            else:
+                preflight["data_only_block"] = True
+        self.repository.update_plan(plan_id, **changes)
         self.repository.add_event(plan_id, "preflighted", "system", preflight)
         return self.repository.get_plan(plan_id)
 
@@ -132,6 +139,7 @@ class CopilotService:
             raise RuntimeError(f"only a draft plan can be confirmed (current: {plan['status']})")
         refreshed = self.preflight.run(plan["tool_name"], plan["spec"])
         if not refreshed["ready"]:
+            refreshed["data_only_block"] = True
             self.repository.update_plan(plan_id, status="blocked", preflight_json=refreshed)
             self.repository.add_event(plan_id, "blocked", actor, refreshed)
             raise RuntimeError("数据覆盖预检未通过，计划不能确认。")

@@ -68,6 +68,34 @@ def test_preflight_reports_local_coverage_and_missing_security(tmp_path) -> None
     assert any("999999" in reason for reason in missing["blockers"])
 
 
+def test_data_blocked_plan_can_be_rechecked_but_not_auto_confirmed(tmp_path):
+    database = _database(tmp_path)
+    with database.connect() as connection:
+        rows = connection.execute("SELECT * FROM financial_metric WHERE metric_code='roe'").fetchall()
+        connection.execute("DELETE FROM financial_metric WHERE metric_code='roe'")
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        conversation = client.post("/api/v1/copilot/conversations", json={"title": "补齐后重新预检"}).json()
+        plan = client.post(f"/api/v1/copilot/conversations/{conversation['conversation_id']}/messages", json={"content": QUESTION}).json()
+        assert plan["status"] == "blocked" and plan["preflight"]["data_only_block"]
+        with database.connect() as connection:
+            connection.executemany("INSERT INTO financial_metric VALUES (" + ",".join("?" for _ in rows[0]) + ")", rows)
+        refreshed = client.post(f"/api/v1/copilot/plans/{plan['plan_id']}/preflight").json()
+        assert refreshed["status"] == "draft" and refreshed["preflight"]["ready"]
+        assert refreshed["confirmed_at"] is None and refreshed["task_id"] is None
+
+
+def test_non_data_block_is_not_cleared_by_repeated_preflight(tmp_path):
+    _database(tmp_path)
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        service = client.app.state.copilot_service
+        conversation = service.create_conversation()
+        plan = service.repository.create_plan(conversation["conversation_id"], QUESTION, {
+            **RuleBasedPlanner().plan(QUESTION), "blocked": True,
+        })
+        assert service.refresh_preflight(plan["plan_id"])["status"] == "blocked"
+        assert service.refresh_preflight(plan["plan_id"])["status"] == "blocked"
+
+
 def test_conversations_plans_messages_and_events_persist_in_schema_v8(tmp_path) -> None:
     database = _database(tmp_path)
     repository = CopilotRepository(database)

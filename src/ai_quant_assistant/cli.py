@@ -53,6 +53,7 @@ from ai_quant_assistant.storage.operations import (
     IncrementalSyncService,
     OperationsDashboard,
 )
+from ai_quant_assistant.storage.research_data_plans import ResearchDataPlans
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.security_master_refresh import SecurityMasterRefreshService
 from ai_quant_assistant.storage.stock_pools import StockPoolService
@@ -496,6 +497,21 @@ def build_parser() -> argparse.ArgumentParser:
                 command.add_argument("--confirm", action="store_true", required=True)
             if name == "configure":
                 command.add_argument("--auto-update", choices=["on", "off"], required=True)
+    readiness = subcommands.add_parser("research-data", help="只读研究预检与确认式数据补齐")
+    readiness_commands = readiness.add_subparsers(dest="readiness_command", required=True)
+    for name in ("preflight", "plan", "list", "show", "confirm", "retry", "recheck", "work"):
+        command = readiness_commands.add_parser(name)
+        command.add_argument("--data-dir", type=Path)
+        command.add_argument("--duckdb-path", type=Path)
+        if name in {"preflight", "plan"}:
+            command.add_argument("--research-type", required=True, choices=["screen", "factor_backtest", "factor_lab"])
+            command.add_argument("--parameters", required=True, help="与研究 API 相同的 JSON 参数；只读解析")
+        elif name != "list":
+            command.add_argument("plan_id")
+        if name in {"confirm", "retry"}:
+            command.add_argument("--version", type=int, required=True)
+            command.add_argument("--input-sha256", required=True)
+            command.add_argument("--confirm", action="store_true", required=True)
     return parser
 
 
@@ -539,6 +555,30 @@ def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.command == "research-data":
+        service = ResearchDataPlans(_local_database(args, settings), settings)
+        command = args.readiness_command
+        if command in {"preflight", "plan"}:
+            if len(args.parameters) > 65536:
+                raise ValueError("research parameters exceed 64 KiB")
+            parameters = json.loads(args.parameters)
+            payload = service.readiness.run(args.research_type, parameters) if command == "preflight" else service.create(args.research_type, parameters, actor="cli")
+        elif command in {"confirm", "retry"}:
+            payload = service.confirm(args.plan_id, version=args.version, input_sha256=args.input_sha256,
+                                      confirm=args.confirm, actor="cli", retry=command == "retry")
+        elif command == "work":
+            plan = service.get(args.plan_id)
+            if not plan["last_task_id"]:
+                raise ValueError("plan has not been confirmed")
+            payload = service.run(plan["last_task_id"])
+        elif command == "list":
+            payload = service.list()
+        else:
+            payload = service.recheck(args.plan_id) if command == "recheck" else service.get(args.plan_id)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if isinstance(payload, dict) and payload.get("status") == "failed":
+            raise SystemExit(1)
+        return
     if args.command == "data-stock":
         managed = ManagedStockService(_local_database(args, settings), settings)
         command = args.managed_command

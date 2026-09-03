@@ -100,6 +100,12 @@ class ManagedStockService:
             raise KeyError(security_id)
         result = dict(zip([item[0] for item in cursor.description], row, strict=True))
         result["coverage"] = json.loads(result.pop("coverage_json"))
+        financial = connection.execute(
+            "SELECT COUNT(DISTINCT report_id),MAX(published_at),COUNT(DISTINCT metric_code) "
+            "FROM published_financial_metric WHERE security_id=?", [security_id],
+        ).fetchone()
+        result["financial_summary"] = {"reports": financial[0], "latest_published_at": financial[1],
+                                       "metrics": financial[2], "research_ready": None}
         result["datasets"] = ["daily_bar"]
         result["adjustments"] = list(ADJUSTMENTS)
         result["eligible"] = (

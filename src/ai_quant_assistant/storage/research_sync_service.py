@@ -20,6 +20,7 @@ from ai_quant_assistant.providers.normalization import (
 )
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.locks import serialized_download
 from ai_quant_assistant.storage.quality import DataQualityCheck, has_blocking_failure
 from ai_quant_assistant.storage.sync_repository import SyncRepository, _db_value
 
@@ -547,6 +548,7 @@ class ResearchDatasetSyncService:
             )
         return self._batch_summary(batch_id)
 
+    @serialized_download()
     def _run(
         self,
         dataset: str,

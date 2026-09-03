@@ -4,8 +4,31 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from threading import RLock, local
+
+
+def serialized_download(dataset: str | None = None):
+    """Coordinate every entry point, including direct CLI syncs, without a DB lock.
+
+    Fixed order: optional operation/managed slot -> dataset download -> DB access.
+    Contention is explicit and bounded; callers may queue/retry, never bypass it.
+    """
+    def decorate(function):
+        @wraps(function)
+        def run(service, *args, **kwargs):
+            selected = dataset or args[0]
+            if selected not in {"daily_bar", "benchmark_daily_bar", "announcement", "financial_metric"}:
+                raise ValueError("unsupported download lock dataset")
+            lock = InterProcessFileLock(
+                service.database.layout.root / f".{selected}-download.lock",
+                description=f"{selected} download already active; retry after it completes",
+            )
+            with lock.hold(timeout_seconds=0):
+                return function(service, *args, **kwargs)
+        return run
+    return decorate
 
 try:
     import fcntl

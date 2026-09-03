@@ -284,7 +284,7 @@ def test_migration_v14_is_repeatable_and_preserves_old_tables(tmp_path):
         before = {
             name: c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() for name in tables
         }
-        assert apply_migrations(c) == [14]
+        assert apply_migrations(c) == [14, 15]
         assert apply_migrations(c) == []
         for name, values in before.items():
             assert c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() == values
@@ -1126,7 +1126,7 @@ def test_v14_migration_handler_failure_is_diagnostic_and_atomic(tmp_path, monkey
     with pytest.raises(ValueError, match="migration conflict"):
         db.initialize()
     with db.connect(read_only=True) as c:
-        assert c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 13
+        assert c.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=14").fetchone()[0] == 0
         assert c.execute("SELECT * FROM daily_bar ORDER BY ALL").fetchall() == before
         assert not c.execute(
             "SELECT 1 FROM information_schema.tables WHERE table_name='managed_stock'"

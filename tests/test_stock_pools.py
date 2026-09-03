@@ -375,8 +375,8 @@ def test_v12_to_v13_watchlist_migration_preserves_data_and_is_repeatable(tmp_pat
     database = LocalDatabase(path, DataLayout.from_root(tmp_path / "data"))
     first, second = database.initialize(), database.initialize()
     migrated = StockPoolService(database).get("watchlist-history")
-    assert first["schema_version"] == SCHEMA_VERSION == 14
-    assert first["applied_migrations"] == [13, 14] and second["applied_migrations"] == []
+    assert first["schema_version"] == SCHEMA_VERSION == 15
+    assert first["applied_migrations"] == [13, 14, 15] and second["applied_migrations"] == []
     assert migrated["source_type"] == "screen_snapshot"
     assert migrated["source_screen_run_id"] == "screen-history"
     assert migrated["symbols"] == ["600519"] and migrated["history_verified"] is True

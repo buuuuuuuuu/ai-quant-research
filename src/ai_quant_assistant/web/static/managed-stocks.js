@@ -1,5 +1,5 @@
 // Local data enrollment is explicit; reading/searching never starts a download.
-const managedState = {busy: false, page: 1, generation: 0, timer: null, items: []};
+const managedState = {busy: false, page: 1, generation: 0, timer: null, items: [], tasks: new Map()};
 const managedLabels = {ready: "可用", partial: "部分完成", unavailable: "待补齐", active: "纳入管理", archived: "已移出", queued: "等待同步", running: "同步中", succeeded: "同步完成", failed: "同步失败"};
 const managedToday = () => new Intl.DateTimeFormat("en-CA", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
@@ -30,11 +30,12 @@ async function addManagedStock(event) {
   event.preventDefault();
   if (managedState.busy) return;
   const symbol = $("#managed-symbol").value.trim(), start = $("#managed-start").value, end = $("#managed-end").value;
+  const includeAnnouncements = $("#managed-include-announcements").checked;
   if (!/^[0-9]{6}$/.test(symbol) || !start || !end || start > end) {
     managedMessage("请输入六位代码和有效起止日期。", true); return;
   }
-  if (!window.confirm(`确认添加 ${symbol} 并访问公网回填 ${start} 至 ${end} 的不复权/前复权日线？不下载公告、财务或 PDF。`)) return;
-  await managedMutation("/api/v1/data/managed-stocks", {symbol, start, end, confirm: true, auto_update: $("#managed-auto").checked});
+  if (!window.confirm(`确认添加 ${symbol} 并访问公网回填 ${start} 至 ${end} 的不复权/前复权日线${includeAnnouncements ? "及一季报、中报、三季报、年报公告元数据" : "（不含公告）"}？不下载财务指标、PDF，不进行 OCR。`)) return;
+  await managedMutation("/api/v1/data/managed-stocks", {symbol, start, end, confirm: true, auto_update: $("#managed-auto").checked, include_announcements: includeAnnouncements});
 }
 
 async function managedAction(asset, action) {
@@ -52,8 +53,9 @@ async function managedAction(asset, action) {
   }
   if (action === "sync") {
     const end = managedToday();
-    if (!window.confirm(`确认更新 ${asset.symbol}，补齐 ${asset.target_start} 至 ${end} 的行情？此操作会访问公网。`)) return;
-    return managedMutation("/api/v1/data/managed-stocks", {symbol: asset.symbol, start: asset.target_start, end, expected_revision: asset.revision, confirm: true, refresh: true, auto_update: asset.auto_update});
+    const includeAnnouncements = $("#managed-include-announcements").checked;
+    if (!window.confirm(`确认更新 ${asset.symbol}，补齐 ${asset.target_start} 至 ${end} 的不复权/前复权行情${includeAnnouncements ? "及一季报、中报、三季报、年报公告元数据" : "（不含公告）"}？此操作会访问公网，不下载财务指标或 PDF，不进行 OCR。`)) return;
+    return managedMutation("/api/v1/data/managed-stocks", {symbol: asset.symbol, start: asset.target_start, end, expected_revision: asset.revision, confirm: true, refresh: true, auto_update: asset.auto_update, include_announcements: includeAnnouncements});
   }
   const text = action === "archive" ? "确认移出管理并停止自动更新？保留历史数据；存在活动股票池引用时将拒绝操作。" : action === "restore" ? "确认恢复管理？不会自动下载或开启定时更新；需要补齐时请单独确认。" : `确认${asset.auto_update ? "关闭" : "开启"}日常自动行情更新？`;
   if (!window.confirm(text)) return;
@@ -65,10 +67,12 @@ function managedRows(items) {
     const bars = asset.coverage.adjustments || {}, task = asset.task;
     const coverage = Object.entries(bars).map(([adjustment, row]) => `${adjustment}: ${row.start_date || "—"} → ${row.end_date || "—"} · ${row.rows} 行`).join("；");
     const issues = [...(asset.coverage.issues || []), ...(task?.error ? [task.error] : [])];
+    const announcement = asset.coverage.announcement_sync;
+    const announcementText = announcement ? `定期公告：${announcement.status === "published" ? "已同步" : "未完整完成"} · ${announcement.row_count ?? "—"} 条 · ${announcement.start_date} → ${announcement.end_date}` : "定期公告：尚无同步记录";
     const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", "configure", "archive", "prices", "references"];
     const labels = {restore: "恢复管理", sync: "补齐 / 更新 / 重试", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
     const progress = task && task.status !== "failed" ? ` ${escapeHtml(task.progress)}%` : "";
-    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
+    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
   }).join("");
 }
 
@@ -80,6 +84,8 @@ async function loadManagedStocks(page = 1) {
     const query = new URLSearchParams({query: $("#managed-filter").value.trim(), include_archived: String($("#managed-archived").checked), page: String(page), page_size: "30"});
     const payload = await requestJson(`/api/v1/data/managed-stocks?${query}`);
     if (generation !== managedState.generation) return;
+    const finished = payload.items.some((item) => item.task && ["queued", "running"].includes(managedState.tasks.get(item.task.task_id)) && ["succeeded", "failed"].includes(item.task.status));
+    managedState.tasks = new Map(payload.items.filter((item) => item.task).map((item) => [item.task.task_id, item.task.status]));
     managedState.items = payload.items;
     $("#managed-list").innerHTML = payload.items.length ? `<table><thead><tr><th>股票</th><th>管理 / 可用状态</th><th>实际覆盖与诊断</th><th>最近任务</th><th>操作</th></tr></thead><tbody>${managedRows(payload.items)}</tbody></table>` : "<p>尚无匹配的本地受管理股票。</p>";
     $("#managed-list").querySelectorAll("[data-managed-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -88,8 +94,9 @@ async function loadManagedStocks(page = 1) {
     }));
     explorerPagination($("#managed-pages"), {...payload.pagination, pages: Math.max(1, Math.ceil(payload.pagination.total / payload.pagination.page_size))}, loadManagedStocks);
     if (payload.items.some((item) => ["queued", "running"].includes(item.task?.status))) {
-      managedState.timer = setTimeout(() => {if (!$("#data-explorer").hidden) loadManagedStocks(page);}, 5000);
+      managedState.timer = setTimeout(() => {if (!$("#data-explorer").hidden) return loadManagedStocks(page);}, 5000);
     }
+    if (finished && typeof loadExplorerEntities === "function" && ["prices", "announcements"].includes(state.explorerDataset)) await loadExplorerEntities(state.explorerEntityPage || 1);
   } catch (error) {if (generation === managedState.generation) managedMessage(error.message, true);}
 }
 

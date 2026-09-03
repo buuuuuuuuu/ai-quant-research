@@ -16,10 +16,15 @@
 | revision / generation | INTEGER≥1 | 管理 CAS 令牌 / 防止旧 worker 发布的代数 |
 | created_at / updated_at | TIMESTAMPTZ | UTC 时间 |
 
-首期数据类型固定 daily_bar、复权固定 none/qfq，由服务和任务 spec 明确表达，不重复建三张行情表。
+日常维护类型固定 daily_bar、复权固定 none/qfq；显式单次任务可附带四类定期公告元数据，不重复建行情或公告表。
 任务复用 `operation_task.task_type=sync`，`spec_json.dataset=managed_stock`，含 security_id、symbol、
 目标范围、adjustments、generation、confirmed 和 actor。股票级 claim 保证一个有效下载任务；完成释放 claim，
 是否复用成功任务由实际覆盖决定。管理写入、任务提交和请求审计同事务；完成摘要、任务终态、完成审计同事务。
+新任务 spec 增加 include_announcements（旧任务缺省 false）与 datasets（daily_bar，或 daily_bar + announcement）；
+活动任务范围/数据选项不同返回冲突，不能静默降低已确认范围。请求/完成审计同样记录 datasets。
+coverage_json.announcement_sync 是最近一次联合任务摘要，包含 status、batch_id、row_count、partitions、errors、
+task_id、start_date、end_date；异常提前终止时可仅含 failed/error 和任务/区间。row_count 为该批次发布数量。
+摘要不参与行情准入计算，单独行情更新和管理状态变化保留该摘要。仍用 v14 JSON 字段，无新迁移。
 
 `coverage_json.listing_date_verified` 表示是否已确认上市边界。未知时两种复权的 `expected_rows`、
 `missing_count` 为 JSON null，`missing_sample=[]`，而不是把整个目标区间标为确定缺口或视为无缺口；

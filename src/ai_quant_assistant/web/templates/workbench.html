@@ -87,10 +87,10 @@
       <div id="coverage-list" class="coverage-list" aria-live="polite"></div>
     </section>
 
-    <section id="data-explorer" class="data-explorer" aria-labelledby="data-explorer-title" hidden>
+    <section id="data-explorer" class="data-explorer" aria-labelledby="data-explorer-title">
       <div class="section-heading">
         <div><p class="eyebrow">DATA EXPLORER · EVIDENCE FIRST</p><h2 id="data-explorer-title">本地数据明细</h2><p class="muted">先选数据集，再进入单只股票或指数。每条记录保留质量状态、供应商、同步批次与原始文件。</p></div>
-        <button id="close-data-explorer" class="secondary-button" type="button">收起明细</button>
+        <div class="result-actions"><a class="secondary-button" href="#managed-stock-panel">添加／管理股票</a><button id="refresh-data-explorer" class="secondary-button" type="button">刷新明细</button></div>
       </div>
       <div class="explorer-tabs" role="tablist" aria-label="数据集">
         <button type="button" data-explorer-dataset="prices" class="active">股票行情</button>
@@ -98,27 +98,6 @@
         <button type="button" data-explorer-dataset="announcements">定期公告</button>
         <button type="button" data-explorer-dataset="financials">财务指标</button>
       </div>
-      <article class="panel" id="managed-stock-panel">
-        <h3>本地股票数据管理</h3>
-        <p class="muted">添加并确认后自动回填日线；股票池只从已就绪数据中选择。移出管理保留行情与历史研究。</p>
-        <form id="managed-add-form" class="form-grid">
-          <label class="field"><span>搜索证券目录</span><input id="managed-directory-query" maxlength="120" placeholder="003816 或 中国广核"></label>
-          <label class="field"><span>添加的六位代码</span><input id="managed-symbol" pattern="[0-9]{6}" maxlength="6" required></label>
-          <label class="field"><span>目标开始日期</span><input id="managed-start" type="date" value="2012-01-01" required></label>
-          <label class="field"><span>目标结束日期</span><input id="managed-end" type="date" required></label>
-          <label><input id="managed-auto" type="checkbox" checked> 启用日常行情更新</label>
-          <button id="managed-add" class="primary-button" type="submit">添加并同步行情</button>
-        </form>
-        <div id="managed-directory-results"></div>
-        <p id="managed-message" role="status" aria-live="polite"></p>
-        <div class="stock-pool-actions">
-          <label>筛选本地股票 <input id="managed-filter" maxlength="120"></label>
-          <label><input id="managed-archived" type="checkbox"> 显示已移出股票</label>
-          <button id="managed-refresh" type="button">刷新状态</button>
-        </div>
-        <div id="managed-list" class="table-shell"></div>
-        <div id="managed-pages" class="explorer-pagination"></div>
-      </article>
       <div class="explorer-layout">
         <aside class="panel explorer-entities">
           <label class="field"><span>股票代码或名称</span><input id="explorer-search" type="search" placeholder="例如 600519 或 贵州茅台"></label>
@@ -143,6 +122,28 @@
           </article>
         </div>
       </div>
+      <article class="panel managed-stock-panel" id="managed-stock-panel">
+        <h3>本地股票数据管理</h3>
+        <p class="muted">确认后回填日线，可一并更新四类定期公告元数据；不下载 PDF 或财务指标，不进行 OCR。股票池只从已就绪行情选择，移出管理保留历史数据。</p>
+        <form id="managed-add-form" class="form-grid">
+          <label class="field"><span>搜索证券目录</span><input id="managed-directory-query" maxlength="120" placeholder="003816 或 中国广核"></label>
+          <label class="field"><span>添加的六位代码</span><input id="managed-symbol" pattern="[0-9]{6}" maxlength="6" required></label>
+          <label class="field"><span>目标开始日期</span><input id="managed-start" type="date" value="2012-01-01" required></label>
+          <label class="field"><span>目标结束日期</span><input id="managed-end" type="date" required></label>
+          <label><input id="managed-auto" type="checkbox" checked> 启用日常行情更新（不改变公告定时范围）</label>
+          <label><input id="managed-include-announcements" type="checkbox" checked> 本次添加／更新一并同步定期公告</label>
+          <button id="managed-add" class="primary-button" type="submit">添加并同步所选数据</button>
+        </form>
+        <div id="managed-directory-results"></div>
+        <p id="managed-message" role="status" aria-live="polite"></p>
+        <div class="stock-pool-actions">
+          <label>筛选本地股票 <input id="managed-filter" maxlength="120"></label>
+          <label><input id="managed-archived" type="checkbox"> 显示已移出股票</label>
+          <button id="managed-refresh" type="button">刷新状态</button>
+        </div>
+        <div id="managed-list" class="table-shell"></div>
+        <div id="managed-pages" class="explorer-pagination"></div>
+      </article>
     </section>
 
     <dialog id="lineage-dialog" class="lineage-dialog">

@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const source = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/managed-stocks.js"), "utf8");
 
 function harness(responder, confirmed = true) {
-  const elements = new Map(), calls = [], timers = new Map();
+  const elements = new Map(), calls = [], timers = new Map(), confirmations = [], refreshes = [];
   let index = 0;
   function element(key) {
     if (!elements.has(key)) elements.set(key, {value:"", checked:false, textContent:"", innerHTML:"", disabled:false, hidden:false, listeners:{},
@@ -14,7 +14,8 @@ function harness(responder, confirmed = true) {
     return elements.get(key);
   }
   const context = vm.createContext({
-    $:element, URLSearchParams, window:{confirm:() => confirmed}, state:{explorerDataset:"prices"},
+    $:element, URLSearchParams, window:{confirm:(message) => {confirmations.push(message); return confirmed;}}, state:{explorerDataset:"prices"},
+    loadExplorerEntities:async (page) => {refreshes.push(page);},
     escapeHtml:(s) => String(s).replace(/[&<>"']/g, (v) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[v])),
     splitStockSymbols:(s) => s.trim().split(/[\s,]+/).filter(Boolean),
     explorerPagination() {},
@@ -25,7 +26,8 @@ function harness(responder, confirmed = true) {
   element("#managed-symbol").value = "003816";
   element("#managed-start").value = "2012-01-01";
   element("#managed-end").value = "2024-01-05";
-  return {context, element, calls, timers};
+  element("#managed-include-announcements").checked = true;
+  return {context, element, calls, timers, confirmations, refreshes};
 }
 const empty = () => ({items:[], pagination:{page:1,page_size:30,total:0}});
 
@@ -48,6 +50,7 @@ test("failed tasks show escaped stage without a misleading completion percentage
 test("cancelled add/archive/restore never sends a network request", async () => {
   const h = harness(() => assert.fail("no request"), false);
   await h.context.addManagedStock({preventDefault() {}});
+  await h.context.managedAction({symbol:"003816",target_start:"2012-01-01",revision:1}, "sync");
   await h.context.managedAction({security_id:"SZSE.003816",revision:1}, "archive");
   await h.context.managedAction({security_id:"SZSE.003816",revision:2}, "restore");
   assert.equal(h.calls.length, 0);
@@ -59,11 +62,51 @@ test("confirmed asynchronous add is single-stock, has a busy guard and visible t
   const first = h.context.addManagedStock({preventDefault() {}});
   await h.context.addManagedStock({preventDefault() {}});
   assert.equal(h.calls.length, 1);
-  assert.deepEqual(JSON.parse(h.calls[0].options.body), {symbol:"003816",start:"2012-01-01",end:"2024-01-05",confirm:true,auto_update:false});
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), {symbol:"003816",start:"2012-01-01",end:"2024-01-05",confirm:true,auto_update:false,include_announcements:true});
+  assert.match(h.confirmations[0], /一季报、中报、三季报、年报公告元数据/);
+  assert.match(h.confirmations[0], /不下载财务指标、PDF/);
   finish({task_id:"task-one",status:"queued"});
   await first;
   assert.match(h.element("#managed-message").textContent, /task-one.*等待同步/);
   assert.equal(h.element("#managed-add").disabled, false);
+});
+
+test("update confirms the selected announcement scope; unchecked remains prices-only", async () => {
+  for (const include of [true,false]) {
+    const h = harness((url, options) => options.method ? {task_id:"task-update",status:"queued"} : empty());
+    h.element("#managed-include-announcements").checked = include;
+    await h.context.managedAction({symbol:"003816",target_start:"2012-01-01",revision:7,auto_update:true}, "sync");
+    const body = JSON.parse(h.calls[0].options.body);
+    assert.equal(body.include_announcements, include);
+    assert.equal(body.expected_revision, 7);
+    assert.equal(body.refresh, true);
+    assert.match(h.confirmations[0], include ? /四类|一季报、中报、三季报、年报/ : /不含公告/);
+    assert.match(h.confirmations[0], /访问公网/);
+  }
+});
+
+test("poll completion refreshes stored explorer data without another download or navigation click", async () => {
+  for (const status of ["succeeded","failed"]) {
+    let completed = false;
+    const asset = {security_id:"SZSE.003816",symbol:"003816",name:"fixture",status:"active",availability:"ready",revision:2,coverage:{adjustments:{},issues:[]}};
+    const h = harness(() => ({items:[{...asset,task:{task_id:"task-poll",status:completed ? status : "running",progress:80}}],pagination:{page:1,page_size:30,total:1}}));
+    await h.context.loadManagedStocks(1);
+    assert.equal(h.refreshes.length, 0);
+    completed = true;
+    await [...h.timers.values()][0]();
+    assert.deepEqual(h.refreshes, [1]);
+    assert.ok(h.calls.every((call) => !call.options.method));
+    await h.context.loadManagedStocks(1);
+    assert.equal(h.refreshes.length, 1);
+  }
+});
+
+test("announcement summary is distinct from price coverage and escapes untrusted text", () => {
+  const h = harness(empty);
+  const html = h.context.managedRows([{security_id:"SZSE.003816",status:"active",availability:"ready",revision:2,coverage:{adjustments:{},announcement_sync:{status:"published",row_count:0,start_date:"<svg>",end_date:"2024-01-05"}}}]);
+  assert.match(html, /定期公告：已同步 · 0 条/);
+  assert.match(html, /&lt;svg&gt;/);
+  assert.doesNotMatch(html, /<svg>/);
 });
 
 test("422 and 409 failures are visible text, not unhandled promises or executable HTML", async () => {

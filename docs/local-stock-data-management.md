@@ -11,7 +11,13 @@
 以 `003816` 为例：先更新本地证券目录（如需要），在数据浏览搜索该代码，核对名称和交易所。
 选定起点（默认 2012-01-01）与终点，确认将访问公网，然后点击“添加并同步”。HTTP 立即返回
 持久化任务；单只股票后台下载不复权 `none` 与前复权 `qfq` 日线、执行原质量检查并按年分区发布。
-不自动下载公告、财务、PDF，不做 OCR 或模型调用。浏览、搜索、移出、恢复和创建股票池均不隐式下载。
+网页默认勾选“本次添加／更新一并同步定期公告”，确认框明确列出一季报、中报、三季报、年报公告元数据；
+可以取消勾选，只同步行情。公告是标题、报告期、真实公开时间和原文链接等目录记录，**不是 PDF 正文**；
+不下载财务指标、PDF，不做 OCR 或模型调用。API/CLI 未指定新选项仍只下载行情。
+浏览、搜索、移出、恢复和创建股票池均不隐式下载；日常自动更新开关仍只控制行情。
+
+数据明细默认展开，页面加载自动读取本地数据库，无需点击导航；四个数据集切换栏紧邻股票搜索。
+本地股票管理位于明细下方，可通过“添加／管理股票”跳转；任务完成时自动刷新当前行情/公告列表。
 
 证券目录没有上市日期时，后台单独读取供应商明确的上市日期字段，保存来源；不从第一根 K 线猜测
 上市时间。实际起点为目标起点与可靠上市日的较晚者。截止日按上海时间 16:30 的保守完整日边界裁剪，
@@ -29,7 +35,7 @@
 写入 managed_stock 的 `listing_source` 区分东方财富与 `sse:COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L:LIST_DATE`。
 
 深市、北交所不会误用上交所备用查询；尚未增加这两个市场的独立备用源。
-所有可用来源失败时，本次回填安全停止，保留原管理记录与已存行情；页面显示失败阶段、来源及异常类型，
+所有可用来源失败时，本次行情回填安全停止，保留原管理记录与已存行情；页面显示失败阶段、来源及异常类型，
 不记录上游响应正文、代理认证信息或密钥。修复网络/数据源后点击“补齐 / 更新 / 重试”，不必删除再添加。
 只核验了受控离线响应；备用查询不保证任意服务器网络或上游服务始终可达。
 
@@ -73,7 +79,8 @@ Copilot 沿用只读股票池/研究工具白名单，未新增可下载或移�
 
 管理记录、任务 claim 和请求审计在一个短数据库事务中提交。任务使用既有 `sync` 类型，
 `spec.dataset=managed_stock`，固定 none/qfq；股票级唯一 claim 比配置级去重更严格，避免不同目标
-同时覆盖同一股票。有活动任务时相同配置复用；更改范围要求 expected_revision 且不能与有效租约任务竞争。
+同时覆盖同一股票。有活动任务时相同配置复用；范围或公告选项不同返回 409，不能把行情任务冒充联合任务。
+更改范围要求 expected_revision 且不能与有效租约任务竞争。
 租约已经过期时允许携带当前 revision 扩展结束日期重试，覆盖重启跨日场景；释放旧 claim 与新任务提交同事务。
 成功任务重复请求会重新检查实际覆盖（包括跨收盘时点），覆盖不足则新建任务；失败/过期租约可重试。
 
@@ -92,6 +99,25 @@ owner、heartbeat（15 秒）、30 分钟租约和 management generation 共同 
 管理/股票池写入只取 DB access lock。不在 DB 事务里取得任务仓储的进程锁，也不在 DB 锁内等待网络。
 增量父任务遇到别的 worker 已接手，最多等待 30 秒复用结果；超时显示已有任务 ID，子任务不会被重复启动。
 原增量服务的全局 operation lock 生命周期保持不变；本功能网页下载不长期占用它，备份可在网络等待期间进行。
+
+### 显式联合更新定期公告
+
+请求 `include_announcements=true` 时，在同一持久化管理任务内顺序执行行情与公告阶段，复用
+`ResearchDatasetSyncService` 按年、按 q1/interim/q3/annual 分区检查和发布。公告使用用户目标区间作为
+**公告日期**范围，不按股票上市日裁剪，也不把报告期结束日当公开时间。行情上市证据失败不阻止已经确认的
+独立公告阶段，但整个任务仍显示失败，不能将行情标记就绪。公告阶段保留原真实 published_at / 版本语义。
+
+`coverage.announcement_sync` 保存最近一次联合更新的任务、批次、目标区间、各分区状态、行数和错误。
+其中行数是本批次发布数量，不代表库中总公告数；四类查询都成功但零公告可以发布为 0 条，与日线空响应不同。
+任何公告分区失败或返回 stale fallback 都不能标记联合成功；已发布分区保留，失败后可再次确认重试。
+失败重试重新拉取所选公告区间，按原公告身份幂等写入，不重复记录；日线仍按原覆盖算法补缺。
+网页“补齐 / 更新 / 重试”传 refresh=true，会检查所选区间新披露的公告，而不是永远复用旧成功批次。
+API/CLI 未要求刷新时，相同范围及数据选项、成功任务且行情覆盖仍完整可幂等返回。
+
+公告失败不撤销已通过校验的行情可用性，股票池准入仍基于行情；任务失败和行情可用是两个独立状态。
+行情单独更新、移出或恢复保留最近公告同步摘要。任务 spec 与请求/完成审计记录此次 datasets，
+不会将此次选择写成新的定时公告维护范围。所有公告写库同样经过 owner/lease/generation fencing；
+原始文件使用 task/owner 独立目录，防止刷新或失效 worker 覆盖旧批次血缘文件；网络不持有 DB access lock。
 
 ## 移出和恢复
 
@@ -113,9 +139,10 @@ owner、heartbeat（15 秒）、30 分钟租约和 management generation 共同 
 | GET `/{security_id}/references` | active 池当前引用 |
 | PATCH `/{security_id}` | action=archive/restore/configure，expected_revision、confirm；configure 可设 auto_update |
 
-POST 字段：symbol（六位）、start、end、confirm=true、auto_update、可选 expected_revision、refresh。
+POST 字段：symbol（六位）、start、end、confirm=true、auto_update、可选 expected_revision、refresh、include_announcements。
 日期限定 1990-01-01 至提交日。更新已有范围/自动维护配置需 revision；强制刷新用 refresh=true。
-不支持批量股票，不接收公告/财务下载选项。404 为不存在，422 为参数/准入问题，409 为版本、引用、管理或锁冲突。
+include_announcements 为严格布尔值，默认 false。网页选择默认 true，但只有用户确认后才提交下载。
+不支持批量股票，不接收财务/PDF 下载选项。404 为不存在，422 为参数/准入问题，409 为版本、引用、管理或锁冲突。
 完整任务历史继续使用 `/api/v1/ops/tasks/{task_id}`。
 
 ```bash
@@ -123,6 +150,8 @@ ai-quant data-stock list
 ai-quant data-stock add 003816 --start-date 2012-01-01 --confirm --enqueue-only
 ai-quant data-stock show SZSE.003816
 ai-quant data-stock sync 003816 --expected-revision 1 --confirm --refresh
+# 显式包含四类定期公告元数据；不下载 PDF/OCR/财务指标
+ai-quant data-stock sync 003816 --expected-revision 1 --confirm --refresh --include-announcements
 ai-quant data-stock references SZSE.003816
 ai-quant data-stock configure SZSE.003816 --expected-revision 1 --auto-update off --confirm
 ai-quant data-stock archive SZSE.003816 --expected-revision 2 --confirm
@@ -167,3 +196,15 @@ git diff --check 均通过。回归保留 128 MB / 6,000 条证券批量写入�
 JavaScript 行为测试 **16 passed**，含历史 99% 失败记录不再展示百分比和阶段消息转义。
 Ruff、JS/Shell 语法、systemd 单元验证、Wheel 构建与新模块/静态资源内容检查、git diff --check 均通过。
 所有新增网络故障由 Fixture/monkeypatch 构造；未连接生产服务器，未合并或部署。
+
+### 明细默认显示与联合公告更新验证（2026-09-03）
+
+完整 pytest：**324 passed**（312.41 秒），仅既有 Starlette TestClient 依赖弃用警告。
+新增联合更新专项 **9 passed**；API/CLI 公告选项兼容专项 **4 passed**（均包含于完整回归）。
+涵盖四类公告与真实公开时间、幂等刷新、部分失败重试、空公告与过期缓存区分、范围校验、
+行情就绪独立性、归档 fencing、公告网络等待期间备份有效、原始文件血缘不被刷新覆盖、摘要保留。
+JavaScript 离线行为 **24 passed**：无点击初始化、标签布局、陈旧响应拒绝、确认/取消、公告选项、
+完成后刷新且保留所选股票、可见错误和 HTML 转义。页面默认显示及布局顺序另有服务端 HTML 回归。
+Ruff、全部 JavaScript/Shell 语法、systemd 单元验证、Wheel 构建与内容一致性/完整性检查、git diff --check 均通过。
+回归包括原 6,000 条证券低内存测试和 M8/M9-A/M9-B；未使用真实供应商、OpenAI、券商或系统 OCR。
+仍为 Schema v14，无新增迁移；日常公告维护范围、PDF/OCR 安全边界不变。提交后 CI 以 PR 检查为准。

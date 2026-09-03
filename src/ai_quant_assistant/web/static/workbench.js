@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, screenRun: null, stockPools: [], stockPool: null };
+const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, explorerGeneration: 0, explorerSelection: 0, explorerRecordRequest: 0, screenRun: null, stockPools: [], stockPool: null };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -853,9 +853,11 @@ async function showRecordDetail(dataset, recordId) {
 
 async function loadExplorerRecords(page=1) {
   if (!state.explorerEntity) return;
+  const generation=state.explorerGeneration, selection=state.explorerSelection, request=++state.explorerRecordRequest;
+  const current=()=>generation===state.explorerGeneration && selection===state.explorerSelection && request===state.explorerRecordRequest;
   state.explorerPage=page; $("#explorer-table").innerHTML='<p class="empty-state">正在读取已发布记录…</p>';
-  try {renderExplorerTable(await requestJson(explorerQuery(page)));}
-  catch(error){$("#explorer-table").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+  try {const payload=await requestJson(explorerQuery(page)); if(current()) renderExplorerTable(payload);}
+  catch(error){if(current()) $("#explorer-table").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
 }
 
 function renderSecurityIdentity(item) {
@@ -864,32 +866,53 @@ function renderSecurityIdentity(item) {
 }
 
 async function selectExplorerEntity(item) {
+  const generation=state.explorerGeneration, selection=++state.explorerSelection;
   state.explorerEntity=item; state.explorerPage=1;
+  $("#explorer-identity").innerHTML='<p class="empty-state">正在读取所选对象…</p>';
+  $("#explorer-table").innerHTML='<p class="empty-state">正在读取所选对象的记录…</p>';
+  $("#explorer-chart").innerHTML=""; $("#explorer-pages").innerHTML="";
+  $("#explorer-download").removeAttribute("href");
   $$(".explorer-entity").forEach((button)=>button.classList.toggle("active",button.dataset.symbol===item.symbol));
   if (state.explorerDataset === "benchmarks") $("#explorer-identity").innerHTML=`<p class="eyebrow">BENCHMARK DETAIL</p><h3>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</h3><div class="explorer-identity-grid"><div><span>覆盖日期</span><strong>${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber(item.price_rows)} 行</strong></div><div><span>同步批次</span><strong>${formatNumber(item.batches)}</strong></div><div><span>供应商</span><strong>${escapeHtml(item.provider_source||"—")}</strong></div></div>`;
-  else renderSecurityIdentity(await requestJson(`/api/v1/data/securities/${encodeURIComponent(item.symbol)}`));
+  else {
+    try {
+      const identity=await requestJson(`/api/v1/data/securities/${encodeURIComponent(item.symbol)}`);
+      if(generation!==state.explorerGeneration || selection!==state.explorerSelection) return;
+      renderSecurityIdentity(identity);
+    } catch(error) {
+      if(generation===state.explorerGeneration && selection===state.explorerSelection) $("#explorer-identity").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;
+      return;
+    }
+  }
   await loadExplorerRecords(1);
 }
 
 async function loadExplorerEntities(page=1) {
+  const generation=++state.explorerGeneration;
+  const selectedSymbol=state.explorerEntity?.symbol;
   state.explorerEntityPage=page; state.explorerEntity=null;
+  $("#explorer-identity").innerHTML='<p class="empty-state">从左侧选择股票或指数。</p>';
+  $("#explorer-table").innerHTML='<p class="empty-state">尚未选择数据。</p>';
+  $("#explorer-chart").innerHTML="";
+  $("#explorer-pages").innerHTML=""; $("#explorer-entity-pages").innerHTML="";
+  $("#explorer-download").removeAttribute("href");
   const target=$("#explorer-entity-list"); target.innerHTML='<p class="empty-state">正在读取可用对象…</p>';
   try {
     const query=new URLSearchParams({page:String(page),page_size:"30"});
     let url="/api/v1/data/benchmarks";
     if(state.explorerDataset!=="benchmarks"){query.set("dataset",state.explorerDataset);query.set("query",$("#explorer-search").value.trim());if(state.explorerDataset==="prices") query.set("managed_only","true");url="/api/v1/data/securities";}
     const payload=await requestJson(`${url}?${query}`), items=payload.items||[];
+    if(generation!==state.explorerGeneration) return;
     target.innerHTML=items.length?items.map((item)=>`<button class="explorer-entity" type="button" data-symbol="${escapeHtml(item.symbol)}"><strong>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</strong><span>${state.explorerDataset==="benchmarks"?`${formatNumber(item.price_rows)} 行 · ${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}`:`行情 ${formatNumber(item.price_rows)} · 公告 ${formatNumber(item.announcement_count)} · 财报 ${formatNumber(item.report_count)}`}</span></button>`).join(""):'<p class="empty-state">没有匹配的已发布数据。</p>';
     target.querySelectorAll("button").forEach((button)=>button.addEventListener("click",()=>selectExplorerEntity(items.find((item)=>item.symbol===button.dataset.symbol))));
     explorerPagination($("#explorer-entity-pages"),payload.pagination,loadExplorerEntities);
-    if(items.length) await selectExplorerEntity(items[0]);
-  } catch(error){target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
+    if(items.length) await selectExplorerEntity(items.find((item)=>item.symbol===selectedSymbol)||items[0]);
+  } catch(error){if(generation===state.explorerGeneration) target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
 }
 
-async function openExplorer(dataset="prices") {
+async function openExplorer(dataset="prices", {scroll=true}={}) {
   state.explorerDataset=dataset; state.explorerPage=1;
   $("#data-explorer").hidden=false;
-  if (typeof loadManagedStocks === "function") await loadManagedStocks(1);
   $$("[data-explorer-dataset]").forEach((button)=>button.classList.toggle("active",button.dataset.explorerDataset===dataset && button.closest(".explorer-tabs")));
   $("#explorer-adjustment-field").hidden=dataset!=="prices";
   $("#explorer-report-field").hidden=dataset!=="announcements";
@@ -897,7 +920,16 @@ async function openExplorer(dataset="prices") {
   $("#explorer-search").disabled=dataset==="benchmarks";
   $("#explorer-record-title").textContent=`${explorerLabels[dataset]}记录`;
   await loadExplorerEntities(1);
-  $("#data-explorer").scrollIntoView({behavior:"smooth",block:"start"});
+  if(scroll && state.explorerDataset===dataset) $("#data-explorer").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+async function initializeDataExplorer() {
+  // Initial page reads are local GETs only. Do not scroll away from a deep link
+  // or require a click on the navigation item to make already stored data visible.
+  await Promise.all([
+    openExplorer("prices", {scroll:false}),
+    typeof loadManagedStocks === "function" ? loadManagedStocks(1) : Promise.resolve(),
+  ]);
 }
 
 async function showLineage(recordId) {
@@ -944,9 +976,10 @@ $("#run-sync").addEventListener("click", () => runOperation("sync"));
 $("#run-backup").addEventListener("click", () => runOperation("backup"));
 $$("[data-explorer-dataset]").forEach((button) => button.addEventListener("click", () => openExplorer(button.dataset.explorerDataset)));
 $("#open-data-explorer").addEventListener("click", (event) => {event.preventDefault(); openExplorer(state.explorerDataset);});
-$("#close-data-explorer").addEventListener("click", () => {$("#data-explorer").hidden = true; $("#overview-title").scrollIntoView({behavior:"smooth"});});
+$("#refresh-data-explorer").addEventListener("click", () => openExplorer(state.explorerDataset, {scroll:false}));
 $("#explorer-filters").addEventListener("submit", (event) => {event.preventDefault(); loadExplorerRecords(1);});
 let explorerSearchTimer;
 $("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
 loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory(); loadStockPools();
+window.addEventListener("DOMContentLoaded", () => {initializeDataExplorer().catch((error)=>{$("#explorer-entity-list").textContent=error.message;});}, {once:true});

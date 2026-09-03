@@ -20,6 +20,7 @@ class ManagedStockRequest(BaseModel):
     confirm: StrictBool
     refresh: StrictBool = False
     auto_update: StrictBool = True
+    include_announcements: StrictBool = False
 
     @model_validator(mode="after")
     def validate_range(self):

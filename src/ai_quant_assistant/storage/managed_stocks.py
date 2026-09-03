@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from ai_quant_assistant.config import Settings
-from ai_quant_assistant.domain.models import DataSyncSpec
+from ai_quant_assistant.domain.models import AnnouncementSyncSpec, DataSyncSpec
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.locks import InterProcessFileLock
@@ -19,6 +19,7 @@ from ai_quant_assistant.storage.managed_coverage import (
     coverage_report,
     market_today,
 )
+from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
 from ai_quant_assistant.storage.task_repository import TASK_COLUMNS, OperationTaskRepository
 
@@ -205,10 +206,13 @@ class ManagedStockService:
         actor: str = "system",
         refresh: bool = False,
         auto_update: bool = True,
+        include_announcements: bool = False,
     ) -> tuple[dict[str, Any], bool]:
         end = end or market_today()
         if confirm is not True:
             raise ValueError("请明确确认添加并下载行情")
+        if not isinstance(include_announcements, bool):
+            raise ValueError("include_announcements must be a boolean")
         if not re.fullmatch(r"[0-9]{6}", symbol):
             raise ValueError("symbol must be a six-digit code")
         if start < date(1990, 1, 1) or start > end or end > market_today():
@@ -248,6 +252,9 @@ class ManagedStockService:
             if expected_revision is not None and expected_revision != asset["revision"]:
                 raise ManagedStockConflict(f"revision conflict: current {asset['revision']}")
             same_range = str(start) == asset["target_start"] and str(end) == asset["target_end"]
+            same_datasets = bool(
+                asset["task"] and asset["task"]["spec"].get("include_announcements", False)
+            ) == include_announcements
             if (
                 exists
                 and (not same_range or auto_update != asset["auto_update"])
@@ -260,12 +267,13 @@ class ManagedStockService:
                        AND COALESCE(heartbeat_at, started_at, updated_at) > ?""",
                     [asset["last_task_id"], datetime.now(UTC) - timedelta(seconds=LEASE_SECONDS)],
                 ).fetchone()
-                if not same_range and live:
-                    raise ManagedStockConflict("当前有同步任务，先等待完成或移出管理")
+                if (not same_range or not same_datasets) and live:
+                    raise ManagedStockConflict("当前有同步任务且范围或数据类型不同，请等待完成后重试")
             elif (
                 same_range
                 and asset["availability"] == "ready"
                 and not refresh
+                and same_datasets
                 and auto_update == asset["auto_update"]
                 and asset["task"]
             ):
@@ -298,12 +306,14 @@ class ManagedStockService:
                 "actor": actor,
                 "refresh": refresh,
                 "confirmed": True,
+                "include_announcements": include_announcements,
+                "datasets": ["daily_bar", "announcement"] if include_announcements else ["daily_bar"],
             }
             task, created = self.tasks.create_or_get_active(
                 "sync",
                 claim_key=f"managed-stock:{security_id}",
                 spec=spec,
-                message="等待单股历史行情回填",
+                message="等待单股行情与定期公告回填" if include_announcements else "等待单股历史行情回填",
                 connection=connection,
             )
             connection.execute(
@@ -321,6 +331,7 @@ class ManagedStockService:
                     end=end,
                     generation=asset["generation"],
                     created=not bool(exists),
+                    datasets=spec["datasets"],
                 )
             return task, created
 
@@ -360,6 +371,8 @@ class ManagedStockService:
                 completed_date(date.fromisoformat(asset["target_end"])),
                 date.fromisoformat(asset["listing_date"]) if asset["listing_date"] else None,
             )
+            if asset["coverage"].get("announcement_sync"):
+                report["announcement_sync"] = asset["coverage"]["announcement_sync"]
             # Invalidate before returning, in the same DB-locked transaction.
             connection.execute(
                 """UPDATE operation_task SET status='failed', progress=LEAST(progress,99),
@@ -457,11 +470,24 @@ class ManagedStockService:
         thread = Thread(target=heartbeat, daemon=True)
         thread.start()
         error = None
+        announcement_result = None
         try:
             self._download(task_id, owner, spec)
-            self._progress(task_id, owner, 95, "正在校验目标覆盖并提交结果")
         except Exception as exc:
             error = str(exc)[:2000]
+        if spec.get("include_announcements", False):
+            try:
+                announcement_result = self._download_announcements(task_id, owner, spec)
+            except Exception as exc:
+                announcement_result = {"status": "failed", "error": str(exc)[:2000]}
+            if announcement_result["status"] != "published":
+                announcement_error = "定期公告同步失败：" + encoded(announcement_result)
+                error = f"{error}；{announcement_error}" if error else announcement_error
+        if error is None:
+            try:
+                self._progress(task_id, owner, 95, "正在校验目标覆盖并提交结果")
+            except Exception as exc:
+                error = str(exc)[:2000]
         try:
             with self.transaction() as connection:
                 self.fence(connection, task_id, owner, spec)
@@ -473,6 +499,13 @@ class ManagedStockService:
                     completed_date(date.fromisoformat(spec["end_date"])),
                     date.fromisoformat(asset["listing_date"]) if asset["listing_date"] else None,
                 )
+                if announcement_result is not None:
+                    report["announcement_sync"] = {
+                        **announcement_result, "task_id": task_id,
+                        "start_date": spec["start_date"], "end_date": spec["end_date"],
+                    }
+                elif asset["coverage"].get("announcement_sync"):
+                    report["announcement_sync"] = asset["coverage"]["announcement_sync"]
                 success = error is None and report["availability"] == "ready"
                 error = error or ("；".join(report["issues"]) if not success else None)
                 availability = report["availability"]
@@ -513,9 +546,10 @@ class ManagedStockService:
                     [
                         "succeeded" if success else "failed",
                         success,
-                        "历史行情已就绪" if success else f"{stage}；同步未完成，可安全重试",
+                        ("行情与定期公告同步完成" if spec.get("include_announcements") else "历史行情已就绪")
+                        if success else f"{stage}；同步未完成，可安全重试",
                         encoded(report) if success else None,
-                        error,
+                        error[:2000] if error else None,
                         task_id,
                         owner,
                     ],
@@ -528,6 +562,7 @@ class ManagedStockService:
                     task_id=task_id,
                     generation=spec["generation"],
                     availability=availability,
+                    datasets=spec.get("datasets", ["daily_bar"]),
                 )
         except ManagedStockConflict:
             pass  # A newer management operation owns the terminal state.
@@ -630,7 +665,7 @@ class ManagedStockService:
 
         def progress(index, total):
             self._progress(
-                task_id, owner, 10 + int(80 * index / total),
+                task_id, owner, 10 + int((60 if spec.get("include_announcements") else 80) * index / total),
                 f"历史行情分区 {index}/{total}",
             )
 
@@ -654,6 +689,29 @@ class ManagedStockService:
         )
         if result["status"] != "published":
             raise RuntimeError(encoded(result.get("errors", [])))
+
+    def _download_announcements(self, task_id: str, owner: str, spec: dict[str, Any]) -> dict[str, Any]:
+        self._progress(task_id, owner, 75, "正在同步定期公告（不下载 PDF 或财务指标）")
+        guarded = _FencedDatabase(self, task_id, owner, spec)
+        with guarded.connect(read_only=True):
+            pass  # Check generation before starting any independent network phase.
+        provider = self.provider_factory(f"{task_id}-{owner}-announcements")
+        service = ResearchDatasetSyncService(
+            database=guarded, layout=self.database.layout,
+            provider=_FreshProvider(provider, guarded, spec["security_id"]),
+            rate_limit_seconds=max(0.2, self.settings.data_sync_rate_limit_seconds),
+            raw_namespace=f"{task_id}-{owner}",
+            progress_callback=lambda index, total: self._progress(
+                task_id, owner, 75 + int(19 * index / total), f"定期公告分区 {index}/{total}"
+            ),
+        )
+        result = service.sync_announcements(AnnouncementSyncSpec(
+            start_date=date.fromisoformat(spec["start_date"]),
+            end_date=date.fromisoformat(spec["end_date"]),
+            symbols=(spec["symbol"],), report_types=("q1", "interim", "q3", "annual"),
+            resume=False,
+        ))
+        return {key: result[key] for key in ("status", "batch_id", "row_count", "partitions", "errors")}
 
 
 class _FencedDatabase:
@@ -686,6 +744,12 @@ class _FreshProvider:
         frame = self.provider.get_trading_calendar()
         if frame.attrs.get("cache_status") == "stale_fallback":
             raise ValueError("交易日历刷新失败，拒绝过期缓存")
+        return frame
+
+    def get_report_announcements(self, *args):
+        frame = self.provider.get_report_announcements(*args)
+        if frame.attrs.get("cache_status") == "stale_fallback":
+            raise ValueError("公告刷新失败，拒绝以过期缓存标记更新成功")
         return frame
 
     def get_daily_bars(self, *args):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from threading import Barrier, Event
@@ -501,7 +502,8 @@ def test_backup_during_managed_download_is_valid(setup, tmp_path):
         )
 
 
-def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch):
+@pytest.mark.parametrize("include_announcements", [False, True])
+def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch, include_announcements):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -517,12 +519,18 @@ def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch):
     try:
         with TestClient(app) as client:
             body = dict(symbol="003816", start="2012-01-01", end="2024-01-05", confirm=True)
+            if include_announcements:
+                body["include_announcements"] = True
             assert client.post(url, json={**body, "confirm": False}).status_code == 422
+            for invalid in ["true", 1, None]:
+                assert client.post(url, json={**body, "include_announcements": invalid}).status_code == 422
             assert client.post(url, json={**body, "symbols": ["600022"]}).status_code == 422
             assert client.get(url + "?page_size=201").status_code == 422
             assert client.get(url + "/missing").status_code == 404
             result = client.post(url, json=body)
             assert result.status_code == 202 and result.json()["status"] == "queued"
+            assert result.json()["spec"]["include_announcements"] is include_announcements
+            assert client.post(url, json={**body, "include_announcements": not include_announcements}).status_code == 409
             assert provider.calls == []
             assert client.post(url, json=body).json()["task_id"] == result.json()["task_id"]
             assert client.get(url + "?ready_only=true").json()["items"] == []
@@ -537,7 +545,8 @@ def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch):
         manager.shutdown()
 
 
-def test_cli_enqueues_and_cannot_bypass_pool_admission(setup, capsys, monkeypatch):
+@pytest.mark.parametrize("include_announcements", [False, True])
+def test_cli_enqueues_and_cannot_bypass_pool_admission(setup, capsys, monkeypatch, include_announcements):
     import sys
 
     from ai_quant_assistant.cli import main as cli_main
@@ -557,10 +566,13 @@ def test_cli_enqueues_and_cannot_bypass_pool_admission(setup, capsys, monkeypatc
             "2024-01-05",
             "--confirm",
             "--enqueue-only",
+            *(["--include-announcements"] if include_announcements else []),
             *common,
         ]
     )
-    assert '"status": "queued"' in capsys.readouterr().out
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "queued"
+    assert payload["spec"]["include_announcements"] is include_announcements
     main(["data-stock", "show", "SZSE.003816", *common])
     assert '"eligible": false' in capsys.readouterr().out
     with pytest.raises(ValueError, match="not ready"):
@@ -679,6 +691,194 @@ def test_exchange_fallback_backfills_and_reuses_persisted_evidence(setup, monkey
     retry, _ = service.request("688111", start=date(2012, 1, 1), end=date(2024, 1, 5), confirm=True,
                                refresh=True, expected_revision=asset["revision"])
     assert service.run(retry["task_id"])["status"] == "succeeded"
+
+
+def announcement_fixture(symbol, start, end, report_type):
+    announced = date(2024, 1, 4)
+    if not start <= announced <= end:
+        return pd.DataFrame()
+    periods = {"q1": "2023-03-31", "interim": "2023-06-30", "q3": "2023-09-30", "annual": "2023-12-31"}
+    return pd.DataFrame([{
+        "symbol": symbol, "company_name": "受控公告公司", "title": f"2023 {report_type} 公告",
+        "report_type": report_type, "report_year": 2023,
+        "report_period_end": pd.Timestamp(periods[report_type]),
+        "announcement_date": pd.Timestamp(announced), "published_at": pd.Timestamp("2024-01-04 18:00:00"),
+        "url": f"https://example.invalid/{symbol}/{report_type}.pdf", "source": "fixture:announcement",
+    }])
+
+
+def test_confirmed_combined_sync_publishes_announcements_without_pdf_and_preserves_lineage(setup, monkeypatch):
+    import hashlib
+    from pathlib import Path
+
+    db, provider, service = setup
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        return announcement_fixture(*args)
+
+    monkeypatch.setattr(provider, "get_report_announcements", fetch, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    done = service.run(task["task_id"])
+    assert done["status"] == "succeeded", done
+    assert len(calls) == 4 and {call[3] for call in calls} == {"q1", "interim", "q3", "annual"}
+    report = service.get("SZSE.003816")["coverage"]["announcement_sync"]
+    assert report["status"] == "published" and report["row_count"] == 4
+    assert done["spec"]["datasets"] == ["daily_bar", "announcement"]
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT COUNT(*) FROM published_announcement WHERE security_id='SZSE.003816'").fetchone()[0] == 4
+        assert c.execute("SELECT COUNT(*) FROM announcement_document").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM financial_report").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM published_announcement WHERE published_at<=TIMESTAMP '2024-01-03'").fetchone()[0] == 0
+        files = c.execute("SELECT raw_path,raw_sha256 FROM research_sync_partition WHERE batch_id=?", [report["batch_id"]]).fetchall()
+        requested = c.execute("SELECT details_json FROM operation_audit WHERE action='managed_stock_sync_requested'").fetchone()[0]
+        assert '"announcement"' in requested
+    assert all(task["task_id"] in path and Path(path).is_file() for path, _ in files)
+    reused, created = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                                      confirm=True, include_announcements=True)
+    assert not created and reused["task_id"] == task["task_id"]
+    retry, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                               confirm=True, include_announcements=True, refresh=True, expected_revision=1)
+    assert service.run(retry["task_id"])["status"] == "succeeded"
+    assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest for path, digest in files)
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT COUNT(*) FROM published_announcement WHERE security_id='SZSE.003816'").fetchone()[0] == 4
+    summary = service.get("SZSE.003816")["coverage"]["announcement_sync"]
+    only_prices, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                                    confirm=True, refresh=True, expected_revision=1)
+    assert service.run(only_prices["task_id"])["status"] == "succeeded"
+    assert service.get("SZSE.003816")["coverage"]["announcement_sync"] == summary
+    archived = service.change("SZSE.003816", action="archive", confirm=True, expected_revision=1)
+    restored = service.change("SZSE.003816", action="restore", confirm=True, expected_revision=archived["revision"])
+    assert archived["coverage"]["announcement_sync"] == restored["coverage"]["announcement_sync"] == summary
+
+
+def test_announcement_failure_does_not_revoke_ready_prices_and_can_retry(setup, monkeypatch):
+    _, provider, service = setup
+
+    def failure(*args):
+        if args[-1] == "annual":
+            raise RuntimeError("controlled annual source failure")
+        return announcement_fixture(*args)
+
+    monkeypatch.setattr(provider, "get_report_announcements", failure, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    failed = service.run(task["task_id"])
+    asset = service.get("SZSE.003816")
+    assert failed["status"] == "failed" and "定期公告同步失败" in failed["error"]
+    assert asset["availability"] == "ready" and asset["eligible"]
+    assert asset["coverage"]["announcement_sync"]["row_count"] == 3
+    monkeypatch.setattr(provider, "get_report_announcements", announcement_fixture)
+    retry, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                               confirm=True, include_announcements=True, expected_revision=asset["revision"])
+    assert retry["task_id"] != task["task_id"]
+    assert service.run(retry["task_id"])["status"] == "succeeded"
+
+
+def test_combined_claims_deduplicate_and_never_downgrade_requested_datasets(setup):
+    db, _, service = setup
+    barrier = Barrier(2)
+
+    def request(_):
+        barrier.wait(timeout=10)
+        return submit(ManagedStockService(db), include_announcements=True)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        tasks = list(workers.map(request, range(2)))
+    assert len({item[0]["task_id"] for item in tasks}) == 1
+    assert sum(created for _, created in tasks) == 1
+    with pytest.raises(ManagedStockConflict, match="数据类型"):
+        submit(service, include_announcements=False)
+
+
+def test_prices_only_never_downloads_announcements_and_upgrade_request_is_not_reused(setup, monkeypatch):
+    _, provider, service = setup
+    monkeypatch.setattr(provider, "get_report_announcements", lambda *args: pytest.fail("not authorized"), raising=False)
+    task, _ = submit(service)
+    assert not task["spec"]["include_announcements"]
+    assert service.run(task["task_id"])["status"] == "succeeded"
+    upgraded, created = submit(service, include_announcements=True)
+    assert created and upgraded["task_id"] != task["task_id"]
+
+
+def test_archive_during_announcement_fetch_fences_publication(setup, monkeypatch, tmp_path):
+    from ai_quant_assistant.storage.operations import DatabaseBackupService, ExclusiveOperationLock
+
+    db, provider, service = setup
+    entered, release = Event(), Event()
+
+    def fetch(*args):
+        entered.set()
+        assert release.wait(15)
+        return announcement_fixture(*args)
+
+    monkeypatch.setattr(provider, "get_report_announcements", fetch, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        future = workers.submit(service.run, task["task_id"])
+        assert entered.wait(15)
+        with db.connect(read_only=True) as c:
+            assert c.execute("SELECT 1").fetchone()[0] == 1
+        backups = DatabaseBackupService(database=db, backup_dir=tmp_path / "announcement-backups",
+                                       tasks=service.tasks, operation_lock=ExclusiveOperationLock(tmp_path / ".operations.lock"))
+        try:
+            backup = backups.run()
+            assert backups.verify(backup["backup_id"])["status"] == "verified"
+        except BaseException:
+            release.set()
+            raise
+        service.change("SZSE.003816", expected_revision=1, action="archive", confirm=True)
+        release.set()
+        assert future.result(timeout=15)["status"] == "failed"
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT COUNT(*) FROM published_announcement").fetchone()[0] == 0
+    assert service.get("SZSE.003816")["status"] == "archived"
+
+
+def test_listing_failure_does_not_block_explicit_announcement_phase(setup, monkeypatch):
+    _, provider, service = setup
+
+    def fail(symbol):
+        raise RuntimeError("listing unavailable")
+
+    monkeypatch.setattr(provider, "get_listing_date", fail)
+    monkeypatch.setattr(provider, "get_report_announcements", announcement_fixture, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    assert service.run(task["task_id"])["status"] == "failed"
+    asset = service.get("SZSE.003816")
+    assert asset["coverage"]["announcement_sync"]["row_count"] == 4
+    assert asset["availability"] == "unavailable" and provider.calls == []
+
+
+@pytest.mark.parametrize("mode", ["empty", "stale", "invalid_date"])
+def test_announcement_empty_is_valid_but_stale_or_invalid_publication_is_not(setup, monkeypatch, mode):
+    db, provider, service = setup
+
+    def fetch(*args):
+        if mode == "empty":
+            return pd.DataFrame()
+        frame = announcement_fixture(*args)
+        if mode == "stale":
+            frame.attrs["cache_status"] = "stale_fallback"
+        else:
+            frame["announcement_date"] = pd.Timestamp("2025-01-04")
+            frame["published_at"] = pd.Timestamp("2025-01-04 18:00:00")
+        return frame
+
+    monkeypatch.setattr(provider, "get_report_announcements", fetch, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    done = service.run(task["task_id"])
+    assert done["status"] == ("succeeded" if mode == "empty" else "failed")
+    asset = service.get("SZSE.003816")
+    assert asset["eligible"] and asset["coverage"]["announcement_sync"]["row_count"] == 0
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT COUNT(*) FROM published_announcement").fetchone()[0] == 0
 
 
 def test_complete_day_cutoff_never_imports_unfinished_today():

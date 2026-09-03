@@ -487,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--enqueue-only", action="store_true")
             command.add_argument("--refresh", action="store_true")
             command.add_argument("--no-auto-update", action="store_true")
+            command.add_argument("--include-announcements", action="store_true",
+                                 help="确认本次同时下载四类定期公告元数据，不下载 PDF")
         else:
             command.add_argument("security_id")
             if name not in {"show", "references"}:
@@ -549,6 +551,7 @@ def main() -> None:
                 args.symbol, start=args.start_date, end=args.end_date,
                 expected_revision=args.expected_revision, confirm=args.confirm,
                 refresh=args.refresh, auto_update=not args.no_auto_update, actor="cli",
+                include_announcements=args.include_announcements,
             )
             if payload["status"] == "queued" and not args.enqueue_only:
                 payload = managed.run(payload["task_id"])

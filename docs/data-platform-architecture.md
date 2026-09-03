@@ -9,6 +9,10 @@ MarketDataSyncService 年分区引擎；none/qfq 分别按股票和交易日历�
 管理 revision/generation 与 operation_task owner/heartbeat 联合 fencing 每次仓储连接和完成事务。
 网络不持有 DB access lock；单数据目录下载槽限制内存，不阻塞备份网络阶段。具体锁顺序、故障语义、
 迁移及保守停牌诊断见 [M9-B 说明](local-stock-data-management.md)。既有研究引擎和 PIT 输入冻结不变。
+显式 include_announcements 复用 ResearchDatasetSyncService 在同一管理任务内同步四类定期报告元数据，
+按公告日期分区，不按上市日裁剪，不下载 PDF 或财务指标。公告失败与行情可用性分别表达；
+相同股票 claim、owner/heartbeat/generation fencing 与短时发布事务适用于两个阶段，raw 按 task/owner 隔离。
+API/CLI 缺省仍仅行情；网页默认勾选但必须逐次确认，自动日常维护的公告范围不随此次选项扩大。
 
 ## 目标与边界
 

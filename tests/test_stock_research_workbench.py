@@ -369,3 +369,36 @@ def test_historical_report_metric_count_cannot_include_future_metrics(service):
         c.execute("UPDATE financial_metric SET published_at='2025-01-01' WHERE report_id=?", [report_id])
     rows = service.section("600519", "financial_reports", mode="historical", as_of="2024-02-01")["items"]
     assert next(row for row in rows if row["record_id"] == report_id)["metric_count"] == 0
+
+
+def test_research_snapshot_catalog_uses_shared_database_lock(service, monkeypatch):
+    from ai_quant_assistant.storage.catalog import DuckDBCatalog
+
+    # An uncoordinated default-config write connection conflicts with this
+    # read-only connection. The shared DB wrapper must delay opening it.
+    entered, attempted = Event(), Event()
+    original_connect = service.database.connect
+
+    def connect(**kwargs):
+        attempted.set()
+        return original_connect(**kwargs)
+
+    monkeypatch.setattr(service.database, "connect", connect)
+    catalog = DuckDBCatalog(service.database.path, database=service.database)
+    snapshot = {"name": "prices", "path": "fixture.parquet", "format": "parquet", "rows": 1, "sha256": "a"*64, "created_at": "2024-01-01T00:00:00Z"}
+
+    def write():
+        entered.set()
+        catalog.register("run-fixture", snapshot)
+
+    with ThreadPoolExecutor(1) as executor:
+        with original_connect(read_only=True) as c:
+            future = executor.submit(write)
+            assert entered.wait(10) and attempted.wait(10)
+            assert not future.done()
+            assert c.execute("SELECT 1").fetchone()[0] == 1
+        future.result(timeout=20)
+    with original_connect(read_only=True) as c:
+        assert c.execute("SELECT rows FROM snapshot_catalog WHERE run_id='run-fixture'").fetchone()[0] == 1
+    with pytest.raises(ValueError, match="paths must match"):
+        DuckDBCatalog(service.database.path.parent / "other.duckdb", database=service.database)

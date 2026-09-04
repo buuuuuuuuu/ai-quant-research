@@ -27,7 +27,7 @@ class InterimReportResearchService:
         self.artifact_dir = artifact_dir
         self.engine = EventStudyEngine()
         self.report_writer = ReportWriter()
-        self.catalog = DuckDBCatalog(duckdb_path) if duckdb_path else None
+        self.catalog = DuckDBCatalog(duckdb_path, database=database) if duckdb_path else None
 
     @staticmethod
     def _run_id() -> str:

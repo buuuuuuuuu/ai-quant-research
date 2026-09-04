@@ -84,6 +84,9 @@ v15→v16 只新增 stock_research_summary、stock_research_run，不改旧资�
 文档事件研究从数据库关联。动态 universe 和只有文件的旧记录无法可靠关联，首期明确提示，不自动补建。
 
 摘要一次有界读快照，释放 access lock 后渲染，再以唯一 fingerprint 在短事务提交 JSON、HTML 与审计。
+接入共享本地库的单股/批量事件研究，其 snapshot_catalog 写入也使用同一 access lock；
+独立 Fixture 的可选目录路径不初始化应用 Schema，但也使用同路径访问锁。
+目录写入与渲染、网络请求分离，不逆序获取 operation 锁。
 线程/进程并发相同请求只插入一次。摘要没有后台 worker：模板工作有界且无网络，失败重试按内容去重；
 不存在旧 worker 覆盖新摘要的状态机。长同步仍用原 claim/owner/heartbeat/fencing。
 HTML 存数据库，导出不落盘，所以没有新的临时文件/孤立产物生命周期；备份包含快照和 HTML。

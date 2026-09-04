@@ -496,6 +496,8 @@ class FactorLabService:
         manifest = directory / "run.json"
         payload["artifacts"]["run_manifest"] = str(manifest)
         write_json(manifest, payload)
+        from ai_quant_assistant.storage.research_run_index import register_run
+        register_run(self.database, "factor_lab", payload)
         progress(100, "因子研究完成")
         return payload
 

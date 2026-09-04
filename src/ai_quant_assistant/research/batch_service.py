@@ -33,6 +33,7 @@ class BatchInterimReportResearchService:
             provider=provider,
             artifact_dir=artifact_dir,
             duckdb_path=database.path if database else None,
+            database=database,
         )
         self.writer = BatchReportWriter()
 
@@ -178,4 +179,7 @@ class BatchInterimReportResearchService:
         manifest = batch_dir / "batch_manifest.json"
         payload["artifacts"]["batch_manifest"] = str(manifest)
         write_json(manifest, payload)
+        if self.database is not None:
+            from ai_quant_assistant.storage.research_run_index import register_run
+            register_run(self.database, "batch_event_study", payload)
         return payload

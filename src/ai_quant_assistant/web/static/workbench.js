@@ -1,5 +1,9 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+function stockResearchLink(symbol, name) {
+  const label = `${escapeHtml(symbol)} · ${escapeHtml(name)}`;
+  return /^[0-9]{6}$/.test(String(symbol)) ? `<a href="/stocks/${encodeURIComponent(symbol)}">${label}</a>` : label;
+}
 const state = { run: null, activeTab: "trades", conversationId: null, copilotPlan: null, explorerDataset: "prices", explorerEntity: null, explorerPage: 1, explorerEntityPage: 1, explorerGeneration: 0, explorerSelection: 0, explorerRecordRequest: 0, screenRun: null, stockPools: [], stockPool: null };
 
 const formatNumber = (value) => new Intl.NumberFormat("zh-CN").format(Number(value || 0));
@@ -60,7 +64,7 @@ async function loadStockPoolDetail(poolId) {
   const pool = await requestJson(`/api/v1/stock-pools/${encodeURIComponent(poolId)}`);
   state.stockPool = pool;
   const members = pool.members || [];
-  $("#stock-pool-detail").innerHTML = `<div class="stock-pool-detail-head"><div><p class="eyebrow">${escapeHtml(pool.source_type)} · REVISION ${escapeHtml(pool.current_revision)}</p><h3>${escapeHtml(pool.name)}</h3><p>${escapeHtml(pool.description || "暂无描述")}</p></div><span class="quality-pill">${escapeHtml(pool.status)}</span></div>${pool.warning ? `<p class="screen-warnings">${escapeHtml(pool.warning)}</p>` : ""}<div class="form-grid"><label class="field"><span>名称</span><input id="stock-pool-name" maxlength="120" value="${escapeHtml(pool.name)}"></label><label class="field"><span>描述</span><input id="stock-pool-description" maxlength="1000" value="${escapeHtml(pool.description)}"></label></div><div class="stock-pool-actions"><button id="stock-pool-save" class="secondary-button" type="button">保存元数据</button><button id="stock-pool-default" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>设为默认</button><button id="stock-pool-duplicate" class="secondary-button" type="button">复制</button><button id="stock-pool-sync" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>同步缺失数据</button><button id="stock-pool-archive" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>归档</button></div><label class="field"><span>搜索证券代码或名称</span><input id="stock-pool-security-search" type="search" maxlength="120" placeholder="600519 或 贵州茅台"></label><div id="stock-pool-search-results"></div><label class="field"><span>批量添加六位代码</span><textarea id="stock-pool-add-symbols" rows="2" placeholder="单次最多 200 只"></textarea></label><button id="stock-pool-add" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>添加成员</button><button id="stock-pool-remove-selected" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除勾选成员</button><p id="stock-pool-member-message" class="stock-pool-message" data-stock-pool-message role="status" aria-live="polite"></p><div class="table-shell stock-pool-members"><table><thead><tr><th></th><th>代码 / 名称</th><th>交易所 / 状态</th><th>数据覆盖</th><th>备注</th><th>顺序</th><th></th></tr></thead><tbody>${members.map((member) => `<tr data-security-id="${escapeHtml(member.security_id)}"><td><input class="stock-pool-member-select" type="checkbox"></td><td>${escapeHtml(member.symbol)} · ${escapeHtml(member.name)}</td><td>${escapeHtml(member.exchange)} · ${escapeHtml(member.status)}</td><td>${escapeHtml(member.coverage.start_date || "—")} → ${escapeHtml(member.coverage.end_date || "—")} · ${formatNumber(member.coverage.rows)} 行</td><td><input class="stock-pool-member-note" maxlength="500" value="${escapeHtml(member.note)}"></td><td><input class="stock-pool-member-order" type="number" min="1" max="500" value="${escapeHtml(member.display_order)}"></td><td><button class="stock-pool-member-save" type="button" ${pool.status === "archived" ? "disabled" : ""}>保存</button><button class="stock-pool-member-remove" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除</button></td></tr>`).join("")}</tbody></table></div>`;
+  $("#stock-pool-detail").innerHTML = `<div class="stock-pool-detail-head"><div><p class="eyebrow">${escapeHtml(pool.source_type)} · REVISION ${escapeHtml(pool.current_revision)}</p><h3>${escapeHtml(pool.name)}</h3><p>${escapeHtml(pool.description || "暂无描述")}</p></div><span class="quality-pill">${escapeHtml(pool.status)}</span></div>${pool.warning ? `<p class="screen-warnings">${escapeHtml(pool.warning)}</p>` : ""}<div class="form-grid"><label class="field"><span>名称</span><input id="stock-pool-name" maxlength="120" value="${escapeHtml(pool.name)}"></label><label class="field"><span>描述</span><input id="stock-pool-description" maxlength="1000" value="${escapeHtml(pool.description)}"></label></div><div class="stock-pool-actions"><button id="stock-pool-save" class="secondary-button" type="button">保存元数据</button><button id="stock-pool-default" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>设为默认</button><button id="stock-pool-duplicate" class="secondary-button" type="button">复制</button><button id="stock-pool-sync" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>同步缺失数据</button><button id="stock-pool-archive" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>归档</button></div><label class="field"><span>搜索证券代码或名称</span><input id="stock-pool-security-search" type="search" maxlength="120" placeholder="600519 或 贵州茅台"></label><div id="stock-pool-search-results"></div><label class="field"><span>批量添加六位代码</span><textarea id="stock-pool-add-symbols" rows="2" placeholder="单次最多 200 只"></textarea></label><button id="stock-pool-add" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>添加成员</button><button id="stock-pool-remove-selected" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除勾选成员</button><p id="stock-pool-member-message" class="stock-pool-message" data-stock-pool-message role="status" aria-live="polite"></p><div class="table-shell stock-pool-members"><table><thead><tr><th></th><th>代码 / 名称</th><th>交易所 / 状态</th><th>数据覆盖</th><th>备注</th><th>顺序</th><th></th></tr></thead><tbody>${members.map((member) => `<tr data-security-id="${escapeHtml(member.security_id)}"><td><input class="stock-pool-member-select" type="checkbox"></td><td>${stockResearchLink(member.symbol, member.name)}</td><td>${escapeHtml(member.exchange)} · ${escapeHtml(member.status)}</td><td>${escapeHtml(member.coverage.start_date || "—")} → ${escapeHtml(member.coverage.end_date || "—")} · ${formatNumber(member.coverage.rows)} 行</td><td><input class="stock-pool-member-note" maxlength="500" value="${escapeHtml(member.note)}"></td><td><input class="stock-pool-member-order" type="number" min="1" max="500" value="${escapeHtml(member.display_order)}"></td><td><button class="stock-pool-member-save" type="button" ${pool.status === "archived" ? "disabled" : ""}>保存</button><button class="stock-pool-member-remove" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除</button></td></tr>`).join("")}</tbody></table></div>`;
   bindStockPoolDetail();
   const pendingMembers = members.filter((member) => member.admission_warning);
   if (pendingMembers.length) setStockPoolMessage(`旧成员保留，但本地行情待补齐：${pendingMembers.map((member) => member.symbol).join("、")}。请在数据浏览中查看。`, true);
@@ -322,7 +326,7 @@ function formPayload() {
     factor_direction: $("#factor-direction").value,
     top_n: Number($("#top-n").value),
     rebalance: $("#rebalance").value,
-    benchmark_symbol: "csi000300",
+    benchmark_symbol: $("#backtest-benchmark")?.value || "csi000300",
     adjustment: $("#adjustment").value,
     initial_capital: Number($("#initial-capital").value),
     commission_bps: Number($("#commission-bps").value),
@@ -397,7 +401,7 @@ const tableConfigs = {
 function renderTable(name) {
   const rows = state.run?.[name] || [], columns = tableConfigs[name];
   $("#detail-head").innerHTML = `<tr>${columns.map(([, label]) => `<th>${label}</th>`).join("")}</tr>`;
-  $("#detail-body").innerHTML = rows.length ? rows.slice().reverse().slice(0, 500).map((row) => `<tr>${columns.map(([key]) => { let value = row[key]; if (key === "weight") value = formatPct(value); if (["price","notional","cost","market_value"].includes(key) && value != null) value = Number(value).toFixed(2); return `<td>${escapeHtml(value ?? "—")}</td>`; }).join("")}</tr>`).join("") : `<tr><td colspan="${columns.length}">暂无记录</td></tr>`;
+  $("#detail-body").innerHTML = rows.length ? rows.slice().reverse().slice(0, 500).map((row) => `<tr>${columns.map(([key]) => { let value = row[key]; if (key === "weight") value = formatPct(value); if (["price","notional","cost","market_value"].includes(key) && value != null) value = Number(value).toFixed(2); return `<td>${key === "symbol" ? stockResearchLink(value, "") : escapeHtml(value ?? "—")}</td>`; }).join("")}</tr>`).join("") : `<tr><td colspan="${columns.length}">暂无记录</td></tr>`;
 }
 
 function renderRun(run) {
@@ -623,7 +627,7 @@ function renderScreenRun(run) {
   $("#screen-download").href=`/api/v1/screens/runs/${encodeURIComponent(run.run_id)}/results.csv`;
   $("#screen-watchlist-name").value=`${run.name} · ${run.spec.as_of}`;
   $("#screen-warnings").innerHTML=(run.diagnostics.warnings||[]).map((item)=>`<p>· ${escapeHtml(item)}</p>`).join("");
-  $("#screen-table").innerHTML=run.items.length?`<table><thead><tr><th>结果</th><th>股票</th><th>行业</th><th>条件值</th><th>通过 / 淘汰原因</th><th>报告期</th><th>实际公开时间</th></tr></thead><tbody>${run.items.map((item)=>{const evidence=item.evidence?.financial||{};return `<tr><td><span class="screen-result-pill ${item.selected?"pass":"fail"}">${item.selected?`入选 #${item.rank}`:"未入选"}</span></td><td>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</td><td>${escapeHtml(item.industry||"缺失")}</td><td class="screen-fields-cell">${conditions.map((field)=>`${escapeHtml(screenFieldMap[field]?.label||field)}：${escapeHtml(screenValue(item,field))}`).join("<br>")}</td><td class="screen-evaluations">${item.evaluations.map((entry)=>`${entry.status==="passed"?"✓":"×"} ${escapeHtml(entry.label)}：${escapeHtml(entry.status==="missing"?"缺失":entry.actual)}`).join("<br>")}</td><td>${escapeHtml(String(evidence.report_period_end||"—").replace("T00:00:00",""))}</td><td>${escapeHtml(evidence.published_at||"—")}</td></tr>`;}).join("")}</tbody></table>`:'<p class="empty-state">没有可展示的候选记录。</p>';
+  $("#screen-table").innerHTML=run.items.length?`<table><thead><tr><th>结果</th><th>股票</th><th>行业</th><th>条件值</th><th>通过 / 淘汰原因</th><th>报告期</th><th>实际公开时间</th></tr></thead><tbody>${run.items.map((item)=>{const evidence=item.evidence?.financial||{};return `<tr><td><span class="screen-result-pill ${item.selected?"pass":"fail"}">${item.selected?`入选 #${item.rank}`:"未入选"}</span></td><td>${stockResearchLink(item.symbol, item.name)}</td><td>${escapeHtml(item.industry||"缺失")}</td><td class="screen-fields-cell">${conditions.map((field)=>`${escapeHtml(screenFieldMap[field]?.label||field)}：${escapeHtml(screenValue(item,field))}`).join("<br>")}</td><td class="screen-evaluations">${item.evaluations.map((entry)=>`${entry.status==="passed"?"✓":"×"} ${escapeHtml(entry.label)}：${escapeHtml(entry.status==="missing"?"缺失":entry.actual)}`).join("<br>")}</td><td>${escapeHtml(String(evidence.report_period_end||"—").replace("T00:00:00",""))}</td><td>${escapeHtml(evidence.published_at||"—")}</td></tr>`;}).join("")}</tbody></table>`:'<p class="empty-state">没有可展示的候选记录。</p>';
   $("#screen-to-copilot").disabled=!selected.length;$("#screen-to-backtest").disabled=!selected.length;$("#screen-to-lab").disabled=selected.length<2;$("#screen-save-watchlist").disabled=!selected.length;
   $("#screen-results").scrollIntoView({behavior:"smooth",block:"start"});
 }
@@ -791,6 +795,7 @@ async function reviewDocumentEvent(eventId,status,documentId) {
 }
 
 async function runDocumentEventStudy(eventId) {
+  if (!window.confirm("确认使用本地行情运行该事件研究？补齐与研究是两个独立操作。")) return;
   const target=$(`#event-study-${eventId}`);target.innerHTML='<p class="empty-state">正在按公开时间运行事件研究…</p>';
   try {const result=await requestJson(`/api/v1/document-events/${encodeURIComponent(eventId)}/event-study`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:"local",windows:[5,10,20],adjustment:"qfq",round_trip_cost_bps:20})});target.innerHTML=`<h6>事件研究结果</h6>${detailGrid((result.events||[]).map((row)=>[`${row.window} 日超额收益`,formatPct(row.excess_return)]))}<small>入场：公告公开后的首个股票与基准共同交易日；as_of ${escapeHtml(result.as_of)}</small>`;}
   catch(error){target.innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
@@ -862,7 +867,7 @@ async function loadExplorerRecords(page=1) {
 
 function renderSecurityIdentity(item) {
   const coverage=(item.price_coverage||[]).map((row)=>`${row.adjustment}: ${row.start_date||"—"} → ${row.end_date||"—"} · ${formatNumber(row.rows)} 行${row.missing_trading_days==null?"":` · 缺 ${formatNumber(row.missing_trading_days)} 日`}`).join("；");
-  $("#explorer-identity").innerHTML=`<p class="eyebrow">SECURITY DETAIL</p><h3>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</h3><p class="muted">${escapeHtml(item.exchange)} · ${escapeHtml(item.status)}${item.industry_name?` · ${escapeHtml(item.industry_name)}`:" · 行业缺失"}</p><div class="explorer-identity-grid"><div><span>上市 / 退市</span><strong>${escapeHtml(item.list_date||"—")} / ${escapeHtml(item.delist_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber((item.price_coverage||[]).reduce((sum,row)=>sum+Number(row.rows||0),0))} 行</strong></div><div><span>定期公告</span><strong>${formatNumber(item.announcement_count)} 条</strong></div><div><span>财务报告 / 指标</span><strong>${formatNumber(item.report_count)} / ${formatNumber(item.metric_count)}</strong></div><div><span>未通过质量检查</span><strong class="${item.failed_quality_checks?"negative":"positive"}">${formatNumber(item.failed_quality_checks)}</strong></div></div><p class="explorer-coverage-note">${escapeHtml(coverage||"暂无行情覆盖")}</p><p class="explorer-pit-notice">${escapeHtml(item.point_in_time_notice||"")}</p>`;
+  $("#explorer-identity").innerHTML=`<p class="eyebrow">SECURITY DETAIL</p><h3>${stockResearchLink(item.symbol, item.name)}</h3><p class="muted">${escapeHtml(item.exchange)} · ${escapeHtml(item.status)}${item.industry_name?` · ${escapeHtml(item.industry_name)}`:" · 行业缺失"}</p><div class="explorer-identity-grid"><div><span>上市 / 退市</span><strong>${escapeHtml(item.list_date||"—")} / ${escapeHtml(item.delist_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber((item.price_coverage||[]).reduce((sum,row)=>sum+Number(row.rows||0),0))} 行</strong></div><div><span>定期公告</span><strong>${formatNumber(item.announcement_count)} 条</strong></div><div><span>财务报告 / 指标</span><strong>${formatNumber(item.report_count)} / ${formatNumber(item.metric_count)}</strong></div><div><span>未通过质量检查</span><strong class="${item.failed_quality_checks?"negative":"positive"}">${formatNumber(item.failed_quality_checks)}</strong></div></div><p class="explorer-coverage-note">${escapeHtml(coverage||"暂无行情覆盖")}</p><p class="explorer-pit-notice">${escapeHtml(item.point_in_time_notice||"")}</p>`;
 }
 
 async function selectExplorerEntity(item) {
@@ -873,7 +878,7 @@ async function selectExplorerEntity(item) {
   $("#explorer-chart").innerHTML=""; $("#explorer-pages").innerHTML="";
   $("#explorer-download").removeAttribute("href");
   $$(".explorer-entity").forEach((button)=>button.classList.toggle("active",button.dataset.symbol===item.symbol));
-  if (state.explorerDataset === "benchmarks") $("#explorer-identity").innerHTML=`<p class="eyebrow">BENCHMARK DETAIL</p><h3>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</h3><div class="explorer-identity-grid"><div><span>覆盖日期</span><strong>${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber(item.price_rows)} 行</strong></div><div><span>同步批次</span><strong>${formatNumber(item.batches)}</strong></div><div><span>供应商</span><strong>${escapeHtml(item.provider_source||"—")}</strong></div></div>`;
+  if (state.explorerDataset === "benchmarks") $("#explorer-identity").innerHTML=`<p class="eyebrow">BENCHMARK DETAIL</p><h3>${stockResearchLink(item.symbol, item.name)}</h3><div class="explorer-identity-grid"><div><span>覆盖日期</span><strong>${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber(item.price_rows)} 行</strong></div><div><span>同步批次</span><strong>${formatNumber(item.batches)}</strong></div><div><span>供应商</span><strong>${escapeHtml(item.provider_source||"—")}</strong></div></div>`;
   else {
     try {
       const identity=await requestJson(`/api/v1/data/securities/${encodeURIComponent(item.symbol)}`);
@@ -982,4 +987,21 @@ let explorerSearchTimer;
 $("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
 loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory(); loadStockPools();
-window.addEventListener("DOMContentLoaded", () => {initializeDataExplorer().catch((error)=>{$("#explorer-entity-list").textContent=error.message;});}, {once:true});
+window.addEventListener("DOMContentLoaded", () => {initializeDataExplorer().then(prepareStockResearchEntry).catch((error)=>{$("#explorer-entity-list").textContent=error.message;});}, {once:true});
+
+async function prepareStockResearchEntry() {
+  const query = new URLSearchParams(window.location.search);
+  const symbol = query.get("stock");
+  if (!symbol || !/^[0-9]{6}$/.test(symbol)) return;
+  $("#research-stock-pool").value = "manual";
+  $("#symbols").value = symbol; $("#top-n").value = "1";
+  for (const [param,selector] of [["start_date","#start-date"],["end_date","#end-date"],["factor","#factor"],["adjustment","#adjustment"],["benchmark","#backtest-benchmark"]]) {
+    if (query.get(param)) $(selector).value = query.get(param);
+  }
+  const eventId = query.get("event");
+  if (eventId) {
+    const event = await requestJson(`/api/v1/document-events/${encodeURIComponent(eventId)}`);
+    if (event.symbol !== symbol) throw new Error("事件与股票身份不一致");
+    await showRecordDetail("announcements", event.announcement_id);
+  } else $("#backtest").scrollIntoView({behavior:"smooth"});
+}

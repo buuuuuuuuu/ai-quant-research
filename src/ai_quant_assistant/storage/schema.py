@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -1315,6 +1315,31 @@ MIGRATIONS = (
                 last_task_id VARCHAR,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""",
+        ),
+    ),
+    Migration(
+        version=16,
+        name="immutable_stock_research_summaries_and_run_index",
+        statements=(
+            """CREATE TABLE stock_research_summary (
+                summary_id VARCHAR PRIMARY KEY,
+                security_id VARCHAR NOT NULL,
+                fingerprint VARCHAR NOT NULL UNIQUE,
+                snapshot_json VARCHAR NOT NULL,
+                html_content VARCHAR NOT NULL,
+                html_sha256 VARCHAR NOT NULL,
+                actor VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX stock_summary_security_idx ON stock_research_summary(security_id, created_at)",
+            """CREATE TABLE stock_research_run (
+                run_id VARCHAR PRIMARY KEY,
+                research_type VARCHAR NOT NULL,
+                symbols_json VARCHAR NOT NULL,
+                spec_json VARCHAR NOT NULL,
+                result_json VARCHAR NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL
             )""",
         ),
     ),

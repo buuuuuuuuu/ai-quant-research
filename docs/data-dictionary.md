@@ -1,4 +1,20 @@
-# A 股本地数据库数据字典（Schema v15）
+# A 股本地数据库数据字典（Schema v16）
+
+## 个股研究摘要与运行索引（v16）
+
+| 表 / 字段 | 含义 |
+| --- | --- |
+| stock_research_summary.summary_id | 主键，不可变 summary- 加 SHA-256 身份 |
+| security_id / fingerprint | 证券身份 / UNIQUE 内容摘要，跨进程幂等 |
+| snapshot_json | 模式、as_of、范围、实际数值、quote、来源身份、限制及截断诊断 |
+| html_content / html_sha256 | 同事务持久化的离线 HTML / 校验摘要，无任意文件路径 |
+| actor / created_at | 创建者及生成时间 TIMESTAMPTZ，不是公告公开时间 |
+| stock_research_run.run_id | 主键，由研究生产者登记，不逐页扫描产物目录 |
+| research_type / symbols_json | 研究类型与当次冻结实际范围，不按当前池关联历史 |
+| spec_json / result_json | 冻结参数与有限结果摘要，组合指标明确标识 |
+| completed_at | 完成时间 TIMESTAMPTZ，历史视图据此过滤 |
+
+只新增空表，不伪造旧摘要/关联。摘要、HTML 与审计同事务；锁外渲染。见 [M10-A](stock-research-workbench.md)。
 
 ## research_data_plan（v15）
 

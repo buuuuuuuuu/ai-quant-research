@@ -1,5 +1,13 @@
 # A 股本地数据库架构（M0 + M1 + M2 + M3 + M4）
 
+## M10-A 个股聚合（Schema v16）
+
+StockResearchWorkbench 复用 DataExplorer 与 M9-C 预检/确认流程，事件证据复核同一页/分块 quote。
+新研究生产者登记冻结范围索引，旧任务/Copilot/事件研究按数据库身份关联；不遍历产物目录。
+摘要在一次有界读事务后释放 access lock、渲染 HTML，再以唯一 fingerprint 原子提交快照/HTML/审计。
+摘要不新建后台队列或外部文件；备份包含其全部内容。上海 as_of 边界、公开版本与审核时间分开，
+行情历史复权可信度仍标 unknown。详见 [M10-A](stock-research-workbench.md)。
+
 ## M9-C 研究就绪与补齐（Schema v15）
 
 ResearchReadiness 统一服务解析实际请求、冻结股票池，按研究信号/筛选时点核验财务和逐股票行情；

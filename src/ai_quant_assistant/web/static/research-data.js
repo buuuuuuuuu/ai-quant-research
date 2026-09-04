@@ -179,7 +179,7 @@ async function openResearchDataPlan(planId) {
 }
 
 function bindResearchData() {
-  for (const [selector, kind, payload] of [["#backtest-form","factor_backtest",formPayload],["#factor-lab-form","factor_lab",labPayload],["#screen-form","screen",screenPayload]]) {
+  for (const [selector, kind, payload] of [["#backtest-form","factor_backtest",() => formPayload()],["#factor-lab-form","factor_lab",() => labPayload()],["#screen-form","screen",() => screenPayload()]]) {
     const form = $(selector);
     if (!form) continue;
     const button = document.createElement("button");
@@ -188,7 +188,7 @@ function bindResearchData() {
     form.appendChild(button);
   }
   for (const action of ["create","confirm","retry","refresh","recheck"]) $("#research-data-"+action).addEventListener("click", () => researchDataAction(action));
-  $("#copilot-data-plan").addEventListener("click", copilotDataPlan);
+  $("#copilot-data-plan")?.addEventListener("click", copilotDataPlan);
   $("#research-data-history").addEventListener("click", async () => {
     const generation = researchDataState.generation;
     try {

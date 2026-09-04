@@ -39,6 +39,7 @@ packages = ["src/ai_quant_assistant"]
 include = [
   "src/ai_quant_assistant/**/*.py",
   "src/ai_quant_assistant/reports/templates/*.j2",
+  "src/ai_quant_assistant/reports/templates/*.html",
   "src/ai_quant_assistant/web/**/*",
 ]
 

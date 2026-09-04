@@ -328,6 +328,7 @@ class DataExplorer:
         report_type: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        published_before: datetime | None = None,
     ) -> dict[str, Any]:
         if report_type and report_type not in {"q1", "interim", "q3", "annual"}:
             raise ValueError("unsupported report type")
@@ -342,6 +343,9 @@ class DataExplorer:
             if value:
                 filters.append(expression)
                 params.append(value)
+        if published_before is not None:
+            filters.append("item.published_at < ?")
+            params.append(published_before)
         where = " AND ".join(filters)
         base = f"FROM published_announcement item JOIN security_master security USING (security_id) WHERE {where}"
         with self.database.connect(read_only=True) as connection:
@@ -382,6 +386,7 @@ class DataExplorer:
         report_type: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        published_before: datetime | None = None,
     ) -> dict[str, Any]:
         if report_type and report_type not in {"q1", "interim", "q3", "annual"}:
             raise ValueError("unsupported report type")
@@ -396,6 +401,9 @@ class DataExplorer:
             if value:
                 filters.append(expression)
                 params.append(value)
+        if published_before is not None:
+            filters.append("report.published_at < ?")
+            params.append(published_before)
         where = " AND ".join(filters)
         with self.database.connect(read_only=True) as connection:
             total = int(
@@ -441,6 +449,7 @@ class DataExplorer:
         end_date: str | None = None,
         page: int = 1,
         page_size: int = 50,
+        published_before: datetime | None = None,
     ) -> dict[str, Any]:
         page, page_size, offset = self._page(page, page_size)
         filters = ["security.symbol = ?"]
@@ -454,6 +463,9 @@ class DataExplorer:
             if value:
                 filters.append(expression)
                 params.append(value)
+        if published_before is not None:
+            filters.extend(["report.published_at < ?", "metric.published_at < ?"])
+            params.extend([published_before, published_before])
         where = " AND ".join(filters)
         base = f"FROM published_financial_metric metric JOIN published_financial_report report USING (report_id) JOIN security_master security ON security.security_id = report.security_id WHERE {where}"
         with self.database.connect(read_only=True) as connection:
@@ -465,6 +477,7 @@ class DataExplorer:
                        security.symbol, security.name, report.report_period_end,
                        report.report_type, report.published_at, report.availability_source,
                        metric.metric_code, metric.metric_value, metric.unit,
+                       metric.source_batch_id AS metric_source_batch_id, report.raw_sha256,
                        metric.quality_status,
                        'local:published_financial_metric' AS serving_source,
                        report.source AS provider_source, report.source_batch_id,

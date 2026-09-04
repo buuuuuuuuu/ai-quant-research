@@ -55,6 +55,8 @@ function stockEvidenceHtml(evidence) {
 }
 function stockRecordHtml(item, section) {
   let links = "";
+  if (item.run_id?.startsWith("factor-backtest-")) links += `<a href="/reports/backtests/${encodeURIComponent(item.run_id)}" target="_blank" rel="noopener">查看原回测报告（组合结果不是单股表现）</a> `;
+  if (item.run_id?.startsWith("factor-lab-")) links += `<a href="/reports/factor-lab/${encodeURIComponent(item.run_id)}" target="_blank" rel="noopener">查看原因子实验报告</a> `;
   const documentId = item.document_id;
   if (documentId) links += `<a href="/api/v1/documents/${encodeURIComponent(documentId)}/file#page=1" target="_blank" rel="noopener">查看本地 PDF（不下载新文件）</a> `;
   if (section === "announcements") links += `<button data-source="announcements" data-record="${escapeHtml(item.record_id)}">公告详情</button> `;

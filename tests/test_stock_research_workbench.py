@@ -53,6 +53,9 @@ def test_readonly_views_no_network_and_identity(service, monkeypatch):
     with pytest.raises(ValueError):
         service.overview("600519' OR 1=1")
     assert service.generate("600519")["snapshot"]["stock"]["symbol"] == "600519"
+    with service.database.connect() as c:
+        c.execute("DELETE FROM managed_stock WHERE security_id='SSE.600519'")
+    assert service.overview("600519")["stock"]["management"]["status"] == "unmanaged"
 
 
 def test_publication_cutoff_not_report_period_and_revisions(service):
@@ -358,3 +361,11 @@ def test_unassociated_invalid_legacy_json_does_not_fabricate_membership(service)
         c.execute("UPDATE operation_task SET spec_json='invalid-json' WHERE task_id=?", [task["task_id"]])
     assert service.section("600519", "research")["items"] == []
     assert any("缺少可靠冻结范围" in note for note in service.overview("600519")["limitations"])
+
+
+def test_historical_report_metric_count_cannot_include_future_metrics(service):
+    with service.database.connect() as c:
+        report_id = c.execute("SELECT report_id FROM financial_report WHERE security_id='SSE.600519' ORDER BY published_at LIMIT 1").fetchone()[0]
+        c.execute("UPDATE financial_metric SET published_at='2025-01-01' WHERE report_id=?", [report_id])
+    rows = service.section("600519", "financial_reports", mode="historical", as_of="2024-02-01")["items"]
+    assert next(row for row in rows if row["record_id"] == report_id)["metric_count"] == 0

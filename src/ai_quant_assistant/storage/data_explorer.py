@@ -367,7 +367,7 @@ class DataExplorer:
                  AND item.announcement_date BETWEEN partition.start_date AND partition.end_date
                 WHERE {where}
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY item.announcement_id ORDER BY partition.updated_at DESC NULLS LAST) = 1
-                ORDER BY item.published_at DESC LIMIT ? OFFSET ?
+                ORDER BY item.published_at DESC, item.announcement_id LIMIT ? OFFSET ?
                 """,
                 [*params, page_size, offset],
             ).fetchdf()
@@ -424,14 +424,15 @@ class DataExplorer:
                 FROM published_financial_report report
                 JOIN security_master security USING (security_id)
                 LEFT JOIN published_financial_metric metric ON metric.report_id = report.report_id
+                  AND (?::TIMESTAMP IS NULL OR metric.published_at < ?::TIMESTAMP)
                 LEFT JOIN financial_sync_partition partition
                   ON partition.batch_id = report.source_batch_id
                  AND partition.security_id = report.security_id
                  AND report.report_period_end BETWEEN partition.start_date AND partition.end_date
                 WHERE {where}
-                GROUP BY ALL ORDER BY report.published_at DESC LIMIT ? OFFSET ?
+                GROUP BY ALL ORDER BY report.published_at DESC, report.report_id LIMIT ? OFFSET ?
                 """,
-                [*params, page_size, offset],
+                [published_before, published_before, *params, page_size, offset],
             ).fetchdf()
         result = self._result(self._records(frame), total, page, page_size)
         result["point_in_time_notice"] = (
@@ -494,7 +495,7 @@ class DataExplorer:
                     PARTITION BY report.report_id, metric.metric_code
                     ORDER BY partition.updated_at DESC NULLS LAST
                 ) = 1
-                ORDER BY report.published_at DESC, metric.metric_code LIMIT ? OFFSET ?
+                ORDER BY report.published_at DESC, report.report_id, metric.metric_code LIMIT ? OFFSET ?
                 """,
                 [*params, page_size, offset],
             ).fetchdf()

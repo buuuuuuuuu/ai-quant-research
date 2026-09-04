@@ -1,5 +1,16 @@
 # A 股本地数据库架构（M0 + M1 + M2 + M3 + M4）
 
+## M9-C 研究就绪与补齐（Schema v15）
+
+ResearchReadiness 统一服务解析实际请求、冻结股票池，按研究信号/筛选时点核验财务和逐股票行情；
+不触发网络，不以 managed_stock.ready 或全局 COUNT/MAX 代替研究覆盖。
+ResearchDataPlans 保存确认范围并复用 MarketDataSyncService、ResearchDatasetSyncService、
+FinancialDataSyncService；不是新同步或研究引擎。管理状态、行情可用性、计划/任务状态相互独立。
+计划串行共用 managed 下载槽，各原同步入口新增数据集级跨进程锁，网络不持有 DuckDB access lock。
+锁序为可选 operation → managed slot → dataset download → DB；备份仍是 operation → DB。
+owner/lease/plan version/摘要/管理 generation 防止旧 worker 发布或覆盖结果。迁移只新增计划表。
+详细规则、PIT 边界和限制见 [研究数据就绪](research-data-readiness.md)。
+
 ## M9-B 本地管理边界（Schema v14）
 
 证券目录仅供身份检索；managed_stock 是明确维护的本地股票清单；stock_pool_member 只引用共享行情。

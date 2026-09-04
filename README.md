@@ -47,7 +47,7 @@ ai-quant-research/
 
 ## A 股本地数据库（M0–M9）
 
-数据平台提供 DuckDB Schema v14、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v15、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -59,7 +59,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有 Schema v1–v13 数据库执行同一命令时会自动升级到 Schema v14，不删除已发布的
+已有 Schema v1–v14 数据库执行同一命令时会自动升级到 Schema v15，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 Schema v10 引入的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。
@@ -505,6 +505,11 @@ curl -X POST http://127.0.0.1:8080/api/v1/research/interim-report-event-study \
 数组代替单个 `symbol`，其余日期、窗口、基准和复权参数与单股票接口一致。
 
 ## 测试与代码检查
+
+M9-C 新增[研究数据就绪与确认式补齐](docs/research-data-readiness.md)：按股票、实际研究时点和指标
+只读预检；冻结股票池 revision 与补齐范围，最多 20 只 active 受管理股票，经明确确认后后台执行。
+行情可用、财务覆盖和研究就绪分开表示；补齐后重新检查，不自动运行研究，不下载 PDF，不扩大定时维护。
+Schema v15 只新增计划表，财务刷新保留原版本和原始证据；参数冲突或未知缺失不伪装为成功。
 
 ```bash
 uv run pytest

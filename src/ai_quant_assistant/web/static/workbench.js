@@ -423,7 +423,7 @@ function labPayload() {
   const factors = $$(".factor-component").filter((row) => row.querySelector(".factor-enabled").checked).map((row) => ({code: row.querySelector(".factor-enabled").value, weight: Number(row.querySelector(".factor-weight").value), direction: row.querySelector(".factor-direction").value}));
   if (!factors.length) throw new Error("请至少选择一个财务因子");
   const parseNumbers = (selector) => $(selector).value.trim().split(/[\s,，]+/).filter(Boolean).map(Number);
-  return {symbols: base.symbols, start_date: base.start_date, end_date: base.end_date, factors, top_n_values: parseNumbers("#lab-top-n"), rebalance_values: $("#lab-rebalances").value.split(" "), commission_bps_values: parseNumbers("#lab-commissions"), quantiles: Number($("#lab-quantiles").value), benchmark_symbol: base.benchmark_symbol, adjustment: base.adjustment, initial_capital: base.initial_capital, slippage_bps: base.slippage_bps, stamp_duty_bps: base.stamp_duty_bps, lot_size: base.lot_size, training_fraction: Number($("#lab-training").value), validation_fraction: Number($("#lab-validation").value), universe_mode: $("#lab-universe-mode").value, universe_benchmark: base.benchmark_symbol, industry_neutralization: $("#lab-industry-neutralization").value, max_industry_weight: Number($("#lab-max-industry-weight").value), require_verified_industry: $("#lab-require-verified").value === "true"};
+  return {...(base.stock_pool_id ? {stock_pool_id:base.stock_pool_id,stock_pool_revision:base.stock_pool_revision} : {symbols:base.symbols}), start_date: base.start_date, end_date: base.end_date, factors, top_n_values: parseNumbers("#lab-top-n"), rebalance_values: $("#lab-rebalances").value.split(" "), commission_bps_values: parseNumbers("#lab-commissions"), quantiles: Number($("#lab-quantiles").value), benchmark_symbol: base.benchmark_symbol, adjustment: base.adjustment, initial_capital: base.initial_capital, slippage_bps: base.slippage_bps, stamp_duty_bps: base.stamp_duty_bps, lot_size: base.lot_size, training_fraction: Number($("#lab-training").value), validation_fraction: Number($("#lab-validation").value), universe_mode: $("#lab-universe-mode").value, universe_benchmark: base.benchmark_symbol, industry_neutralization: $("#lab-industry-neutralization").value, max_industry_weight: Number($("#lab-max-industry-weight").value), require_verified_industry: $("#lab-require-verified").value === "true"};
 }
 
 function labTable(columns, rows) {
@@ -503,7 +503,7 @@ async function loadCopilotConversation(conversationId) {
 
 function preflightHtml(preflight) {
   if (!preflight || !preflight.checks) return '<p class="negative">没有可用预检结果</p>';
-  const rows = preflight.checks.map((check) => operationRow(`${check.status === "passed" ? "通过" : "缺失"} · ${check.dataset}`, check.rows != null ? `${formatNumber(check.rows)} 行` : check.available != null ? `${check.available}/${check.requested} 项` : check.history_mode || "已检查", check.status !== "passed"));
+  const rows = preflight.checks.map((check) => operationRow(`${check.satisfied || check.status === "passed" ? "通过" : "缺失/未知"} · ${check.symbol || ""} ${check.dataset} ${check.metric || ""}`, check.reason || (check.rows != null ? `${formatNumber(check.rows)} 行` : check.history_mode || "已检查"), !(check.satisfied || check.status === "passed")));
   (preflight.blockers || []).forEach((item) => rows.push(operationRow("阻断原因", item, true)));
   return rows.join("");
 }

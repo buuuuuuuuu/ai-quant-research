@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 source_dir="${1:-/root/code/ai-quant-research}"
 branch="${2:-main}"
-expected_schema_version="${3:-14}"
+expected_schema_version="${3:-15}"
 remote="${AI_QUANT_GIT_REMOTE:-origin}"
 app_dir="${AI_QUANT_APP_DIR:-/opt/ai-quant/app}"
 state_dir="${AI_QUANT_STATE_DIR:-/var/lib/ai-quant}"

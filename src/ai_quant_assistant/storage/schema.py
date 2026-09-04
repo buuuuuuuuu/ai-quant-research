@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 @dataclass(frozen=True, slots=True)
@@ -1295,6 +1295,28 @@ MIGRATIONS = (
             "CREATE INDEX managed_stock_status_idx ON managed_stock(status, auto_update)",
         ),
         handler=_migrate_managed_stocks_v14,
+    ),
+    Migration(
+        version=15,
+        name="confirmed_research_data_plans",
+        statements=(
+            """CREATE TABLE research_data_plan (
+                plan_id VARCHAR PRIMARY KEY,
+                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+                input_sha256 VARCHAR NOT NULL,
+                input_json VARCHAR NOT NULL,
+                items_json VARCHAR NOT NULL,
+                report_json VARCHAR NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'draft'
+                    CHECK(status IN ('draft','confirmed','succeeded','failed')),
+                actor VARCHAR NOT NULL,
+                confirmed_by VARCHAR,
+                confirmed_at TIMESTAMPTZ,
+                last_task_id VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""",
+        ),
     ),
 )
 

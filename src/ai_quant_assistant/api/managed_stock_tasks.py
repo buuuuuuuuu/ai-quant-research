@@ -39,8 +39,9 @@ class ManagedStockTaskManager:
             with self.service.database.connect(read_only=True) as connection:
                 row = connection.execute(
                     """SELECT task_id FROM operation_task WHERE status='queued'
-                       AND json_extract_string(spec_json, '$.dataset')='managed_stock'
-                       ORDER BY created_at LIMIT 1"""
+                       AND json_extract_string(spec_json, '$.dataset')=?
+                       ORDER BY created_at LIMIT 1""",
+                    [getattr(self.service, "dataset", "managed_stock")],
                 ).fetchone()
             if row:
                 self.inflight.add(row[0])

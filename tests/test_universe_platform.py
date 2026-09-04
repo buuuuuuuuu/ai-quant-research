@@ -117,8 +117,8 @@ def test_v6_catalog_migrates_to_v7_preserving_operation_tasks(tmp_path) -> None:
         )
     result = database.initialize()
     status = database.status()
-    assert result["applied_migrations"] == [7, 8, 9, 10, 11, 12, 13, 14]
-    assert status["schema_version"] == SCHEMA_VERSION == 14
+    assert result["applied_migrations"] == [7, 8, 9, 10, 11, 12, 13, 14, 15]
+    assert status["schema_version"] == SCHEMA_VERSION == 15
     assert status["relations"]["operation_task"] == 1
     assert status["relations"]["security_industry_history"] == 0
     assert status["relations"]["index_constituent_history"] == 0

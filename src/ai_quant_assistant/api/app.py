@@ -27,6 +27,7 @@ from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
 from ai_quant_assistant.api.managed_stock_routes import managed_stock_router
 from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
+from ai_quant_assistant.api.research_data_routes import research_data_router
 from ai_quant_assistant.api.run_repository import BacktestRunRepository, FactorLabRunRepository
 from ai_quant_assistant.api.schemas import (
     BackupPruneRequest,
@@ -92,6 +93,7 @@ from ai_quant_assistant.storage.operations import (
     IncrementalSyncService,
     OperationsDashboard,
 )
+from ai_quant_assistant.storage.research_data_plans import ResearchDataPlans
 from ai_quant_assistant.storage.security_master_refresh import SecurityMasterRefreshService
 from ai_quant_assistant.storage.stock_pools import StockPoolConflictError, StockPoolService
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
@@ -154,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     stock_pools = StockPoolService(database)
     managed_stock_tasks = ManagedStockTaskManager(ManagedStockService(database, resolved_settings))
+    research_data_tasks = ManagedStockTaskManager(ResearchDataPlans(database, resolved_settings))
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,
@@ -221,15 +224,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     asset_version = hashlib.sha256(
         b"".join(
             (web_root / "static" / name).read_bytes()
-            for name in ("workbench.js", "managed-stocks.js", "workbench.css", "stock-pools.css")
+            for name in ("workbench.js", "managed-stocks.js", "research-data.js", "workbench.css", "stock-pools.css")
         )
     ).hexdigest()[:16]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         managed_stock_tasks.start()
+        research_data_tasks.start()
         yield
         managed_stock_tasks.shutdown()
+        research_data_tasks.shutdown()
         task_manager.shutdown()
         factor_lab_manager.shutdown()
         copilot_tasks.shutdown()
@@ -269,6 +274,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_event_tasks = document_event_tasks
     app.state.stock_pools = stock_pools
     app.state.managed_stock_tasks = managed_stock_tasks
+    app.state.research_data_tasks = research_data_tasks
+    app.include_router(research_data_router(research_data_tasks, resolved_settings.web_username, copilot_repository))
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
@@ -995,9 +1002,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def screen_preflight(request: PointInTimeScreenRequest) -> dict[str, Any]:
         try:
             symbols, context = resolve_stock_selection(request)
-            return screener.preflight(
+            result = screener.preflight(
                 request.to_spec(resolved_symbols=symbols, stock_pool=context)
             )
+            result["research_data"] = research_data_tasks.service.readiness.run(
+                "screen", request.model_dump(mode="json")
+            )
+            return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="stock pool not found") from exc
         except (ValueError, TypeError) as exc:

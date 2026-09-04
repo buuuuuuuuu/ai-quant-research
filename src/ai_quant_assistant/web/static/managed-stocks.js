@@ -39,6 +39,9 @@ async function addManagedStock(event) {
 }
 
 async function managedAction(asset, action) {
+  if (action === "financial") {
+    return openResearchReadiness("screen", {symbols: [asset.symbol], as_of: managedToday(), conditions: [{field: "roe", operator: "gte", value: 0}], missing_policy: "show"});
+  }
   if (action === "references") {
     try {
       const pools = await requestJson(`/api/v1/data/managed-stocks/${encodeURIComponent(asset.security_id)}/references`);
@@ -69,10 +72,12 @@ function managedRows(items) {
     const issues = [...(asset.coverage.issues || []), ...(task?.error ? [task.error] : [])];
     const announcement = asset.coverage.announcement_sync;
     const announcementText = announcement ? `定期公告：${announcement.status === "published" ? "已同步" : "未完整完成"} · ${announcement.row_count ?? "—"} 条 · ${announcement.start_date} → ${announcement.end_date}` : "定期公告：尚无同步记录";
-    const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", "configure", "archive", "prices", "references"];
-    const labels = {restore: "恢复管理", sync: "补齐 / 更新 / 重试", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
+    const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", "financial", "configure", "archive", "prices", "references"];
+    const labels = {restore: "恢复管理", financial: "财务预检 / 补齐计划", sync: "补齐 / 更新 / 重试", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
     const progress = task && task.status !== "failed" ? ` ${escapeHtml(task.progress)}%` : "";
-    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
+    const financial = asset.financial_summary;
+    const financialText = financial ? `财务：${financial.reports} 份报告 / ${financial.metrics} 项指标；最近公开 ${financial.latest_published_at || "—"}（不等于研究就绪）` : "财务：尚未核验";
+    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(financialText)}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
   }).join("");
 }
 

@@ -65,7 +65,7 @@
             <p id="copilot-rationale" class="muted"></p>
             <div class="copilot-plan-columns"><div><h4>结构化参数</h4><pre id="copilot-spec"></pre></div><div><h4>数据覆盖预检</h4><div id="copilot-preflight"></div></div></div>
             <div id="copilot-warnings" class="copilot-warnings"></div>
-            <div class="copilot-actions"><button id="copilot-refresh" class="secondary-button" type="button">重新预检</button><button id="copilot-confirm" class="secondary-button" type="button">确认此计划</button><button id="copilot-execute" class="primary-button" type="button" disabled><span>执行已确认计划</span><b>↗</b></button></div>
+            <div class="copilot-actions"><button id="copilot-refresh" class="secondary-button" type="button">重新预检</button><button id="copilot-data-plan" class="secondary-button" type="button">查看数据补齐计划</button><button id="copilot-confirm" class="secondary-button" type="button">确认此研究计划</button><button id="copilot-execute" class="primary-button" type="button" disabled><span>执行已确认计划</span><b>↗</b></button></div>
             <div id="copilot-task" class="copilot-task" hidden><div><span id="copilot-task-message"></span><strong id="copilot-task-progress">0%</strong></div><div class="progress-track"><i id="copilot-task-bar"></i></div></div>
             <div id="copilot-explanation" class="copilot-explanation" hidden></div>
           </article>
@@ -340,10 +340,26 @@
         <div class="table-shell"><table><thead id="detail-head"></thead><tbody id="detail-body"></tbody></table></div>
       </article>
     </section>
+    <section id="research-data-panel" class="panel" aria-label="研究数据就绪与补齐">
+      <h2>研究数据就绪与确认式补齐</h2>
+      <p>行情可用不等于研究就绪。请从研究表单或本地股票的财务预检入口检查当前参数；补齐确认与研究执行确认独立，补齐不会自动运行研究。</p>
+      <p id="research-data-error" class="negative" aria-live="polite"></p>
+      <details><summary>冻结研究参数、股票池 revision 与范围</summary><pre id="research-data-input"></pre></details>
+      <div id="research-data-report"></div>
+      <button id="research-data-create" type="button" disabled>查看补齐计划（不下载）</button>
+      <div id="research-data-plan"></div>
+      <button id="research-data-confirm" type="button" disabled>确认补齐</button>
+      <button id="research-data-retry" type="button" disabled>确认重试失败项</button>
+      <button id="research-data-refresh" type="button" disabled>查看任务</button>
+      <button id="research-data-recheck" type="button" disabled>重新检查冻结参数</button>
+      <button id="research-data-history" type="button">历史补齐计划</button>
+      <div id="research-data-history-list"></div>
+    </section>
   </main>
 
   <footer><span>澄明 A 股研究工作台 · v{{ version }}</span><span>仅供量化研究，不构成投资建议</span></footer>
   <script src="/assets/workbench.js?v={{ asset_version }}" defer></script>
   <script src="/assets/managed-stocks.js?v={{ asset_version }}" defer></script>
+  <script src="/assets/research-data.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

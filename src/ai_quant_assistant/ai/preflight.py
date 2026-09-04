@@ -40,6 +40,20 @@ class CoveragePreflight:
         self.database = database
 
     def run(self, tool_name: str, spec: dict[str, Any]) -> dict[str, Any]:
+        if tool_name in {"run_factor_backtest", "run_factor_lab"}:
+            from ai_quant_assistant.research.readiness import ResearchReadiness
+
+            readiness = ResearchReadiness(self.database)
+            parameters = {key: value for key, value in spec.items() if key not in {"_stock_pool_context", "stock_pool"}}
+            context = spec.get("_stock_pool_context") or spec.get("stock_pool")
+            if context:
+                parameters.pop("stock_pool_id", None)
+                parameters.pop("stock_pool_revision", None)
+                parameters["symbols"] = context["resolved_symbols"]
+            frozen = readiness.freeze(tool_name.removeprefix("run_"), parameters)
+            if context:
+                frozen["stock_pool"] = context
+            return readiness.check(frozen)
         required = list(RESEARCH_TOOLS[tool_name].required_datasets)
         checks: list[dict[str, Any]] = []
         blockers: list[str] = []

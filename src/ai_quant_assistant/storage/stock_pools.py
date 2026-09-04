@@ -62,8 +62,9 @@ class StockPoolService:
         with self.database.connect(read_only=True) as connection:
             return self._get(connection, pool_id, revision=revision)
 
-    def resolve(self, pool_id: str | None = None, *, revision: int | None = None) -> dict[str, Any]:
-        self.database.initialize()
+    def resolve(self, pool_id: str | None = None, *, revision: int | None = None, initialize: bool = True) -> dict[str, Any]:
+        if initialize:
+            self.database.initialize()
         with self.database.connect(read_only=True) as connection:
             if pool_id is None:
                 row = connection.execute(

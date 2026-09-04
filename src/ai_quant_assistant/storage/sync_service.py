@@ -20,6 +20,7 @@ from ai_quant_assistant.providers.normalization import (
 )
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.locks import serialized_download
 from ai_quant_assistant.storage.quality import evaluate_daily_bars, has_blocking_failure
 from ai_quant_assistant.storage.sync_repository import SyncRepository
 
@@ -108,6 +109,7 @@ class MarketDataSyncService:
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
         return target, digest
 
+    @serialized_download("daily_bar")
     def run(self, spec: DataSyncSpec) -> dict[str, Any]:
         self.database.initialize()
         batch_id, resumed, previous_status = self.repository.begin_batch(

@@ -1,4 +1,22 @@
-# A 股本地数据库数据字典（Schema v14）
+# A 股本地数据库数据字典（Schema v15）
+
+## research_data_plan（v15）
+
+| 字段 | 含义 |
+| --- | --- |
+| plan_id / version | 计划主键与不可变版本（首期 1，改范围需新计划） |
+| input_json / input_sha256 | 规范化研究参数、冻结池 revision/实际代码、代码摘要、补齐项及管理 generation；SHA-256 绑定确认 |
+| items_json | 各股票/数据类型/范围、工作量、状态和最近 10 次尝试摘要；完整批次仍保留在 sync_batch |
+| report_json | 初始及执行后统一预检，逐股票缺指标/日期/时点摘要 |
+| status | draft / confirmed / succeeded / failed；不是行情 availability |
+| actor / confirmed_by / confirmed_at | 创建人与明确确认记录 |
+| last_task_id | operation_task；sync 类型，spec.dataset=research_data_plan |
+| created_at / updated_at | UTC 时间戳 |
+
+任务 spec 保存 plan_id/version/input_sha256/management/actor；claim 为计划版本，owner/heartbeat/租约与
+管理 generation 联合 fencing。确认、任务、审计原子提交；任务终态、计划报告及审计同事务。
+已有任务状态机不变，部分完成通过 items/report 表达，不能冒充 succeeded。
+迁移只新增空表，不改历史数据。财务同公开身份内容冲突明确拒绝，不覆写指标或原始血缘。
 
 ## managed_stock（v14）
 

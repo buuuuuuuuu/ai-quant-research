@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -13,6 +15,7 @@ from ai_quant_assistant.providers.base import FinancialDataProvider
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS, security_id_for_symbol
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
+from ai_quant_assistant.storage.locks import serialized_download
 from ai_quant_assistant.storage.quality import DataQualityCheck, has_blocking_failure
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_repository import _db_value
@@ -28,12 +31,18 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
         layout: DataLayout,
         provider: FinancialDataProvider,
         rate_limit_seconds: float = 0.2,
+        raw_namespace: str | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+        require_provider_publication: bool = False,
     ) -> None:
+        self.require_provider_publication = require_provider_publication
         super().__init__(
             database=database,
             layout=layout,
             provider=provider,
             rate_limit_seconds=rate_limit_seconds,
+            raw_namespace=raw_namespace,
+            progress_callback=progress_callback,
         )
 
     def _plan_financial_partitions(self, batch_id: str, spec: FinancialSyncSpec) -> None:
@@ -125,11 +134,25 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
             return result
         result = frame.copy()
         result["published_at"] = pd.to_datetime(result["published_at"], errors="coerce")
+        if self.require_provider_publication:
+            # Date-only upstream notices do not prove pre-open availability.
+            # Conservatively defer midnight timestamps to the end of that day.
+            date_only = result["published_at"].notna() & result["published_at"].eq(
+                result["published_at"].dt.normalize()
+            )
+            result.loc[date_only, "published_at"] = result.loc[date_only, "published_at"].map(
+                lambda stamp: stamp.replace(hour=23, minute=59, second=59, microsecond=999999)
+            )
         result["availability_source"] = result["published_at"].map(
             lambda value: "provider_notice" if pd.notna(value) else ""
         )
         missing = result["published_at"].isna()
         if not missing.any():
+            return result
+        if self.require_provider_publication:
+            # A current financial value plus an old announcement does not prove
+            # that this version of the value was available at that old timestamp.
+            result.loc[missing, "availability_source"] = "unverified_financial_version"
             return result
 
         with self.database.connect(read_only=True) as connection:
@@ -140,6 +163,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                 WHERE security_id = ?
                   AND report_period_end BETWEEN ? AND ?
                 GROUP BY report_period_end, report_type
+                HAVING COUNT(*) = 1
                 """,
                 [partition["security_id"], partition["start_date"], partition["end_date"]],
             ).fetchdf()
@@ -212,7 +236,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                 missing_availability == 0,
                 str(missing_availability),
                 "0",
-                "a provider notice date or matching published report announcement is required",
+                "verified financial-version publication time required; current values cannot be backdated from announcement metadata alone",
             ),
             DataQualityCheck(
                 "financial_publication_after_period",
@@ -285,6 +309,25 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
         with self.database.connect() as connection:
             connection.execute("BEGIN TRANSACTION")
             try:
+                # A refresh is not a new publication. Never rewrite the facts or
+                # their original lineage under an already published identity.
+                for report in report_rows:
+                    old = connection.execute(
+                        "SELECT report_type FROM financial_report WHERE report_id=?",
+                        [report[0]],
+                    ).fetchone()
+                    if old is None:
+                        continue
+                    previous = dict(connection.execute(
+                        "SELECT metric_code, metric_value FROM financial_metric WHERE report_id=?",
+                        [report[0]],
+                    ).fetchall())
+                    incoming = {row[4]: row[5] for row in metric_rows if row[0] == report[0]}
+                    if old[0] != report[3] or previous != incoming:
+                        raise ValueError(
+                            f"financial version conflict: {report[0]}; changed facts require "
+                            "a separately verified publication time; historical version retained"
+                        )
                 if report_rows:
                     connection.executemany(
                         """
@@ -293,13 +336,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                             published_at, availability_source, source,
                             source_batch_id, raw_sha256
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (report_id) DO UPDATE SET
-                            availability_source = EXCLUDED.availability_source,
-                            source = EXCLUDED.source,
-                            source_batch_id = EXCLUDED.source_batch_id,
-                            raw_sha256 = EXCLUDED.raw_sha256,
-                            quality_status = 'published',
-                            observed_at = now()
+                        ON CONFLICT (report_id) DO NOTHING
                         """,
                         report_rows,
                     )
@@ -310,11 +347,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                             report_id, security_id, report_period_end, published_at,
                             metric_code, metric_value, unit, source_batch_id
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (report_id, metric_code) DO UPDATE SET
-                            metric_value = EXCLUDED.metric_value,
-                            unit = EXCLUDED.unit,
-                            source_batch_id = EXCLUDED.source_batch_id,
-                            quality_status = 'published'
+                        ON CONFLICT (report_id, metric_code) DO NOTHING
                         """,
                         metric_rows,
                     )
@@ -417,10 +450,14 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
             )
         return self._financial_batch_summary(batch_id)
 
+    @serialized_download("financial_metric")
     def run(self, spec: FinancialSyncSpec) -> dict[str, Any]:
         self.database.initialize()
+        request = spec.request_dict()
+        if self.require_provider_publication:
+            request = {**request, "publication_policy": "provider-version-required"}
         batch_id, resumed, previous_status = self._begin_batch(
-            "financial_metric", spec.request_dict(), resume=spec.resume
+            "financial_metric", request, resume=spec.resume
         )
         if resumed and previous_status == "published":
             return {
@@ -441,6 +478,8 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
         cached_frames: dict[str, pd.DataFrame] = {}
         errors: list[dict[str, str]] = []
         pending = self._pending_financial_partitions(batch_id)
+        # Even a retry of one batch gets a new immutable raw evidence namespace.
+        self.raw_namespace = f"{batch_id}-{uuid4().hex}"
         logger.info("sync financial batch %s: %s pending partitions", batch_id, len(pending))
         for index, partition in enumerate(pending, start=1):
             logger.info(
@@ -459,6 +498,8 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                         symbol, spec.start_date, spec.end_date
                     )
                 all_reports = cached_frames[symbol]
+                if all_reports.attrs.get("cache_status") == "stale_fallback":
+                    raise ValueError("financial refresh failed: stale cache is not fresh evidence")
                 periods = pd.to_datetime(all_reports["report_period_end"], errors="coerce").dt.date
                 selected = all_reports.loc[
                     (periods >= partition["start_date"]) & (periods <= partition["end_date"])
@@ -491,6 +532,8 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                     batch_id, partition["partition_key"], "failed", error=str(exc)
                 )
                 errors.append({"partition_key": partition["partition_key"], "error": str(exc)})
+            if self.progress_callback is not None:
+                self.progress_callback(index, len(pending))
             if self.rate_limit_seconds:
                 time.sleep(self.rate_limit_seconds)
 

@@ -19,7 +19,7 @@ function invalidateStock() {
   $("#stock-generate").disabled = true;
   for (const id of ["stock-overview","stock-section","stock-evidence","stock-summaries","stock-summary","stock-pagination"]) $("#"+id).innerHTML = "";
   $("#stock-prev").disabled = true; $("#stock-next").disabled = true;
-  if (typeof beginResearchDataContext === "function") beginResearchDataContext();
+  if (typeof beginResearchDataContext === "function") beginResearchDataContext({scroll:false});
   stockError("");
   return stockState.generation;
 }
@@ -153,7 +153,7 @@ function bindStockWorkbench() {
   $("#stock-tabs").querySelectorAll("[data-section]").forEach(button => button.addEventListener("click", () => {stockState.section=button.dataset.section;stockState.page=1;loadStockSection();}));
   $("#stock-prev").addEventListener("click", () => {stockState.page--;loadStockSection();});
   $("#stock-next").addEventListener("click", () => {stockState.page++;loadStockSection();});
-  $("#stock-prepare").addEventListener("input", () => {beginResearchDataContext();updateStockResearchLink();});
+  $("#stock-prepare").addEventListener("input", () => {beginResearchDataContext({scroll:false});updateStockResearchLink();});
   $("#stock-prepare").addEventListener("submit", event => {event.preventDefault();openResearchReadiness($("#stock-research-type").value, () => stockPrepareInput().parameters);});
   $("#stock-generate").addEventListener("click", generateStockSummary);
   $("#stock-summaries-refresh").addEventListener("click", loadStockSummaries);

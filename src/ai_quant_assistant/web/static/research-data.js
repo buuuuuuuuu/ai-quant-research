@@ -17,7 +17,7 @@ function updateResearchDataControls() {
   $("#research-data-recheck").disabled = waiting || !hasPlan;
 }
 
-function beginResearchDataContext() {
+function beginResearchDataContext({scroll = true} = {}) {
   const generation = ++researchDataState.generation;
   clearTimeout(researchDataState.timer);
   researchDataState.request = null;
@@ -29,7 +29,7 @@ function beginResearchDataContext() {
   $("#research-data-plan").textContent = "尚未创建补齐计划；检查本地数据不会联网。";
   $("#research-data-input").textContent = "";
   $("#research-data-panel").hidden = false;
-  $("#research-data-panel").scrollIntoView({behavior:"smooth"});
+  if (scroll) $("#research-data-panel").scrollIntoView({behavior:"smooth"});
   researchDataError("");
   updateResearchDataControls();
   return generation;

@@ -480,6 +480,17 @@ def test_api_cli_confirmation_and_no_browser_scope_override(db, tmp_path, monkey
     with TestClient(create_app(_settings(tmp_path))) as client:
         manager = client.app.state.research_data_tasks
         monkeypatch.setattr(manager, "dispatch", lambda: None)
+        with db.connect(read_only=True) as connection:
+            before = connection.execute("SELECT COUNT(*) FROM research_data_plan").fetchone()[0]
+        for endpoint in ("preflight", "plans"):
+            rejected = client.post(
+                f"/api/v1/research-data/{endpoint}",
+                json={"research_type": "factor_backtest", "parameters": {**PARAMETERS, "symbols": []}},
+            )
+            assert rejected.status_code == 422
+            assert rejected.json()["detail"][0]["loc"][-1] == "symbols"
+        with db.connect(read_only=True) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM research_data_plan").fetchone()[0] == before
         preflight = client.post(
             "/api/v1/research-data/preflight",
             json={"research_type": "screen", "parameters": SCREEN},
@@ -500,6 +511,9 @@ def test_api_cli_confirmation_and_no_browser_scope_override(db, tmp_path, monkey
         assert client.get("/api/v1/research-data/plans/missing").status_code == 404
         assert client.get("/").status_code == 200
         assert "research-data.js" in client.get("/").text
+        html = client.get("/").text
+        for action in ("create", "confirm", "retry", "refresh", "recheck"):
+            assert f'id="research-data-{action}" type="button" disabled' in html
     monkeypatch.setattr(
         sys,
         "argv",

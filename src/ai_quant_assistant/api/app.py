@@ -224,7 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     asset_version = hashlib.sha256(
         b"".join(
             (web_root / "static" / name).read_bytes()
-            for name in ("workbench.js", "managed-stocks.js", "research-data.js", "workbench.css", "stock-pools.css")
+            for name in ("workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js", "stock-research.css", "workbench.css", "stock-pools.css")
         )
     ).hexdigest()[:16]
 
@@ -277,6 +277,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.research_data_tasks = research_data_tasks
     app.include_router(research_data_router(research_data_tasks, resolved_settings.web_username, copilot_repository))
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
+    from ai_quant_assistant.api.stock_research_routes import stock_research_router
+    from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench
+    app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -1562,6 +1565,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             provider=provider,
             artifact_dir=resolved_settings.artifact_dir,
             duckdb_path=resolved_settings.duckdb_path,
+            database=database,
         )
         try:
             return service.run(request.to_spec()).api_payload()

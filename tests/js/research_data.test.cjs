@@ -35,6 +35,17 @@ function assertDisabled(h) {
   for (const action of ["create","confirm","retry","refresh","recheck"]) assert.equal(h.element(`#research-data-${action}`).disabled,true, action);
 }
 
+test("stock navigation can invalidate a plan without scrolling away from the overview", () => {
+  const h = harness(() => assert.fail("no network"));
+  let scrolls = 0;
+  h.element("#research-data-panel").scrollIntoView = () => {scrolls++;};
+  h.context.beginResearchDataContext({scroll:false});
+  assert.equal(scrolls,0);
+  h.context.beginResearchDataContext();
+  assert.equal(scrolls,1);
+  assertDisabled(h);
+});
+
 test("preflight and plan preview never confirm or start research", async () => {
   const h = harness(url => url.endsWith("preflight") ? report : plan);
   await h.context.openResearchReadiness("screen", {symbols:["600519"],as_of:"2024-08-30"});

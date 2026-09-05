@@ -20,12 +20,14 @@ class InterimReportResearchService:
         provider: MarketDataProvider,
         artifact_dir: Path,
         duckdb_path: Path | None = None,
+        database=None,
     ) -> None:
         self.provider = provider
+        self.database = database
         self.artifact_dir = artifact_dir
         self.engine = EventStudyEngine()
         self.report_writer = ReportWriter()
-        self.catalog = DuckDBCatalog(duckdb_path) if duckdb_path else None
+        self.catalog = DuckDBCatalog(duckdb_path, database=database) if duckdb_path else None
 
     @staticmethod
     def _run_id() -> str:
@@ -85,6 +87,9 @@ class InterimReportResearchService:
                 "artifacts": {name: str(path) for name, path in artifacts.items()},
             }
             write_json(manifest_path, manifest)
+            if self.database is not None:
+                from ai_quant_assistant.storage.research_run_index import register_run
+                register_run(self.database, "event_study", {**manifest, "summary": result.summary.to_dict(orient="records")})
             return RunOutput(
                 run_id=run_id,
                 run_dir=run_dir,
@@ -106,4 +111,3 @@ class InterimReportResearchService:
                 },
             )
             raise
-

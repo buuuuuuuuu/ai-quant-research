@@ -1106,15 +1106,12 @@ def main() -> None:
             if args.source == "local"
             else akshare_provider
         )
+    database = (
+        LocalDatabase(path=settings.duckdb_path, layout=DataLayout.from_root(settings.data_dir))
+        if args.source == "local" and settings.duckdb_path.is_file()
+        else None
+    )
     if args.command == "batch-event-study":
-        database = (
-            LocalDatabase(
-                path=settings.duckdb_path,
-                layout=DataLayout.from_root(settings.data_dir),
-            )
-            if args.source == "local" and settings.duckdb_path.is_file()
-            else None
-        )
         batch_service = BatchInterimReportResearchService(
             provider=provider,
             artifact_dir=artifact_dir,
@@ -1158,6 +1155,7 @@ def main() -> None:
         provider=provider,
         artifact_dir=artifact_dir,
         duckdb_path=settings.duckdb_path,
+        database=database,
     )
     output = service.run(spec)
     print(json.dumps(output.api_payload(), ensure_ascii=False, indent=2, default=str))

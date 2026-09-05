@@ -56,7 +56,7 @@ def test_current_schema_archive_is_checksum_verified_idempotent_and_versioned(tm
     repeated = service.archive_bytes("announcement-600519-2023", PDF_A)
     revised = service.archive_bytes("announcement-600519-2023", PDF_B)
 
-    assert database.status()["schema_version"] == SCHEMA_VERSION == 15
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 16
     assert first["document_id"] == repeated["document_id"]
     assert first["version_no"] == 1
     assert revised["version_no"] == 2
@@ -105,9 +105,9 @@ def test_schema_v10_to_current_preserves_documents_and_tasks_idempotently(tmp_pa
     first = database.initialize()
     second = database.initialize()
 
-    assert first["applied_migrations"] == [11, 12, 13, 14, 15]
+    assert first["applied_migrations"] == [11, 12, 13, 14, 15, 16]
     assert second["applied_migrations"] == []
-    assert database.status()["schema_version"] == SCHEMA_VERSION == 15
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 16
     with database.connect(read_only=True) as connection:
         assert connection.execute(
             "SELECT document_id, version_no FROM announcement_document"

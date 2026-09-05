@@ -53,3 +53,6 @@ jobs:
 
       - name: Build Python wheel
         run: uv build --wheel
+
+      - name: Verify wheel stock workbench contents
+        run: uv run python deploy/scripts/check-wheel-contents.py

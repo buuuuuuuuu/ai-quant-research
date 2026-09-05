@@ -1,5 +1,13 @@
 # 平台部署与自动化运维（M4-A + M4-B）
 
+## M10-A 升级（Schema v16）
+
+按原停写/备份验证流程保存 v15 备份，再升级代码并由服务用户从应用目录执行 `ai-quant data init`。
+`data status` 当前/预期应为 16，含 stock_research_summary、stock_research_run；迁移不联网、不改旧表。
+摘要及 HTML 同存 DuckDB，备份一起捕获，无新增产物目录；升级后再备份并验证。
+回退前保全升级后数据，使用已验证备份，不让旧程序直接操作新 Schema。
+定时维护、监听与安全配置不变。本阶段开发流程不连接生产服务器。见 [M10-A 运维边界](stock-research-workbench.md)。
+
 ## 当前 M9-C 升级与维护（Schema v15）
 
 按既有停写/备份验证流程升级，应用目录内以服务用户执行 `ai-quant data init`；当前/预期版本均应为 15。

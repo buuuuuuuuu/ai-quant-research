@@ -68,6 +68,8 @@ CORE_RELATIONS = (
     "stock_pool_revision",
     "managed_stock",
     "research_data_plan",
+    "stock_research_summary",
+    "stock_research_run",
 )
 
 DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0

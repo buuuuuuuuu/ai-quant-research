@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ symbol }} · 个股研究工作台</title>
+<link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
+<link rel="stylesheet" href="/assets/stock-research.css?v={{ asset_version }}"></head>
+<body data-stock-symbol="{{ symbol }}">
+<header><a href="/">澄明 · 研究工作台</a> <a href="/#data-explorer">数据浏览与本地管理</a><span>{{ username }}</span></header>
+<main>
+<h1 id="stock-title">{{ symbol }} · 个股研究</h1>
+<p>只展示本地资料。打开页面、切换标签、生成摘要都不联网，不会自动运行研究。</p>
+<form id="stock-context" class="panel">
+<label>股票代码 <input id="stock-symbol" pattern="[0-9]{6}" maxlength="6" value="{{ symbol }}" required></label>
+<label>模式 <select id="stock-mode"><option value="current">当前本地资料浏览</option><option value="historical">历史 as_of 研究视图</option></select></label>
+<label>历史截至日 <input id="stock-as-of" type="date" disabled></label>
+<label>行情开始日期 <input id="stock-start" type="date" value="2012-01-01" required></label>
+<label>复权 <select id="stock-adjustment"><option value="qfq">前复权 qfq</option><option value="none">不复权 none</option><option value="hfq">后复权 hfq</option></select></label>
+<button type="submit">查看 / 刷新本地资料</button>
+</form>
+<p id="stock-error" class="negative" role="alert"></p>
+<section id="stock-overview" class="panel" aria-label="个股概览"></section>
+<section class="panel"><h2>资料与历史研究</h2>
+<nav id="stock-tabs" aria-label="资料区域">
+<button type="button" data-section="prices">行情</button><button type="button" data-section="financial_metrics">财务指标</button><button type="button" data-section="financial_reports">财报版本</button>
+<button type="button" data-section="announcements">公告</button><button type="button" data-section="documents">本地文档</button><button type="button" data-section="events">结构化事件</button><button type="button" data-section="research">已有研究</button></nav>
+<div id="stock-section"></div><button id="stock-prev" type="button">上一页</button> <span id="stock-pagination"></span> <button id="stock-next" type="button">下一页</button>
+<article id="stock-evidence" aria-label="原文证据"></article></section>
+<section class="panel"><h2>准备研究</h2>
+<p>先设置真实参数，再预检。单股回测 top_n 固定为 1；因子实验需选择至少两只股票的合格股票池。补齐与研究执行分别确认。</p>
+<form id="stock-prepare">
+<label>研究类型 <select id="stock-research-type"><option value="screen">财务指标检查 / 条件选股</option><option value="factor_backtest">财务因子回测</option></select></label>
+<label>研究开始日 <input type="date" id="stock-research-start" value="2024-01-01" required></label>
+<label>研究结束日 / as_of <input type="date" id="stock-research-end" required></label>
+<label>财务指标 <select id="stock-metric"><option value="roe">ROE</option><option value="revenue">营收</option><option value="net_profit">净利润</option></select></label>
+<label>基准 <input id="stock-benchmark" value="csi000300" maxlength="20" required></label>
+<button type="submit">只读预检 / 查看缺口</button>
+</form>
+<a id="stock-backtest-link" href="/#backtest">前往回测表单（不执行）</a> · <a href="/#factor-lab">前往因子实验并选择股票池</a>
+</section>
+<section id="research-data-panel" class="panel" aria-label="研究数据就绪与补齐">
+<h2>研究数据就绪与确认式补齐</h2><p>确认补齐只下载计划列出的数据，不会自动运行研究。</p>
+<p id="research-data-error" class="negative" aria-live="polite"></p>
+<details><summary>冻结参数与范围</summary><pre id="research-data-input"></pre></details>
+<div id="research-data-report"></div><button id="research-data-create" type="button" disabled>查看补齐计划（不下载）</button><div id="research-data-plan"></div>
+<button id="research-data-confirm" type="button" disabled>确认补齐</button><button id="research-data-retry" type="button" disabled>确认重试失败项</button>
+<button id="research-data-refresh" type="button" disabled>查看任务</button><button id="research-data-recheck" type="button" disabled>重新检查冻结参数</button><button id="research-data-history" type="button">历史补齐计划</button><div id="research-data-history-list"></div>
+</section>
+<section class="panel"><h2>可追溯离线研究摘要</h2><p>保存当前证据的不可变快照；不调用模型、不提供买卖评级。每区最多摘录 20 条，并保留缺失与未知诊断。</p>
+<button id="stock-generate" type="button" disabled>生成研究摘要</button><button id="stock-summaries-refresh" type="button">查看旧摘要</button><div id="stock-summaries"></div>
+<div id="stock-summary" aria-live="polite"></div></section>
+</main>
+<script src="/assets/stock-research.js?v={{ asset_version }}" defer></script>
+<script src="/assets/research-data.js?v={{ asset_version }}" defer></script>
+</body></html>

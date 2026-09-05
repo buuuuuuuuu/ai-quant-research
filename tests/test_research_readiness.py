@@ -401,16 +401,16 @@ def test_v15_migration_preserves_all_tables_repeatable_and_rollback(db, monkeypa
             schema,
             "MIGRATIONS",
             (
-                *MIGRATIONS[:-1],
+                *MIGRATIONS[:14],
                 replace(
-                    MIGRATIONS[-1],
-                    statements=(*MIGRATIONS[-1].statements, "SELECT unknown_migration_failure"),
+                    MIGRATIONS[14],
+                    statements=(*MIGRATIONS[14].statements, "SELECT unknown_migration_failure"),
                 ),
             ),
         )
         with pytest.raises(Exception, match="unknown_migration_failure"):
             apply_migrations(c)
-        assert c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 14
+        assert c.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=15").fetchone()[0] == 0
         assert (
             c.execute(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='research_data_plan'"

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>{{ snapshot.stock.symbol }} 研究摘要</title></head>
+<body><main>
+<h1>{{ snapshot.stock.symbol }} · {{ snapshot.stock.name }} 本地研究摘要</h1>
+<p>{{ summary_id }} · {{ snapshot.template_version }} · 生成时间 {{ created_at }}</p>
+<p>{{ snapshot.context.mode }} · as_of {{ snapshot.context.as_of }} · {{ snapshot.context.timezone }} · {{ snapshot.context.boundary }}</p>
+<p>行情范围 {{ snapshot.context.start_date }} → {{ snapshot.context.as_of }}；复权 {{ snapshot.adjustment }}</p>
+<p>{{ snapshot.evidence_window }}</p>
+<h2>范围、状态与限制</h2>
+<ul>{% for text in snapshot.limitations %}<li>{{ text }}</li>{% endfor %}</ul>
+<pre>{{ snapshot.stock | tojson(indent=2) }}</pre>
+<h2>可核验财务事实</h2>
+<p>以下数值按供应商原口径列出，不混用单季、累计或 TTM，不自动计算同比。已披露的增长率也是带来源的原始指标，不是本摘要推断。</p>
+<table><thead><tr><th>指标</th><th>数值与单位</th><th>报告期 / 类型</th><th>公开时间</th><th>报告与来源批次</th></tr></thead><tbody>
+{% for item in snapshot.sections.financial_metrics['items'] %}<tr><td>{{ item.metric_label }}</td><td>{{ item.metric_value }} {{ item.unit }}</td><td>{{ item.report_period_end }} / {{ item.report_type }}</td><td>{{ item.published_at }}</td><td>{{ item.report_id }} / {{ item.metric_source_batch_id }}</td></tr>{% endfor %}
+</tbody></table>
+<h2>已接受事件</h2>
+{% for item in snapshot.sections.events['items'] %}<p>{{ item.event_type }} · {{ item.published_at }} 公开 · {{ item.event_id }}。证据及审核时间见下文。</p>{% else %}<p>当前摘录没有满足审核与引用条件的事件；不表示公司没有相关事件。</p>{% endfor %}
+<h2>研究适用范围</h2>
+{% for item in snapshot.sections.research['items'] %}<p>{{ item.record_id }}：{{ item.scope }}；冻结范围 {{ item.resolved_symbols | join('、') }}。</p>{% else %}<p>没有可可靠关联的已索引研究；未索引旧文件不能据此判定不存在。</p>{% endfor %}
+{% for name, section in snapshot.sections.items() %}
+<h2>{{ name }}（{{ section.pagination.total }} 条匹配记录）</h2>
+{% if not section['items'] %}<p>本摘要没有可用记录；不代表没有事件或没有风险。</p>{% endif %}
+{% for item in section['items'] %}<article><pre>{{ item | tojson(indent=2) }}</pre>
+{% if item.evidence %}{% for evidence in item.evidence %}
+<p>字段 {{ evidence.field_name }} · 第 {{ evidence.page_number }} 页 · {{ evidence.chunk_id }}</p>
+<blockquote>{{ evidence.quote }}</blockquote><p>SHA-256 {{ evidence.quote_sha256 }}</p>
+<p>原文身份 {{ evidence.document_id }}；在工作台通过该文档页身份查看。</p>
+{% endfor %}{% endif %}</article>{% endfor %}
+{% if section.excluded %}<h3>未进入事实的事件</h3><pre>{{ section.excluded | tojson(indent=2) }}</pre>{% endif %}
+{% endfor %}
+<p>本摘要不提供买卖评级、目标价或收益承诺。预检、补齐确认与研究执行确认相互独立。</p>
+</main></body></html>

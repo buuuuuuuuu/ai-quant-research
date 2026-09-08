@@ -334,8 +334,8 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                         INSERT INTO financial_report (
                             report_id, security_id, report_period_end, report_type,
                             published_at, availability_source, source,
-                            source_batch_id, raw_sha256
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            source_batch_id, raw_sha256, observed_at, first_visible_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, timezone('UTC', now()), now())
                         ON CONFLICT (report_id) DO NOTHING
                         """,
                         report_rows,

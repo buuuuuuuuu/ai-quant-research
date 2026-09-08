@@ -72,3 +72,8 @@ Schema v8 新增 `copilot_conversation`、`copilot_message`、`research_plan` �
 仅 active/ready 股票可经 StockPoolService 新增或复制到研究池；旧 revision 和 PIT 预检不变。
 本次不扩展模型工具白名单：Copilot 仍可只读列池并使用冻结 pool/revision 开展已有研究，不能直接纳入、
 下载、移出或恢复股票，也没有未经确认的自动数据补齐工具。缺行情时引导用户前往数据浏览操作。
+
+
+## M10-B 只读研究看板工具
+
+`get_research_dashboard`使用统一服务汇总指定池/revision/as_of的公告、财务、已接受/待审核事件和基础数据缺口；规则问题例如“查看研究看板 2024-03-20”。工具只读，不生成简报或确认下载，不启动研究，不新增SQL/文件/Shell/网络能力。简报预览、明确生成和历史查看由Web独立操作。当前只提供看板摘要工具，未扩展Copilot的历史简报列表/详情工具。详见[研究看板](research-dashboard-brief.md)。

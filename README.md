@@ -524,3 +524,8 @@ uv run ruff check .
 - 登录是单管理员会话认证，不包含多租户、权限分级或外部身份提供商。
 - 生产 systemd 单元使用 `/opt/ai-quant/app` 与 `/var/lib/ai-quant`，避免服务访问 `/root`。
 - 免费数据源只用于研究原型；商业化前必须完成数据授权与许可审查。
+
+
+## M10-B 股票池研究看板（Schema v17）
+
+工作台导航打开 `/research-dashboard`，按冻结池 revision 和日期窗口查看本地增量资料，先预览再确认保存不可变简报，并导出HTML。不会自动补齐或执行研究。见[完整使用、边界和合并风险说明](docs/research-dashboard-brief.md)。

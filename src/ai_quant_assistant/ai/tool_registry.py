@@ -20,6 +20,13 @@ RESEARCH_TOOLS = {
         (),
         background=False,
     ),
+    "get_research_dashboard": ResearchTool(
+        "get_research_dashboard",
+        "查看股票池研究看板",
+        "只读汇总冻结股票池在指定本地时间窗口内的公告、财务、事件、行情观察和数据缺口。",
+        (),
+        background=False,
+    ),
     "run_factor_backtest": ResearchTool(
         "run_factor_backtest",
         "财务因子历史回测",
@@ -57,6 +64,7 @@ ALLOWED_RESEARCH_TOOLS = frozenset(RESEARCH_TOOLS)
 COPILOT_RESEARCH_TOOLS = frozenset(
     {
         "list_stock_pools",
+        "get_research_dashboard",
         "run_factor_backtest",
         "run_factor_lab",
         "build_point_in_time_universe",

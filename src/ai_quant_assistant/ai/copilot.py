@@ -14,6 +14,7 @@ from ai_quant_assistant.ai.preflight import CoveragePreflight, validate_tool_spe
 from ai_quant_assistant.ai.repository import CopilotRepository
 from ai_quant_assistant.ai.tool_registry import require_allowed_tool
 from ai_quant_assistant.api.schemas import FactorBacktestRequest, FactorLabRequest
+from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.storage.operations import ExclusiveOperationLock
@@ -171,6 +172,7 @@ class CopilotTaskManager:
         universe: UniverseRepository,
         stock_pools: StockPoolService,
         operation_lock: ExclusiveOperationLock,
+        research_dashboard: ResearchDashboardBrief,
     ) -> None:
         self.plans = plans
         self.tasks = tasks
@@ -179,6 +181,7 @@ class CopilotTaskManager:
         self.universe = universe
         self.stock_pools = stock_pools
         self.operation_lock = operation_lock
+        self.research_dashboard = research_dashboard
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="copilot")
 
     def submit(self, plan_id: str) -> dict[str, Any]:
@@ -264,6 +267,11 @@ class CopilotTaskManager:
                 "stock_pools": self.stock_pools.list(),
                 "artifacts": {},
             }
+        if tool_name == "get_research_dashboard":
+            progress(30, "正在读取本地股票池增量资料")
+            result = self.research_dashboard.copilot_summary(**spec)
+            progress(95, "本地研究看板摘要已生成")
+            return {"status": "succeeded", "run_id": None, "dashboard": result, "artifacts": {}}
         if tool_name == "run_factor_backtest":
             request = FactorBacktestRequest.model_validate(spec)
             return self.factor_backtests.run(
@@ -320,6 +328,17 @@ class CopilotTaskManager:
             pools = result["stock_pools"]
             conclusion = f"当前有 {len(pools)} 个可用股票池。"
             evidence.append({"kind": "stock_pools", "value": pools})
+        elif "dashboard" in result:
+            dashboard = result["dashboard"]
+            conclusion = (
+                f"股票池 {dashboard['pool_name']} revision {dashboard['pool_revision']} 在 "
+                f"{dashboard['window_start']} 至 {dashboard['as_of']} 有公告 "
+                f"{dashboard['counts']['announcements']} 条、财务指标 "
+                f"{dashboard['counts']['financial_metrics']} 条、已接受事件 "
+                f"{dashboard['counts']['accepted_events']} 条；基础数据阻断 "
+                f"{dashboard['counts']['data_gaps']} 只。"
+            )
+            evidence.append({"kind": "local_research_dashboard", "value": dashboard})
         else:
             universe = result.get("universe", {})
             conclusion = (

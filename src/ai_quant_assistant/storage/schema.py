@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 @dataclass(frozen=True, slots=True)
@@ -1341,6 +1341,34 @@ MIGRATIONS = (
                 result_json VARCHAR NOT NULL,
                 completed_at TIMESTAMPTZ NOT NULL
             )""",
+        ),
+    ),
+    Migration(
+        version=17,
+        name="immutable_stock_pool_research_briefs",
+        statements=(
+            "ALTER TABLE announcement ADD COLUMN first_source_batch_id VARCHAR",
+            "ALTER TABLE announcement ADD COLUMN first_visible_at TIMESTAMPTZ",
+            "ALTER TABLE financial_report ADD COLUMN first_visible_at TIMESTAMPTZ",
+            """CREATE TABLE research_brief (
+                brief_id VARCHAR PRIMARY KEY,
+                fingerprint VARCHAR NOT NULL UNIQUE,
+                pool_id VARCHAR NOT NULL,
+                pool_revision INTEGER NOT NULL CHECK(pool_revision >= 1),
+                window_start DATE NOT NULL,
+                as_of DATE NOT NULL,
+                timezone VARCHAR NOT NULL,
+                symbols_json VARCHAR NOT NULL,
+                symbols_sha256 VARCHAR NOT NULL,
+                snapshot_json VARCHAR NOT NULL,
+                html_content VARCHAR NOT NULL,
+                html_sha256 VARCHAR NOT NULL,
+                actor VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK(window_start <= as_of)
+            )""",
+            "CREATE INDEX research_brief_pool_created_idx ON research_brief(pool_id, pool_revision, created_at)",
+            "CREATE INDEX research_brief_pool_asof_idx ON research_brief(pool_id, pool_revision, as_of)",
         ),
     ),
 )

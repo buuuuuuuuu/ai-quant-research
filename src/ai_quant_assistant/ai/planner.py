@@ -113,6 +113,7 @@ class RuleBasedPlanner:
 
         common = _base_spec(question)
         lowered = question.lower()
+        explicit_dates = re.findall(r"(?:19|20)\d{2}-\d{2}-\d{2}", question)
         assumptions = [
             "研究只读取本地已发布数据，不会自动联网补数。",
             "财务因子按 published_at 执行 Point-in-Time 约束。",
@@ -128,7 +129,22 @@ class RuleBasedPlanner:
         else:
             universe_mode = "explicit"
 
-        if any(word in lowered for word in ("列出股票池", "查看股票池", "有哪些股票池")):
+        if any(word in lowered for word in ("研究看板", "增量简报", "今天发生", "新增资料")):
+            tool_name = "get_research_dashboard"
+            spec = {
+                "stock_pool_id": common["stock_pool_id"],
+                "stock_pool_revision": common["stock_pool_revision"],
+                "window_start": common["start_date"] if len(explicit_dates) > 1 else None,
+                "as_of": explicit_dates[-1] if explicit_dates else None,
+                "adjustment": common["adjustment"],
+                "price_change_threshold": 5.0,
+                "volume_ratio_threshold": 2.0,
+                "benchmark_symbol": common["benchmark_symbol"],
+            }
+            spec = {key: value for key, value in spec.items() if value is not None}
+            title = "股票池本地增量研究看板"
+            assumptions.append("只查询本地资料；不会生成简报、联网补齐或运行研究。")
+        elif any(word in lowered for word in ("列出股票池", "查看股票池", "有哪些股票池")):
             tool_name = "list_stock_pools"
             spec = {}
             title = "可用股票池"
@@ -137,7 +153,7 @@ class RuleBasedPlanner:
         ):
             tool_name = "build_point_in_time_universe"
             spec = {
-                "as_of": common["end_date"],
+                "as_of": explicit_dates[-1] if explicit_dates else None,
                 "mode": universe_mode if universe_mode != "explicit" else "all_available",
                 "symbols": common["symbols"],
                 "benchmark_symbol": common["benchmark_symbol"],

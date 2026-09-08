@@ -155,6 +155,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit=audit_repository,
     )
     stock_pools = StockPoolService(database)
+    from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
+
+    research_dashboard = ResearchDashboardBrief(database)
     managed_stock_tasks = ManagedStockTaskManager(ManagedStockService(database, resolved_settings))
     research_data_tasks = ManagedStockTaskManager(ResearchDataPlans(database, resolved_settings))
     security_master_tasks = SecurityMasterTaskManager(
@@ -218,13 +221,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         universe=UniverseRepository(database),
         stock_pools=stock_pools,
         operation_lock=operation_lock,
+        research_dashboard=research_dashboard,
     )
     web_root = Path(__file__).resolve().parents[1] / "web"
     templates = Jinja2Templates(directory=web_root / "templates")
     asset_version = hashlib.sha256(
         b"".join(
             (web_root / "static" / name).read_bytes()
-            for name in ("workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js", "stock-research.css", "workbench.css", "stock-pools.css")
+            for name in (
+                "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
+                "stock-research.css", "research-dashboard.js", "research-dashboard.css",
+                "workbench.css", "stock-pools.css",
+            )
         )
     ).hexdigest()[:16]
 
@@ -277,9 +285,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.research_data_tasks = research_data_tasks
     app.include_router(research_data_router(research_data_tasks, resolved_settings.web_username, copilot_repository))
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
+    from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router
     from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench
     app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
+    app.include_router(research_dashboard_router(research_dashboard, templates, asset_version, resolved_settings.web_username))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")

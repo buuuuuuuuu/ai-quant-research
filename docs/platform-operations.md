@@ -195,3 +195,8 @@ systemctl start ai-quant-monitor.service
 Web 运维面板显示最近同步批次、任务进度、失败信息、已验证备份、运行告警、数据质量
 与管理员审计；点击“立即增量同步”“创建数据库备份”或“检查运行风险”可立即执行。
 完整反向代理、备份恢复和回滚说明见 `docs/release-hardening.md`。
+
+
+## M10-B 升级（Schema v17）
+
+新增research_brief及带时区首次采集字段，旧数据字段不回填猜测值。按既有停写→v16备份并验证→安装→服务用户data init→确认当前/预期17→新备份verify→恢复服务流程；更新脚本默认预期17。JSON与HTML在同一数据库事务内，备份天然包含简报。回退先保全新资料并恢复验证过的v16备份，禁止旧程序直接写v17。详见[并发、风险和升级说明](research-dashboard-brief.md)。

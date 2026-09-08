@@ -12,6 +12,21 @@ def validate_tool_spec(tool_name: str, spec: dict[str, Any]) -> dict[str, Any]:
     require_allowed_tool(tool_name)
     if tool_name == "list_stock_pools":
         return {}
+    if tool_name == "get_research_dashboard":
+        from ai_quant_assistant.api.research_dashboard_routes import ResearchDashboardInput
+
+        return ResearchDashboardInput.model_validate(
+            {
+                "stock_pool_id": spec.get("stock_pool_id"),
+                "stock_pool_revision": spec.get("stock_pool_revision"),
+                "window_start": spec.get("window_start"),
+                "as_of": spec.get("as_of"),
+                "adjustment": spec.get("adjustment", "qfq"),
+                "price_change_threshold": spec.get("price_change_threshold", 5),
+                "volume_ratio_threshold": spec.get("volume_ratio_threshold", 2),
+                "benchmark_symbol": spec.get("benchmark_symbol", "csi000300"),
+            }
+        ).model_dump(mode="json", exclude_none=True)
     if tool_name == "run_factor_backtest":
         return FactorBacktestRequest.model_validate(spec).model_dump(mode="json")
     if tool_name == "run_factor_lab":
@@ -44,7 +59,11 @@ class CoveragePreflight:
             from ai_quant_assistant.research.readiness import ResearchReadiness
 
             readiness = ResearchReadiness(self.database)
-            parameters = {key: value for key, value in spec.items() if key not in {"_stock_pool_context", "stock_pool"}}
+            parameters = {
+                key: value
+                for key, value in spec.items()
+                if key not in {"_stock_pool_context", "stock_pool"}
+            }
             context = spec.get("_stock_pool_context") or spec.get("stock_pool")
             if context:
                 parameters.pop("stock_pool_id", None)
@@ -70,6 +89,33 @@ class CoveragePreflight:
             }
         if status.get("schema_version", 0) < status.get("expected_schema_version", 8):
             blockers.append("数据库迁移未完成，请先运行 ai-quant data init。")
+        if tool_name == "get_research_dashboard":
+            from ai_quant_assistant.storage.stock_pools import StockPoolService
+
+            try:
+                pool = StockPoolService(self.database).resolve(
+                    spec.get("stock_pool_id"),
+                    revision=spec.get("stock_pool_revision"),
+                    initialize=False,
+                )
+            except (KeyError, ValueError) as exc:
+                blockers.append(str(exc))
+                pool = None
+            return {
+                "status": "ready" if not blockers else "blocked",
+                "ready": not blockers,
+                "required_datasets": [],
+                "checks": [],
+                "blockers": blockers,
+                "warnings": [pool["warning"]] if pool and pool.get("warning") else [],
+                "lineage": {
+                    "pool_id": pool["pool_id"],
+                    "pool_revision": pool["pool_revision"],
+                    "symbols_sha256": pool["symbols_sha256"],
+                }
+                if pool
+                else {},
+            }
         if tool_name == "list_stock_pools":
             return {
                 "status": "ready",

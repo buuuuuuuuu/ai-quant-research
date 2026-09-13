@@ -23,6 +23,8 @@
 
 原工作台保留共用的表单 DOM 和处理函数，由页面分类选择可见模块；初始化只读取当前模块需要的数据。这样保留因子实验的共享参数以及旧的弹窗、补齐、事件审核联动，避免重写业务前端。新增历史页面独立模板，不加载整个旧工作台脚本。
 
+总览每次打开仅调用一次既有研究看板摘要（默认股票池，股票分页大小 1），展示原窗口、revision、公告/财务/事件计数及缺口，不新建聚合系统或后台刷新。没有有效默认股票池时明确提示，不能自动选择其他范围。
+
 ## 历史投影与限制
 
 `GET /api/v1/run-center` 从 `stock_research_run`、`operation_task`、`screen_run`、`document_event_research_run`、实际已提交任务的 `research_plan` 集合查询。按类型和 run_id 去重，优先使用持久结果索引；有可靠任务关联时保留开始时间。旧任务 URL 在结果索引发布后仍可查询。
@@ -57,7 +59,7 @@
 
 ## 人工验收清单
 
-本地验证：全量后端 **394 passed**（396.49 秒）、前端 **82 passed**；Ruff、JavaScript 语法、部署 shell、systemd unit、wheel 构建及内容检查通过。后端有一项既有 Starlette/httpx 弃用警告。本次新增 8 项后端、11 项前端行为测试；这些不构成真实浏览器视觉验收。GitHub CI 结果以 PR 检查为准。
+本地验证：全量后端 **394 passed**（396.49 秒）、前端 **83 passed**；Ruff、JavaScript 语法、部署 shell、systemd unit、wheel 构建及内容检查通过。后端有一项既有 Starlette/httpx 弃用警告。本次新增 8 项后端、12 项前端行为测试；这些不构成真实浏览器视觉验收。GitHub CI 结果以 PR 检查为准。
 
 在测试环境或用户自行部署后检查：
 

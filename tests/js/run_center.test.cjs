@@ -64,7 +64,14 @@ function harness(
   };
   const context = vm.createContext({
     document: {
-      getElementById: (id) => (id.startsWith("center-") ? element(id) : null),
+      getElementById: (id) =>
+        pathname === "/"
+          ? id.startsWith("overview-")
+            ? element(id)
+            : null
+          : id.startsWith("center-")
+            ? element(id)
+            : null,
     },
     location,
     URLSearchParams,
@@ -105,6 +112,50 @@ test("history escapes values and preserves zeros and unknown times", () => {
   assert.ok(html.includes("历史范围未知"));
   assert.ok(html.includes("0 秒"));
   assert.ok(!html.includes("<script>"));
+});
+test("overview reuses one bounded dashboard read without creating plans or choosing another pool", async () => {
+  for (const error of [false, true]) {
+    const h = harness("/", async (url) =>
+      url.includes("research-dashboard")
+        ? error
+          ? { error: "default pool missing" }
+          : {
+              pool: { name: "<script>" },
+              context: {
+                pool_revision: 3,
+                window_start: "2024-01-01",
+                as_of: "2024-01-07",
+                timezone: "Asia/Shanghai",
+              },
+              symbols: ["600519"],
+              sections: {
+                announcements: { total: 0 },
+                data_gaps: { total: 2, truncated: true },
+              },
+            }
+        : { items: [], total: 0 },
+    );
+    await tick();
+    assert.equal(
+      h.calls.filter((c) => c.url.includes("research-dashboard")).length,
+      1,
+    );
+    assert.equal(h.calls.length, 3);
+    assert.ok(h.calls.every((c) => !c.options.method));
+    assert.ok(
+      h.calls.some((c) => c.url === "/api/v1/research-dashboard?page_size=1"),
+    );
+    if (error)
+      assert.match(
+        h.element("overview-pool").textContent,
+        /default pool missing/,
+      );
+    else {
+      assert.match(h.element("overview-pool").innerHTML, /&lt;script&gt;/);
+      assert.match(h.element("overview-pool").innerHTML, /未记录/);
+      assert.match(h.element("overview-pool").innerHTML, /2（截断）/);
+    }
+  }
 });
 test("late list success cannot replace a newer type filter", async () => {
   let release;

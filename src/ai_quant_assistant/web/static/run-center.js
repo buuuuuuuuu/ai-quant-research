@@ -445,6 +445,34 @@ const RunCenterUI = (() => {
     }
   }
   async function init() {
+    if ($("overview-pool")) {
+      get("/api/v1/research-dashboard?page_size=1")
+        .then((p) => {
+          const fields = {
+            announcements: "窗口公告",
+            financial_metrics: "财务资料",
+            accepted_events: "已接受事件",
+            data_gaps: "数据缺口",
+          };
+          $("overview-pool").innerHTML =
+            `<p>${esc(p.pool.name)} · revision ${esc(p.context.pool_revision)} · ${esc(p.symbols.length)} 只</p><p>${esc(p.context.window_start)} → ${esc(p.context.as_of)} · ${esc(p.context.timezone)}；当前本地状态，非历史重建。</p><div class="entry-grid">${Object.entries(
+              fields,
+            )
+              .map(
+                ([key, label]) =>
+                  `<div class="entry-card"><span>${label}</span><h3>${esc(known(p.sections[key]?.total))}${p.sections[key]?.truncated ? "（截断）" : ""}</h3></div>`,
+              )
+              .join(
+                "",
+              )}</div><p>复用看板当前窗口；本地无记录不代表没有公告、事件或风险。</p>`;
+        })
+        .catch((e) => {
+          $("overview-pool").textContent =
+            "默认股票池摘要暂不可用：" +
+            e.message +
+            "。请在数据与股票池核对范围。";
+        });
+    }
     if ($("open-stock-form"))
       $("open-stock-form").addEventListener("submit", (e) => {
         e.preventDefault();

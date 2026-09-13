@@ -529,3 +529,7 @@ uv run ruff check .
 ## M10-B 股票池研究看板（Schema v17）
 
 工作台导航打开 `/research-dashboard`，按冻结池 revision 和日期窗口查看本地增量资料，先预览再确认保存不可变简报，并导出HTML。不会自动补齐或执行研究。见[完整使用、边界和合并风险说明](docs/research-dashboard-brief.md)。
+
+## M11-A 分类界面与回测中心（仍为 Schema v17）
+
+五类导航组织总览、数据与股票池、研究、回测及系统管理。`/backtests` 提供持久研究历史、详情和只预填的参数复制；电脑侧栏、平板/手机折叠菜单共用一套网页。原计算和研究流程不变。见[入口映射、人工验收与已知限制](docs/ui-backtest-center.md)。

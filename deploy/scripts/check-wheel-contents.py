@@ -3,6 +3,14 @@ from pathlib import Path
 from zipfile import ZipFile
 
 required = {
+    "ai_quant_assistant/api/run_center.py",
+    "ai_quant_assistant/api/run_center_routes.py",
+    "ai_quant_assistant/web/templates/app-nav.html",
+    "ai_quant_assistant/web/templates/page-intro.html",
+    "ai_quant_assistant/web/templates/run-center.html",
+    "ai_quant_assistant/web/static/app-shell.css",
+    "ai_quant_assistant/web/static/app-shell.js",
+    "ai_quant_assistant/web/static/run-center.js",
     "ai_quant_assistant/web/templates/stock-research.html",
     "ai_quant_assistant/web/static/stock-research.js",
     "ai_quant_assistant/web/static/stock-research.css",

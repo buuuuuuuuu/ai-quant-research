@@ -263,16 +263,21 @@ class StockResearchWorkbench:
         return rows, None
 
     @staticmethod
-    def research_in(c, symbol, context, cutoff, *, page, page_size):
-        # JSON filtering stays in DuckDB; only the requested page crosses into
-        # Python. Invalid legacy JSON is not interpreted or silently repaired.
+    def research_query(symbols):
+        """Shared set query over frozen research inputs; never infer from live pools."""
         expression = "CASE WHEN json_valid(spec_json) THEN COALESCE(json_extract(spec_json,'$.stock_pool.resolved_symbols'),json_extract(spec_json,'$.symbols'),json_array(json_extract_string(spec_json,'$.symbol'))) ELSE '[]' END"
-        eligibility = f"json_contains({expression}, to_json(CAST(? AS VARCHAR))) AND COALESCE(json_extract_string(CASE WHEN json_valid(spec_json) THEN spec_json ELSE '{{}}' END,'$.universe_mode'),'explicit')='explicit'"
-        query = f"""SELECT run_id AS record_id,research_type,'indexed_run' AS source,run_id,spec_json,result_json,completed_at AS recorded_at FROM stock_research_run WHERE json_contains(symbols_json,to_json(CAST(? AS VARCHAR)))
-            UNION ALL SELECT task_id,COALESCE(json_extract_string(CASE WHEN json_valid(spec_json) THEN spec_json ELSE '{{}}' END,'$.research_type'),'factor_backtest'),'operation_task',run_id,spec_json,json_object('status',status),COALESCE(completed_at,created_at) FROM operation_task WHERE task_type='backtest' AND {eligibility} AND (run_id IS NULL OR run_id NOT IN (SELECT run_id FROM stock_research_run))
-            UNION ALL SELECT plan_id,tool_name,'copilot_plan',run_id,spec_json,json_object('status',status),COALESCE(completed_at,created_at) FROM research_plan WHERE {eligibility}
-            UNION ALL SELECT r.run_id,'event_study','document_event_research',r.run_id,r.spec_json,r.result_json,r.created_at FROM document_event_research_run r JOIN document_event e USING(event_id) JOIN security_master s ON s.security_id=e.security_id WHERE s.symbol=?"""
-        params = [symbol, symbol, symbol, symbol]
+        eligibility = f"EXISTS (SELECT 1 FROM json_each(?) selected WHERE json_contains({expression},selected.value)) AND COALESCE(json_extract_string(CASE WHEN json_valid(spec_json) THEN spec_json ELSE '{{}}' END,'$.universe_mode'),'explicit')='explicit'"
+        query = f"""SELECT run_id AS record_id,research_type,'indexed_run' AS source,run_id,spec_json,result_json,completed_at AS recorded_at,NULL::VARCHAR AS associated_symbol FROM stock_research_run WHERE EXISTS (SELECT 1 FROM json_each(?) selected WHERE json_contains(symbols_json,selected.value))
+            UNION ALL SELECT task_id,COALESCE(json_extract_string(CASE WHEN json_valid(spec_json) THEN spec_json ELSE '{{}}' END,'$.research_type'),'factor_backtest'),'operation_task',run_id,spec_json,json_object('status',status),COALESCE(completed_at,created_at),NULL FROM operation_task WHERE task_type='backtest' AND {eligibility} AND (run_id IS NULL OR run_id NOT IN (SELECT run_id FROM stock_research_run))
+            UNION ALL SELECT plan_id,tool_name,'copilot_plan',run_id,spec_json,json_object('status',status),COALESCE(completed_at,created_at),NULL FROM research_plan WHERE {eligibility}
+            UNION ALL SELECT r.run_id,'event_study','document_event_research',r.run_id,r.spec_json,r.result_json,r.created_at,s.symbol FROM document_event_research_run r JOIN document_event e USING(event_id) JOIN security_master s ON s.security_id=e.security_id WHERE s.symbol IN (SELECT json_extract_string(value,'$') FROM json_each(?))
+            UNION ALL SELECT run_id,'screen','screen_run',run_id,spec_json,json_object('status',status),COALESCE(completed_at,created_at),NULL FROM screen_run WHERE {eligibility}"""
+        params = [canonical(symbols)] * 5
+        return query, params
+
+    @staticmethod
+    def research_in(c, symbol, context, cutoff, *, page, page_size):
+        query, params = StockResearchWorkbench.research_query([symbol])
         # Existing event spec lacks symbols, so obtain identity from its immutable event FK.
         wrapped = f"SELECT * FROM ({query}) q WHERE recorded_at < ?"
         boundary = (

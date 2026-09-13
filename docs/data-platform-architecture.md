@@ -314,3 +314,8 @@ Fixture 覆盖上交所、深交所和北交所证券主数据，包含 5 个交
 
 下一阶段可继续增加历史指数成分、因子截面与中性化、更多研究模板、AI 研究规划和调度
 自动化。V1 继续不接券商、不自动下单、不提供投资建议，也不扩展分钟级高频数据。
+
+
+## M10-B 集合看板与简报
+
+ResearchDashboardBrief复用published视图、池revision、M10-A证据校验和共享冻结研究范围查询，固定上限读取池级快照。释放access锁后组装/渲染，再短事务写入research_brief和审计。没有新增下载、研究引擎、外部文件或后台worker；备份维持operation→access。详见[设计与边界](research-dashboard-brief.md)。

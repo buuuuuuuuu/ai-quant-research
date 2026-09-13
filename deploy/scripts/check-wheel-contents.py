@@ -10,6 +10,12 @@ required = {
     "ai_quant_assistant/reports/templates/stock_summary.html",
     "ai_quant_assistant/research/stock_workbench.py",
     "ai_quant_assistant/api/stock_research_routes.py",
+    "ai_quant_assistant/api/research_dashboard_routes.py",
+    "ai_quant_assistant/research/dashboard_brief.py",
+    "ai_quant_assistant/web/templates/research-dashboard.html",
+    "ai_quant_assistant/web/static/research-dashboard.js",
+    "ai_quant_assistant/web/static/research-dashboard.css",
+    "ai_quant_assistant/reports/templates/research_brief.html",
 }
 wheel = sorted(Path("dist").glob("*.whl"))[-1]
 with ZipFile(wheel) as archive:

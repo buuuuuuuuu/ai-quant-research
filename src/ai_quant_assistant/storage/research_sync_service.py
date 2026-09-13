@@ -437,6 +437,7 @@ class ResearchDatasetSyncService:
                                 str(item.source),
                                 batch_id,
                                 content_sha,
+                                batch_id,
                             ]
                         )
                     connection.executemany(
@@ -444,8 +445,8 @@ class ResearchDatasetSyncService:
                         INSERT INTO announcement (
                             announcement_id, security_id, company_name, title, report_type,
                             report_year, report_period_end, announcement_date, published_at,
-                            url, source, source_batch_id, content_sha256
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            url, source, source_batch_id, content_sha256, first_source_batch_id, ingested_at, first_visible_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, timezone('UTC', now()), now())
                         ON CONFLICT (announcement_id) DO UPDATE SET
                             company_name = EXCLUDED.company_name,
                             url = EXCLUDED.url,

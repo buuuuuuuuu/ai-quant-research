@@ -322,13 +322,18 @@ def test_v16_migration_preservation_idempotence_and_rollback(service, monkeypatc
         }
         import ai_quant_assistant.storage.schema as schema
 
-        broken = replace(
-            MIGRATIONS[-1], statements=(*MIGRATIONS[-1].statements, "SELECT migration_failure")
+        v16 = next(item for item in MIGRATIONS if item.version == 16)
+        broken = replace(v16, statements=(*v16.statements, "SELECT migration_failure"))
+        monkeypatch.setattr(
+            schema,
+            "MIGRATIONS",
+            tuple(broken if item.version == 16 else item for item in MIGRATIONS),
         )
-        monkeypatch.setattr(schema, "MIGRATIONS", (*MIGRATIONS[:-1], broken))
         with pytest.raises(Exception, match="migration_failure"):
             apply_migrations(c)
-        assert c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 15
+        assert c.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version=16"
+        ).fetchone()[0] == 0
         for name, rows in before.items():
             assert c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() == rows
         monkeypatch.setattr(schema, "MIGRATIONS", MIGRATIONS)

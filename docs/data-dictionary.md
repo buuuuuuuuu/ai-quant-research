@@ -588,3 +588,10 @@ accepted 事件可以创建研究记录。`operation_task` 增加 `document_even
 `stock_pool_revision` 保存 `pool_id`、`revision_no`、有序 `symbols_json`、
 `symbols_sha256`、变更类型、摘要和创建时间；`(pool_id, revision_no)` 唯一且快照不可覆盖。
 研究运行在 spec/result 中保存冻结的股票池上下文，不需要为各研究引擎重复建表。
+
+
+## M10-B / v17
+
+`research_brief`：brief_id主键、fingerprint唯一、pool_id/pool_revision、window_start/as_of、timezone、symbols_json/symbols_sha256、snapshot_json、html_content/html_sha256、actor/created_at。日期窗口为上海 `[起点00:00,截止次日00:00)`，模板与观察公式/来源身份存于不可变snapshot。
+
+`announcement.first_visible_at`、`financial_report.first_visible_at`：可空TIMESTAMPTZ，迁移保留NULL，新发布事务记录首次可见绝对时间。`announcement.first_source_batch_id`：可空首次采集批次，刷新不覆盖。旧无时区采集字段不推断成新字段。详见[研究看板](research-dashboard-brief.md)。

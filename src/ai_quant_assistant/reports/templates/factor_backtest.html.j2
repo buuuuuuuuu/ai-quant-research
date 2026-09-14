@@ -22,8 +22,8 @@
 </head>
 <body><main>
   <div class="muted">AI 量化研究助手 · Point-in-Time 本地回测</div>
-  <h1>{{ spec.factor }} 财务因子组合回测</h1>
-  <div class="muted">{{ spec.start_date }} 至 {{ spec.end_date }} · 前 {{ spec.top_n }} 名 · {{ spec.rebalance }} 调仓 · 基准 {{ spec.benchmark_symbol }}</div>
+  <h1>{{ spec.factor|factor_label }} 财务因子组合回测</h1>
+  <div class="muted">{{ spec.start_date }} 至 {{ spec.end_date }} · 前 {{ spec.top_n }} 名 · {{ spec.rebalance|enum_label }} 调仓 · 基准 {{ spec.benchmark_symbol }}</div>
   <div class="notice">信号日 15:00 前已公开财务数据，下一基准交易日开盘执行。股票池模式：{{ diagnostics.universe_mode }}；行业中性化：{{ diagnostics.industry_neutralization }}；行业持仓上限：{{ (diagnostics.max_industry_weight * 100)|round(1) }}%。{% if diagnostics.survivorship_bias_warning %} {{ diagnostics.survivorship_bias_warning }}{% else %} 已按真实历史指数成分过滤。{% endif %} 结果仅供研究。</div>
   <div class="grid">
     <div class="metric">累计收益<b>{{ metrics.total_return|pct }}</b></div>

@@ -1,5 +1,45 @@
 /* Bounded reads, explicit parameter copying, and the existing execution APIs. */
 const RunCenterUI = (() => {
+  let catalog = { factors: {}, enums: {}, fields: {} };
+  if (typeof document !== "undefined") {
+    const raw = document.getElementById("center-catalog")?.textContent;
+    if (raw) catalog = JSON.parse(raw);
+  }
+  function factorName(code) {
+    if (code === "composite") return "多因子组合（composite）";
+    if (String(code).startsWith("composite:"))
+      return (
+        "多因子组合：" + code.slice(10).split("+").map(factorName).join(" + ")
+      );
+    return catalog.factors[code]
+      ? `${catalog.factors[code]}（${code}）`
+      : `未知因子（${code}）`;
+  }
+  function enumName(value, key) {
+    if (value === "none" && key === "adjustment") return "不复权（none）";
+    return catalog.enums[value]
+      ? `${catalog.enums[value]}（${value}）`
+      : String(value);
+  }
+  function strategyName(value) {
+    const p = String(value).split("|");
+    return p.length === 4 &&
+      p[1].startsWith("top=") &&
+      p[3].startsWith("commission=")
+      ? `${factorName(p[0])} · 持仓 ${p[1].slice(4)} 只 · ${enumName(p[2])} · 佣金 ${p[3].slice(11)} bp`
+      : `未识别策略（${value}）`;
+  }
+  function display(value, key) {
+    if (value == null || value === "") return "未记录";
+    if (catalog.percent_fields?.includes(key) && typeof value === "number")
+      return Number.isFinite(value) ? (value * 100).toFixed(2) + "%" : "未记录";
+    if (["factor", "code"].includes(key)) return factorName(value);
+    if (["strategy", "selected_strategy"].includes(key))
+      return strategyName(value);
+    if (typeof value === "boolean") return value ? "是" : "否";
+    if (typeof value === "object") return JSON.stringify(value);
+    return enumName(value, key);
+  }
   const esc = (v) =>
     String(v ?? "").replace(
       /[&<>"']/g,
@@ -103,17 +143,38 @@ const RunCenterUI = (() => {
       const columns = [
         ...new Set(value.slice(0, 100).flatMap((x) => Object.keys(x || {}))),
       ].slice(0, 20);
-      return `<div class="table-shell"><table><thead><tr>${columns.map((k) => `<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>${value
+      return `<div class="table-shell"><table><thead><tr>${columns.map((k) => `<th>${esc(catalog.fields[k] || titles[k] || k)}</th>`).join("")}</tr></thead><tbody>${value
         .slice(0, 100)
         .map(
           (r) =>
-            `<tr>${columns.map((k) => `<td>${esc(r[k] == null ? "未知" : typeof r[k] === "object" ? JSON.stringify(r[k]) : r[k])}</td>`).join("")}</tr>`,
+            `<tr>${columns.map((k) => `<td>${esc(display(r[k], k))}</td>`).join("")}</tr>`,
         )
         .join(
           "",
         )}</tbody></table></div>${value.length > 100 ? "<p>仅展示前 100 条，请打开原结果或导出查看其余记录。</p>" : ""}`;
     }
+    if (value && !Array.isArray(value))
+      return `<dl class="center-meta">${Object.entries(value)
+        .map(
+          ([k, v]) =>
+            `<div><dt>${esc(catalog.fields[k] || titles[k] || k)}</dt><dd>${typeof v === "object" && v !== null ? `<details><summary>查看内容</summary>${renderValue(v)}</details>` : esc(display(v, k))}</dd></div>`,
+        )
+        .join("")}</dl>`;
     return `<pre>${esc(JSON.stringify(value, null, 2))}</pre>`;
+  }
+  function factorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
+    const options = { ...catalog.factors };
+    if (!options[item.code]) options[item.code] = "未知因子";
+    return `<div class="factor-editor-row"><label>因子<select data-factor-code>${Object.keys(
+      options,
+    )
+      .map(
+        (k) =>
+          `<option value="${esc(k)}" ${k === item.code ? "selected" : ""}>${esc(factorName(k))}</option>`,
+      )
+      .join(
+        "",
+      )}</select></label><label>相对权重<input data-factor-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"></label><label>方向<select data-factor-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-factor-remove type="button">移除</button></div>`;
   }
   function field(key, value, schema) {
     const alternatives = schema.anyOf || [schema];
@@ -121,10 +182,29 @@ const RunCenterUI = (() => {
     const type = s.type || "string";
     const id = "copy-" + key;
     let input;
-    if (type === "boolean")
+    if (key === "factors")
+      return `<div class="factor-editor" data-factor-editor><p>因子组合：相对权重为合成得分输入，不代表资金百分比。</p><div id="center-factor-rows">${value.map(factorRow).join("")}</div><button id="center-factor-add" type="button">增加因子</button></div>`;
+    if (key === "symbols")
+      return `<label>冻结股票代码（空格或换行分隔）<textarea data-param="symbols" data-type="symbols">${esc(value.join("\n"))}</textarea></label>`;
+    if (key === "factor")
+      input = `<select id="${id}" data-param="${key}" data-type="string">${Object.keys(
+        { ...catalog.factors, [value]: catalog.factors[value] || "未知因子" },
+      )
+        .map(
+          (k) =>
+            `<option value="${esc(k)}" ${k === value ? "selected" : ""}>${esc(factorName(k))}</option>`,
+        )
+        .join("")}</select>`;
+    else if (
+      ["top_n_values", "commission_bps_values", "rebalance_values"].includes(
+        key,
+      )
+    )
+      input = `<input id="${id}" data-param="${key}" data-type="${key === "rebalance_values" ? "words" : "numbers"}" value="${esc(value.join(" "))}"><small>${key === "rebalance_values" ? "monthly：按月；quarterly：按季度；空格分隔" : "数字以空格分隔；沿用原组合数量限制"}</small>`;
+    else if (type === "boolean")
       input = `<select id="${id}" data-param="${key}" data-type="boolean"><option value="true" ${value === true ? "selected" : ""}>是</option><option value="false" ${value === false ? "selected" : ""}>否</option></select>`;
     else if (s.enum)
-      input = `<select id="${id}" data-param="${key}" data-type="${type}">${s.enum.map((v) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
+      input = `<select id="${id}" data-param="${key}" data-type="${type}">${s.enum.map((v) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(enumName(v, key))}</option>`).join("")}</select>`;
     else if (type === "array" || type === "object")
       input = `<textarea id="${id}" data-param="${key}" data-type="json" spellcheck="false">${esc(JSON.stringify(value, null, 2))}</textarea>`;
     else
@@ -137,8 +217,13 @@ const RunCenterUI = (() => {
       const k = input.dataset.param,
         t = input.dataset.type,
         v = input.value;
-      params[k] =
-        t === "json"
+      params[k] = ["symbols", "words", "numbers"].includes(t)
+        ? v
+            .trim()
+            .split(/[\s,，]+/)
+            .filter(Boolean)
+            .map((x) => (t === "numbers" ? Number(x) : x))
+        : t === "json"
           ? JSON.parse(v)
           : t === "boolean"
             ? v === "true"
@@ -148,10 +233,62 @@ const RunCenterUI = (() => {
                 : Number(v)
               : v;
     }
+    if (form.querySelector?.("[data-factor-editor]"))
+      params.factors = [...form.querySelectorAll(".factor-editor-row")].map(
+        (r) => ({
+          code: r.querySelector("[data-factor-code]").value,
+          weight: Number(r.querySelector("[data-factor-weight]").value),
+          direction: r.querySelector("[data-factor-direction]").value,
+        }),
+      );
     return params;
   }
+  function resultSections(result) {
+    const labels = {
+      metrics: "组合回测指标",
+      summary: "研究结果摘要",
+      pooled_summary: "合并事件窗口统计",
+      candidate_count: "候选数量",
+      selected_count: "入选数量",
+      windows: "事件窗口",
+      events: "事件样本",
+      samples: "样本明细",
+      status: "状态",
+      warning: "原运行风险提示",
+      missing_statistics: "缺失统计量",
+      diagnostics: "诊断与风险提示",
+    };
+    return Object.entries(result)
+      .map(([k, v]) => {
+        const heading = labels[k] || catalog.fields[k] || k;
+        const content = `<h3>${esc(heading)}</h3>${renderValue(v)}`;
+        return [
+          "metrics",
+          "summary",
+          "pooled_summary",
+          "candidate_count",
+          "selected_count",
+          "warning",
+          "missing_statistics",
+        ].includes(k)
+          ? `<article>${content}</article>`
+          : `<details><summary>${esc(heading)}</summary>${renderValue(v)}</details>`;
+      })
+      .join("");
+  }
   if (typeof module !== "undefined")
-    module.exports = { table, scope, renderValue, field, readParams };
+    module.exports = {
+      table,
+      scope,
+      renderValue,
+      field,
+      readParams,
+      factorRow,
+      factorName,
+      strategyName,
+      display,
+      resultSections,
+    };
   if (typeof document === "undefined") return {};
   const $ = (id) => document.getElementById(id);
   let sequence = 0,
@@ -195,7 +332,13 @@ const RunCenterUI = (() => {
   }
   async function detail(query) {
     const own = ++sequence;
-    const row = await get("/api/v1/run-center/record?" + query);
+    let row;
+    try {
+      row = await get("/api/v1/run-center/record?" + query);
+    } catch (e) {
+      if (own === sequence) fail(e);
+      return;
+    }
     if (own !== sequence) return;
     $("center-title").textContent = row.label + " · 运行详情";
     $("center-identity").innerHTML =
@@ -212,11 +355,14 @@ const RunCenterUI = (() => {
       (row.payload_unavailable
         ? "<p>记录超过有界读取上限，请通过原结果访问。</p>"
         : "") +
-      Object.entries(row.result)
-        .map(
-          ([k, v]) => `<article><h4>${esc(k)}</h4>${renderValue(v)}</article>`,
-        )
-        .join("");
+      resultSections(row.result);
+    $("center-parameters").innerHTML =
+      `<details><summary>原运行参数（中文展示，内部代码保留）</summary>${renderValue(row.spec)}</details>`;
+    if (row.kind === "factor_lab")
+      $("center-result").insertAdjacentHTML(
+        "beforeend",
+        `<p class="page-notice">${esc(catalog.ic_explanation || "IC / Rank IC 沿用原因子有效性口径；验证集选定策略，样本外不参与选择。")}</p>`,
+      );
     if (!Object.keys(row.result).length && !row.error)
       $("center-result").textContent =
         "暂无已保存结果；运行中的任务可手动刷新本页。";
@@ -261,12 +407,16 @@ const RunCenterUI = (() => {
         yearly: "年度表现",
         group_returns: "分组收益",
         walk_forward: "滚动检验",
+        coverage: "因子数据覆盖",
+        series: "因子有效性时间序列",
       };
       const fragment = Object.entries(names)
         .filter(([k]) => data[k] != null)
         .map(
           ([k, label]) =>
-            "<details><summary>" +
+            (k === "metrics" || k === "ic_summary" || k === "validation"
+              ? "<details open><summary>"
+              : "<details><summary>") +
             label +
             "</summary>" +
             renderValue(data[k]) +
@@ -274,6 +424,53 @@ const RunCenterUI = (() => {
         )
         .join("");
       $("center-result").insertAdjacentHTML("beforeend", fragment);
+      if (row.kind === "factor_lab" && data.series?.length) {
+        const groups = new Map();
+        for (const point of data.series) {
+          if (!groups.has(point.factor)) groups.set(point.factor, []);
+          groups.get(point.factor).push(point);
+        }
+        let chartIndex = 0;
+        for (const [code, points] of groups) {
+          const id = "center-ic-" + chartIndex++,
+            n = points.length;
+          const line = (key) =>
+            points.map((p, i) =>
+              Number.isFinite(p[key])
+                ? `${15 + (870 * i) / Math.max(1, n - 1)},${120 - 100 * p[key]}`
+                : null,
+            );
+          const paths = (key) => {
+            let parts = [],
+              chunk = [];
+            for (const p of line(key)) {
+              if (p) chunk.push(p);
+              else {
+                if (chunk.length) parts.push(chunk.join(" "));
+                chunk = [];
+              }
+            }
+            if (chunk.length) parts.push(chunk.join(" "));
+            return parts
+              .map(
+                (s) =>
+                  `<polyline fill="none" stroke="${key === "ic" ? "#24523b" : "#96742b"}" stroke-width="2" points="${s}"/>`,
+              )
+              .join("");
+          };
+          $("center-result").insertAdjacentHTML(
+            "beforeend",
+            `<article><h3>${esc(factorName(code))} · IC 时间序列</h3><p>深绿：IC；棕色：Rank IC。缺失期不连接或填零。</p><svg viewBox="0 0 900 240" role="img" aria-label="${esc(factorName(code))} IC 和 Rank IC"><line x1="15" y1="120" x2="885" y2="120" stroke="#b7c4ba"/>${paths("ic")}${paths("rank_ic")}</svg><label>查看信号日期<input id="${id}" type="range" min="0" max="${n - 1}" value="0"></label><output id="${id}-value" aria-live="polite"></output></article>`,
+          );
+          const show = () => {
+            const p = points[Number($(id).value)];
+            $(id + "-value").textContent =
+              `${p.signal_date} · IC ${known(p.ic)} · Rank IC ${known(p.rank_ic)} · 样本 ${known(p.sample_size)}`;
+          };
+          $(id).addEventListener("input", show);
+          show();
+        }
+      }
       if (row.kind === "factor_backtest" && data.series?.length) {
         const series = data.series.filter(
           (r) =>
@@ -334,20 +531,66 @@ const RunCenterUI = (() => {
   const readinessKinds = new Set(["factor_backtest", "factor_lab", "screen"]);
   function invalidate() {
     checked = null;
+    if ($("center-review")) $("center-review").hidden = true;
     if ($("center-submit"))
       $("center-submit").disabled =
         busy || !copy || readinessKinds.has(copy.kind);
     if ($("center-preflight-result"))
       $("center-preflight-result").textContent = "参数有变化，请重新预检。";
   }
-  async function configure(query) {
+  async function configure(query, freshKind = null) {
     const own = ++sequence;
-    const data = await get("/api/v1/run-center/copy?" + query);
+    copy = null;
+    checked = null;
+    let data;
+    try {
+      data = await get(
+        freshKind
+          ? "/api/v1/run-center/configuration?kind=" + freshKind
+          : "/api/v1/run-center/copy?" + query,
+      );
+    } catch (e) {
+      if (own === sequence) fail(e);
+      return;
+    }
     if (own !== sequence) return;
+    if (freshKind) {
+      if (query.has("stock")) {
+        if (!/^[0-9]{6}$/.test(query.get("stock")))
+          throw Error("旧链接股票代码无效，请明确选择范围");
+        data.params.symbols = [query.get("stock")];
+        if (freshKind === "factor_backtest") data.params.top_n = 1;
+      }
+      for (const key of ["start_date", "end_date", "factor", "adjustment"])
+        if (query.has(key) && key in data.params)
+          data.params[key] = query.get(key);
+      if (query.has("benchmark"))
+        data.params.benchmark_symbol = query.get("benchmark");
+      if (query.has("screen_source")) {
+        const run = await get(
+          "/api/v1/screens/runs/" +
+            encodeURIComponent(query.get("screen_source")),
+        );
+        if (own !== sequence) return;
+        const symbols = (run.items || [])
+          .filter((r) => r.selected)
+          .map((r) => r.symbol);
+        if (!symbols.length || symbols.length > 500)
+          throw Error("来源选股没有可预填的冻结股票范围");
+        data.params.symbols = symbols;
+        data.source_run_id = run.run_id;
+        if (freshKind === "factor_backtest")
+          data.params.top_n = Math.min(data.params.top_n, symbols.length);
+      }
+    }
     copy = data;
-    $("center-configure-title").textContent = data.label + " · 复制配置";
-    $("center-copy-source").textContent =
-      "参数来源：" + data.source_run_id + "；只预填，尚未执行。";
+    $("center-title").textContent =
+      data.label + (freshKind ? " · 新建配置" : " · 复制配置");
+    $("center-configure-title").textContent =
+      data.label + (freshKind ? " · 新建配置" : " · 复制配置");
+    $("center-copy-source").textContent = data.source_run_id
+      ? "参数来源：" + data.source_run_id + "；只预填，尚未执行。"
+      : "新建配置：当前接口默认值，尚未执行。";
     $("center-copy-warning").textContent =
       data.warnings.join("；") ||
       "保留原运行参数及范围；执行前请核对。新运行使用当前本地数据，不保证重现旧结果。";
@@ -366,36 +609,160 @@ const RunCenterUI = (() => {
       "windows",
       "source",
       "name",
+      "factor_direction",
+      "rebalance",
+      "top_n_values",
+      "rebalance_values",
+      "quantiles",
     ]);
+    const range = new Set([
+      "symbols",
+      "symbol",
+      "stock_pool_id",
+      "stock_pool_revision",
+      "start_date",
+      "end_date",
+      "as_of",
+      "universe_mode",
+      "benchmark_symbol",
+      "adjustment",
+      "source",
+    ]);
+    const costs = new Set([
+      "initial_capital",
+      "commission_bps",
+      "commission_bps_values",
+      "slippage_bps",
+      "stamp_duty_bps",
+      "lot_size",
+      "round_trip_cost_bps",
+    ]);
+    for (const id of [
+      "center-scope-fields",
+      "center-common-fields",
+      "center-advanced-fields",
+      "center-cost-fields",
+    ])
+      $(id).innerHTML = "";
     for (const [key, value] of Object.entries(data.params)) {
       if (value === null) continue;
       const html = field(key, value, data.schema.properties[key] || {});
       $(
-        common.has(key) ? "center-common-fields" : "center-advanced-fields",
+        range.has(key)
+          ? "center-scope-fields"
+          : costs.has(key)
+            ? "center-cost-fields"
+            : common.has(key)
+              ? "center-common-fields"
+              : "center-advanced-fields",
       ).insertAdjacentHTML("beforeend", html);
     }
+    if (!freshKind && data.params.stock_pool_id) {
+      for (const key of ["stock_pool_id", "stock_pool_revision"])
+        if ($("copy-" + key)) $("copy-" + key).readOnly = true;
+    }
+    if ($("center-factor-add"))
+      $("center-factor-add").addEventListener("click", () => {
+        if (
+          $("center-factor-rows").querySelectorAll(".factor-editor-row")
+            .length >= 12
+        ) {
+          fail(Error("最多 12 个因子"));
+          return;
+        }
+        $("center-factor-rows").insertAdjacentHTML("beforeend", factorRow());
+        invalidate();
+      });
+    $("center-copy-form").addEventListener("click", (e) => {
+      const button = e.target.closest?.("[data-factor-remove]");
+      if (!button) return;
+      button.closest(".factor-editor-row").remove();
+      invalidate();
+    });
     $("center-missing-confirm").parentElement.hidden =
       !data.missing_fields.length;
     $("center-preflight").hidden = !readinessKinds.has(data.kind);
     invalidate();
+    if (freshKind) await loadPools(own);
+  }
+  async function loadPools(own) {
+    try {
+      const pools = await get("/api/v1/stock-pools?include_archived=false");
+      if (own !== sequence) return;
+      const items = Array.isArray(pools) ? pools : pools.items;
+      $("center-pool-selector").innerHTML =
+        `<label>范围来源<select id="center-select-pool"><option value="manual">手动股票代码（不冒充历史指数成分）</option>${items.map((p) => `<option value="${esc(p.pool_id)}:${p.current_revision}">${esc(p.name)} · r${p.current_revision}</option>`).join("")}</select></label><p id="center-pool-preview"></p>`;
+      $("center-select-pool").addEventListener("change", async () => {
+        const generation = ++poolSequence;
+        invalidate();
+        scopePending = true;
+        scopeError = null;
+        const value = $("center-select-pool").value;
+        const manualInput = $("center-copy-form").querySelector?.('[data-param="symbols"]');
+        if (manualInput) manualInput.disabled = value !== "manual";
+        try {
+          if (value === "manual") {
+            copy.params.stock_pool_id = null;
+            copy.params.stock_pool_revision = null;
+            copy.scope = [];
+            $("center-pool-preview").textContent = "使用明确输入的股票代码。";
+            return;
+          }
+          const split = value.lastIndexOf(":"),
+            id = value.slice(0, split),
+            revision = Number(value.slice(split + 1));
+          const pool = await get(
+            `/api/v1/stock-pools/${encodeURIComponent(id)}?revision=${revision}`,
+          );
+          if (generation !== poolSequence || own !== sequence) return;
+          if (!pool.symbols?.length) throw Error("所选 revision 没有冻结股票");
+          copy.params.stock_pool_id = id;
+          copy.params.stock_pool_revision = revision;
+          copy.scope = pool.symbols;
+          $("center-pool-preview").textContent =
+            `冻结 ${id} · r${revision} · ${pool.symbols.length} 只：${pool.symbols.join(" ")}`;
+        } catch (e) {
+          if (generation === poolSequence) {
+            scopeError = e.message;
+            fail(e);
+          }
+        } finally {
+          if (generation === poolSequence) scopePending = false;
+        }
+      });
+    } catch (e) {
+      if (own === sequence)
+        $("center-pool-selector").textContent =
+          "股票池列表暂不可用：" + e.message + "；可明确输入股票代码。";
+    }
+  }
+  let poolSequence = 0,
+    scopePending = false,
+    scopeError = null;
+  function currentParams() {
+    if (scopePending || scopeError)
+      throw Error(scopeError || "股票池读取中，请稍候");
+    const params = readParams($("center-copy-form"), copy.params);
+    if (params.stock_pool_id) {
+      delete params.symbols;
+    } else if ("symbols" in params && !params.symbols?.length)
+      throw Error("请明确输入冻结股票范围，不能使用隐式默认池");
+    return params;
   }
   async function preflight() {
     if (busy || !copy) return;
+    checked = null;
     busy = true;
     $("center-preflight").disabled = true;
     $("center-submit").disabled = true;
     try {
-      const params = readParams($("center-copy-form"), copy.params);
+      const params = currentParams();
       const p = await get("/api/v1/research-data/preflight", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ research_type: copy.kind, parameters: params }),
       });
-      if (
-        JSON.stringify(params) !==
-        JSON.stringify(readParams($("center-copy-form"), copy.params))
-      )
-        return;
+      if (JSON.stringify(params) !== JSON.stringify(currentParams())) return;
       $("center-preflight-result").innerHTML = renderValue(p);
       checked = { params: JSON.stringify(params), report: p };
       $("center-submit").disabled = !(p.ready === true || p.status === "ready");
@@ -406,11 +773,11 @@ const RunCenterUI = (() => {
       $("center-preflight").disabled = false;
     }
   }
-  async function submit(event) {
+  async function submit(event, execute = false) {
     event.preventDefault();
     if (busy || submitted || !copy) return;
     try {
-      const params = readParams($("center-copy-form"), copy.params);
+      const params = currentParams();
       if (copy.missing_fields.length && !$("center-missing-confirm").checked)
         throw Error("请明确核对原记录缺失参数的补充值");
       if (
@@ -420,6 +787,13 @@ const RunCenterUI = (() => {
           !(checked.report.ready === true || checked.report.status === "ready"))
       )
         throw Error("请先通过当前参数的数据预检");
+      if (!execute && $("center-review")?.querySelector) {
+        $("center-review-content").innerHTML =
+          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。执行假设沿用原模型。</p>`;
+        $("center-review").hidden = false;
+        $("center-review").scrollIntoView({ block: "nearest" });
+        return;
+      }
       if (!window.confirm("确认使用这些参数提交新的" + copy.label + "？"))
         return;
       busy = true;
@@ -434,6 +808,17 @@ const RunCenterUI = (() => {
         "已提交：" +
         (p.task_id || p.run_id || p.batch_id || "完成") +
         "。可从历史入口查看；不要重复提交。";
+      const source = p.task_id
+        ? "task"
+        : copy.kind === "screen"
+          ? "screen"
+          : copy.kind === "document_event"
+            ? "event"
+            : "index";
+      const record = p.task_id || p.run_id || p.batch_id;
+      $("center-submitted-link").innerHTML = record
+        ? `<a href="/backtests/detail?${esc(new URLSearchParams({ source, record }).toString())}">查看本次运行详情</a> · <a href="/backtests/history">返回历史</a>`
+        : '<a href="/backtests/history">查看历史记录</a>';
       $("center-copy-form")
         .querySelectorAll("input,select,textarea,button")
         .forEach((x) => (x.disabled = true));
@@ -494,18 +879,46 @@ const RunCenterUI = (() => {
     }
     if (!$("center-history")) return;
     const query = new URLSearchParams(location.search);
+    const configKind = location.pathname.endsWith("/factors")
+      ? "factor_lab"
+      : location.pathname.endsWith("/new")
+        ? "factor_backtest"
+        : null;
+    if ($("center-types"))
+      $("center-types").hidden =
+        location.pathname !== "/backtests" ||
+        query.has("kind") ||
+        query.has("status") ||
+        query.has("page");
+    if ($("center-event-entry"))
+      $("center-event-entry").hidden = $("center-types").hidden;
     if (location.pathname.endsWith("/detail")) {
       $("center-history").hidden = true;
       $("center-detail").hidden = false;
       await detail(query);
-    } else if (location.pathname.endsWith("/configure")) {
+    } else if (location.pathname.endsWith("/configure") || configKind) {
       $("center-history").hidden = true;
       $("center-configure").hidden = false;
       $("center-copy-form").addEventListener("input", invalidate);
       $("center-copy-form").addEventListener("submit", submit);
       $("center-preflight").addEventListener("click", preflight);
-      await configure(query);
+      $("center-copy-form").addEventListener("change", invalidate);
+      $("center-execute").addEventListener("click", (e) => submit(e, true));
+      $("center-review-cancel").addEventListener("click", () => {
+        $("center-review").hidden = true;
+      });
+      await configure(query, configKind);
     } else {
+      if (
+        location.pathname === "/backtests" &&
+        !query.has("kind") &&
+        !query.has("status") &&
+        !query.has("page")
+      ) {
+        $("center-history").hidden = true;
+        return;
+      }
+      $("center-title").textContent = "研究与回测历史";
       for (const k of ["kind", "status"])
         $("center-" + k).value = query.get(k) || "";
       page = Math.max(1, Math.min(10000, Number(query.get("page")) || 1));
@@ -530,5 +943,14 @@ const RunCenterUI = (() => {
     }
   }
   init().catch(fail);
-  return { history, detail, preflight, submit };
+  return {
+    history,
+    detail,
+    preflight,
+    submit,
+    configure,
+    currentParams,
+    factorName,
+    strategyName,
+  };
 })();

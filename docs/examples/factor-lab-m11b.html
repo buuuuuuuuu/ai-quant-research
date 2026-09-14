@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>多因子研究实验报告</title>
+<style>body{font:14px Arial,"Microsoft YaHei",sans-serif;background:#eef2f5;color:#173048;margin:0}main{max-width:1240px;margin:28px auto;padding:40px;background:#fff}h1,h2{color:#173b5e}.notice{padding:14px;background:#fff7e8;border-left:4px solid #bd8d35}table{width:100%;border-collapse:collapse;margin:18px 0}th{background:#173b5e;color:white;text-align:left}th,td{padding:9px;border:1px solid #dce3e8}tr:nth-child(even){background:#f5f7fa}.selected{font-weight:bold;color:#166446}*{box-sizing:border-box}body{overflow-wrap:anywhere}.table-scroll{max-width:100%;overflow-x:auto}table{min-width:620px}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:20px 0}summary{min-height:44px;cursor:pointer}@media(max-width:768px){main{margin:0;padding:20px 14px}h1{font-size:24px}}@media(min-width:769px){main{padding:32px}}</style></head><body><main>
+<p class="notice">展示示例：使用本地人工测试数据生成，仅用于核对界面与中文标签，不是真实市场业绩。</p><h1>多因子研究与策略实验报告</h1><p>2024-01-02 至 2024-03-08 · 3 只股票 · 2 个财务因子</p>
+<p>明确冻结股票范围：600519、000001、300750</p>
+<details open><summary>实验参数与成本口径</summary><p>持仓数量：1；调仓周期：按月（monthly） ；佣金：5.0 bp。</p><p>初始资金 100000.0；滑点 5.0 bp；卖出印花税 5.0 bp；买入整手 100 股；缺失策略 排除缺失样本（exclude）。</p><p>训练比例 0.6；验证比例 0.2；滚动验证轮次 3。比例为原参数，真实日期区间见下方分段结果。</p></details>
+<p class="notice">股票池：显式股票范围（explicit）；行业中性化：不使用（none）；行业持仓上限：100.0%。 The requested universe does not prove historical index membership and may have survivorship bias. 模型只根据验证集排序；测试集不得参与参数选择。财报必须在信号日 15:00 前已公开。</p>
+<h2>因子设置</h2><div class="table-scroll"><table><thead><tr><th>因子</th><th>相对权重（原值）</th><th>方向</th></tr></thead><tbody><tr><td>加权净资产收益率（roe）</td><td>1.0</td><td>高值优先（desc）</td></tr><tr><td>资产负债率（debt_asset_ratio）</td><td>1.0</td><td>低值优先（asc）</td></tr></tbody></table></div>
+<h2>因子有效性：IC / Rank IC</h2><p>IC 为因子值与可观察未来收益的 Pearson 相关系数；Rank IC 为两者排名的 Pearson 相关系数。低值优先因子按方向修正，正值代表符合预期方向。未来收益从下一交易日开盘至下一调仓执行开盘。IC 信息比率沿用原 IC 均值与标准差口径；小样本或零方差可能没有有效值。</p><div class="table-scroll"><table><thead><tr><th>因子</th><th>期数</th><th>IC 均值</th><th>Rank IC 均值</th><th>IC IR</th><th>正向占比</th></tr></thead><tbody><tr><td>未知因子（composite_score）</td><td>3</td><td>0.4967</td><td>0.5000</td><td>0.5698</td><td>66.67%</td></tr><tr><td>资产负债率（debt_asset_ratio）</td><td>3</td><td>0.5499</td><td>0.5000</td><td>0.7055</td><td>66.67%</td></tr><tr><td>加权净资产收益率（roe）</td><td>3</td><td>0.5499</td><td>0.5000</td><td>0.7055</td><td>66.67%</td></tr></tbody></table></div>
+<h2>参数扫描与策略对比</h2><div class="table-scroll"><table><thead><tr><th>策略</th><th>总收益</th><th>年化</th><th>超额</th><th>最大回撤</th><th>夏普</th><th>入选</th></tr></thead><tbody><tr><td>加权净资产收益率（roe） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>12.06%</td><td>81.79%</td><td>9.66%</td><td>0.09%</td><td>71.8793</td><td></td></tr><tr><td>资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>12.06%</td><td>81.79%</td><td>9.66%</td><td>0.09%</td><td>71.8793</td><td></td></tr><tr class="selected"><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>12.06%</td><td>81.79%</td><td>9.66%</td><td>0.09%</td><td>71.8793</td><td>验证集最优</td></tr></tbody></table></div>
+<h2>训练 / 验证 / 样本外</h2><div class="table-scroll"><table><thead><tr><th>策略</th><th>分段</th><th>日期</th><th>收益</th><th>超额</th><th>夏普</th></tr></thead><tbody><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>训练集（train）</td><td>2024-01-02 — 2024-02-09</td><td>7.20%</td><td>5.80%</td><td>82.2124</td></tr><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>验证集（validation）</td><td>2024-02-12 — 2024-02-23</td><td>2.26%</td><td>1.82%</td><td>3235.1199</td></tr><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>样本外测试集（test）</td><td>2024-02-26 — 2024-03-08</td><td>1.71%</td><td>1.27%</td><td>50.9096</td></tr></tbody></table></div>
+<h2>年度因子稳定性</h2><div class="table-scroll"><table><thead><tr><th>因子</th><th>年份</th><th>期数</th><th>IC</th><th>Rank IC</th></tr></thead><tbody><tr><td>未知因子（composite_score）</td><td>2024</td><td>3</td><td>0.4967</td><td>0.5000</td></tr><tr><td>资产负债率（debt_asset_ratio）</td><td>2024</td><td>3</td><td>0.5499</td><td>0.5000</td></tr><tr><td>加权净资产收益率（roe）</td><td>2024</td><td>3</td><td>0.5499</td><td>0.5000</td></tr></tbody></table></div>
+<h2>滚动样本外验证</h2><div class="table-scroll"><table><thead><tr><th>策略</th><th>轮次</th><th>训练结束</th><th>测试区间</th><th>测试收益</th></tr></thead><tbody><tr><td>加权净资产收益率（roe） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>1</td><td>2024-01-17</td><td>2024-01-18 — 2024-02-02</td><td>2.89%</td></tr><tr><td>加权净资产收益率（roe） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>2</td><td>2024-02-02</td><td>2024-02-05 — 2024-02-20</td><td>2.80%</td></tr><tr><td>加权净资产收益率（roe） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>3</td><td>2024-02-20</td><td>2024-02-21 — 2024-03-08</td><td>2.47%</td></tr><tr><td>资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>1</td><td>2024-01-17</td><td>2024-01-18 — 2024-02-02</td><td>2.89%</td></tr><tr><td>资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>2</td><td>2024-02-02</td><td>2024-02-05 — 2024-02-20</td><td>2.80%</td></tr><tr><td>资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>3</td><td>2024-02-20</td><td>2024-02-21 — 2024-03-08</td><td>2.47%</td></tr><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>1</td><td>2024-01-17</td><td>2024-01-18 — 2024-02-02</td><td>2.89%</td></tr><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>2</td><td>2024-02-02</td><td>2024-02-05 — 2024-02-20</td><td>2.80%</td></tr><tr><td>多因子组合：加权净资产收益率（roe） + 资产负债率（debt_asset_ratio） · 持仓 1 只 · 按月（monthly） · 佣金 5 bp</td><td>3</td><td>2024-02-20</td><td>2024-02-21 — 2024-03-08</td><td>2.47%</td></tr></tbody></table></div>
+<p>权重用于截面排名后的加权合成；available 缺失策略会对有效因子重新归一权重，以上原值不代表资金占比。</p>
+<h2>因子分组的可观察未来收益</h2><div class="table-scroll"><table><thead><tr><th>信号日期</th><th>因子</th><th>分组</th><th>样本数量</th><th>平均未来收益</th></tr></thead><tbody><tr><td>2024-01-02 00:00:00</td><td>加权净资产收益率（roe）</td><td>1</td><td>1</td><td>4.39%</td></tr><tr><td>2024-01-02 00:00:00</td><td>加权净资产收益率（roe）</td><td>2</td><td>1</td><td>6.58%</td></tr><tr><td>2024-01-02 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>1</td><td>1</td><td>4.39%</td></tr><tr><td>2024-01-02 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>2</td><td>1</td><td>6.58%</td></tr><tr><td>2024-01-02 00:00:00</td><td>未知因子（composite_score）</td><td>1</td><td>1</td><td>4.39%</td></tr><tr><td>2024-01-02 00:00:00</td><td>未知因子（composite_score）</td><td>2</td><td>1</td><td>6.58%</td></tr><tr><td>2024-02-01 00:00:00</td><td>加权净资产收益率（roe）</td><td>1</td><td>1</td><td>4.02%</td></tr><tr><td>2024-02-01 00:00:00</td><td>加权净资产收益率（roe）</td><td>2</td><td>1</td><td>5.89%</td></tr><tr><td>2024-02-01 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>1</td><td>1</td><td>4.02%</td></tr><tr><td>2024-02-01 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>2</td><td>1</td><td>5.89%</td></tr><tr><td>2024-02-01 00:00:00</td><td>未知因子（composite_score）</td><td>1</td><td>1</td><td>4.02%</td></tr><tr><td>2024-02-01 00:00:00</td><td>未知因子（composite_score）</td><td>2</td><td>1</td><td>5.89%</td></tr><tr><td>2024-03-01 00:00:00</td><td>加权净资产收益率（roe）</td><td>1</td><td>1</td><td>0.90%</td></tr><tr><td>2024-03-01 00:00:00</td><td>加权净资产收益率（roe）</td><td>2</td><td>1</td><td>1.06%</td></tr><tr><td>2024-03-01 00:00:00</td><td>加权净资产收益率（roe）</td><td>3</td><td>1</td><td>0.74%</td></tr><tr><td>2024-03-01 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>1</td><td>1</td><td>0.90%</td></tr><tr><td>2024-03-01 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>2</td><td>1</td><td>1.06%</td></tr><tr><td>2024-03-01 00:00:00</td><td>资产负债率（debt_asset_ratio）</td><td>3</td><td>1</td><td>0.74%</td></tr><tr><td>2024-03-01 00:00:00</td><td>未知因子（composite_score）</td><td>1</td><td>1</td><td>0.90%</td></tr><tr><td>2024-03-01 00:00:00</td><td>未知因子（composite_score）</td><td>2</td><td>1</td><td>1.06%</td></tr><tr><td>2024-03-01 00:00:00</td><td>未知因子（composite_score）</td><td>3</td><td>1</td><td>0.74%</td></tr></tbody></table></div>
+<p>表格沿用原报告最多 120 条记录的展示上限；完整明细请查看同运行导出的 CSV 或工作簿。未记录的统计量不填零。</p>
+<details><summary>原参数与完整诊断（内部代码）</summary><pre>{
+  &#34;symbols&#34;: [
+    &#34;600519&#34;,
+    &#34;000001&#34;,
+    &#34;300750&#34;
+  ],
+  &#34;start_date&#34;: &#34;2024-01-02&#34;,
+  &#34;end_date&#34;: &#34;2024-03-08&#34;,
+  &#34;factors&#34;: [
+    {
+      &#34;code&#34;: &#34;roe&#34;,
+      &#34;weight&#34;: 1.0,
+      &#34;direction&#34;: &#34;desc&#34;
+    },
+    {
+      &#34;code&#34;: &#34;debt_asset_ratio&#34;,
+      &#34;weight&#34;: 1.0,
+      &#34;direction&#34;: &#34;asc&#34;
+    }
+  ],
+  &#34;top_n_values&#34;: [
+    1
+  ],
+  &#34;rebalance_values&#34;: [
+    &#34;monthly&#34;
+  ],
+  &#34;commission_bps_values&#34;: [
+    5.0
+  ],
+  &#34;quantiles&#34;: 3,
+  &#34;benchmark_symbol&#34;: &#34;csi000300&#34;,
+  &#34;adjustment&#34;: &#34;qfq&#34;,
+  &#34;initial_capital&#34;: 100000.0,
+  &#34;slippage_bps&#34;: 5.0,
+  &#34;stamp_duty_bps&#34;: 5.0,
+  &#34;lot_size&#34;: 100,
+  &#34;missing_policy&#34;: &#34;exclude&#34;,
+  &#34;training_fraction&#34;: 0.6,
+  &#34;validation_fraction&#34;: 0.2,
+  &#34;walk_forward_folds&#34;: 3,
+  &#34;max_combinations&#34;: 48,
+  &#34;universe_mode&#34;: &#34;explicit&#34;,
+  &#34;universe_benchmark&#34;: &#34;csi000300&#34;,
+  &#34;classification_system&#34;: &#34;provider&#34;,
+  &#34;industry_neutralization&#34;: &#34;none&#34;,
+  &#34;max_industry_weight&#34;: 1.0,
+  &#34;require_verified_industry&#34;: false,
+  &#34;stock_pool&#34;: null
+}</pre><pre>{
+  &#34;point_in_time_rule&#34;: &#34;published_at strictly before signal-day 15:00&#34;,
+  &#34;forward_return_rule&#34;: &#34;next trading day open to next rebalance execution open&#34;,
+  &#34;model_selection_rule&#34;: &#34;validation-period Sharpe ratio, then validation excess return&#34;,
+  &#34;test_period_used_for_selection&#34;: false,
+  &#34;universe_mode&#34;: &#34;explicit&#34;,
+  &#34;universe_benchmark&#34;: &#34;csi000300&#34;,
+  &#34;industry_neutralization&#34;: &#34;none&#34;,
+  &#34;classification_system&#34;: &#34;provider&#34;,
+  &#34;max_industry_weight&#34;: 1.0,
+  &#34;require_verified_industry&#34;: false,
+  &#34;survivorship_bias_warning&#34;: &#34;The requested universe does not prove historical index membership and may have survivorship bias.&#34;,
+  &#34;missing_factor_policy&#34;: &#34;exclude&#34;,
+  &#34;combinations&#34;: 3,
+  &#34;segments&#34;: [
+    {
+      &#34;segment&#34;: &#34;train&#34;,
+      &#34;start_date&#34;: &#34;2024-01-02&#34;,
+      &#34;end_date&#34;: &#34;2024-02-09&#34;,
+      &#34;trading_days&#34;: 29
+    },
+    {
+      &#34;segment&#34;: &#34;validation&#34;,
+      &#34;start_date&#34;: &#34;2024-02-12&#34;,
+      &#34;end_date&#34;: &#34;2024-02-23&#34;,
+      &#34;trading_days&#34;: 10
+    },
+    {
+      &#34;segment&#34;: &#34;test&#34;,
+      &#34;start_date&#34;: &#34;2024-02-26&#34;,
+      &#34;end_date&#34;: &#34;2024-03-08&#34;,
+      &#34;trading_days&#34;: 10
+    }
+  ]
+}</pre></details>
+</main></body></html>

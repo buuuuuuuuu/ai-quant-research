@@ -8,18 +8,21 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl.styles import Font, PatternFill
 
+from ai_quant_assistant.reports.presentation import IC_EXPLANATION, install_filters
+
 
 class FactorLabReportWriter:
     def __init__(self) -> None:
         self.environment = Environment(
             loader=FileSystemLoader(Path(__file__).parent / "templates"),
-            autoescape=select_autoescape(["html", "xml"]),
+            autoescape=select_autoescape(["html", "xml"], default=True),
         )
+        install_filters(self.environment)
         self.environment.filters["pct"] = lambda value: (
-            "—" if value is None or pd.isna(value) else f"{float(value) * 100:.2f}%"
+            "未记录" if value is None or pd.isna(value) else f"{float(value) * 100:.2f}%"
         )
         self.environment.filters["number"] = lambda value: (
-            "—" if value is None or pd.isna(value) else f"{float(value):.4f}"
+            "未记录" if value is None or pd.isna(value) else f"{float(value):.4f}"
         )
 
     def write(self, directory: Path, **data: Any) -> dict[str, Path]:
@@ -45,7 +48,15 @@ class FactorLabReportWriter:
         context = {
             name: frame.tail(120).to_dict(orient="records") for name, frame in frames.items()
         }
-        context.update(spec=data["spec"], diagnostics=data["diagnostics"])
+        context.update(
+            spec=data["spec"], diagnostics=data["diagnostics"], ic_explanation=IC_EXPLANATION
+        )
+        context.update(
+            spec_json=json.dumps(data["spec"], ensure_ascii=False, indent=2, default=str),
+            diagnostics_json=json.dumps(
+                data["diagnostics"], ensure_ascii=False, indent=2, default=str
+            ),
+        )
         paths["html_report"].write_text(
             self.environment.get_template("factor_lab.html.j2").render(**context), encoding="utf-8"
         )

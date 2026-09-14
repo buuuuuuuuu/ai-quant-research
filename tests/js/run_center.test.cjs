@@ -27,6 +27,7 @@ const row = (id) => ({
 function harness(
   pathname = "/backtests",
   responder = async () => ({ items: [], total: 0, notice: "fixture" }),
+  options = {},
 ) {
   const elements = new Map(),
     calls = [];
@@ -42,6 +43,7 @@ function harness(
         inputs: [],
         parentElement: { hidden: false },
         listeners: {},
+        scrollIntoView() {},
         addEventListener(k, f) {
           this.listeners[k] = f;
         },
@@ -57,7 +59,7 @@ function harness(
   };
   const location = {
     pathname,
-    search: "?source=task&record=original",
+    search: options.search || "?source=task&record=original",
     assign() {
       throw Error("unexpected redirect");
     },
@@ -87,6 +89,8 @@ function harness(
       };
     },
   });
+  if (options.catalog)
+    element("center-catalog").textContent = JSON.stringify(options.catalog);
   vm.runInContext(code, context);
   return {
     context,
@@ -159,7 +163,7 @@ test("overview reuses one bounded dashboard read without creating plans or choos
 });
 test("late list success cannot replace a newer type filter", async () => {
   let release;
-  const h = harness("/backtests", (url) =>
+  const h = harness("/backtests/history", (url) =>
     url.includes("kind=screen")
       ? Promise.resolve({ items: [row("new")], total: 1 })
       : new Promise((r) => (release = r)),
@@ -174,7 +178,7 @@ test("late list success cannot replace a newer type filter", async () => {
 });
 test("late list failure cannot clear the newer page", async () => {
   let release;
-  const h = harness("/backtests", (url) =>
+  const h = harness("/backtests/history", (url) =>
     url.includes("kind=screen")
       ? Promise.resolve({ items: [row("new")], total: 1 })
       : new Promise((r) => (release = r)),
@@ -283,7 +287,207 @@ test("failed preflight and missing-field acknowledgment prevent execution", asyn
 });
 test("nulls in result tables remain unknown and untrusted text is escaped", () => {
   const html = ui.renderValue([{ value: null, source: "<img onerror=x>" }]);
-  assert.match(html, /未知/);
+  assert.match(html, /未记录/);
   assert.match(html, /&lt;img/);
   assert.doesNotMatch(html, /<img/);
+});
+test("fresh lab is independent, preserves legacy range query, and only reads on entry", async () => {
+  const data = {
+    ...copied,
+    kind: "factor_lab",
+    label: "因子实验",
+    source_run_id: null,
+    params: {
+      symbols: [],
+      factors: [{ code: "roe", weight: 2, direction: "desc" }],
+      start_date: "2015-01-01",
+      end_date: "2024-12-31",
+    },
+    schema: {
+      properties: {
+        symbols: { type: "array" },
+        factors: { type: "array" },
+        start_date: { type: "string" },
+        end_date: { type: "string" },
+      },
+    },
+  };
+  const h = harness(
+    "/backtests/factors",
+    async (url) => (url.includes("configuration") ? structuredClone(data) : []),
+    { search: "?stock=600519&start_date=2024-01-01" },
+  );
+  await tick();
+  assert.ok(h.calls.every((c) => !c.options.method));
+  assert.equal(
+    h.calls[0].url,
+    "/api/v1/run-center/configuration?kind=factor_lab",
+  );
+  assert.match(h.element("center-scope-fields").innerHTML, /600519/);
+  assert.match(h.element("center-scope-fields").innerHTML, /2024-01-01/);
+  assert.match(
+    h.element("center-common-fields").innerHTML,
+    /data-factor-editor/,
+  );
+  assert.equal(h.element("center-submit").disabled, true);
+});
+test("Chinese display preserves codes and unknown factor names remain escaped", async () => {
+  const catalog = {
+    factors: { roe: "加权净资产收益率", debt_asset_ratio: "资产负债率" },
+    enums: { desc: "高值优先", asc: "低值优先", monthly: "按月" },
+    fields: { factor: "因子" },
+  };
+  const h = harness(
+    "/backtests/detail",
+    async () => ({ ...row("one"), result: { summary: { factor_count: 2 } } }),
+    { catalog },
+  );
+  await tick();
+  assert.equal(h.ui.factorName("roe"), "加权净资产收益率（roe）");
+  assert.match(
+    h.ui.strategyName(
+      "composite:roe+debt_asset_ratio|top=1|monthly|commission=5",
+    ),
+    /资产负债率/,
+  );
+  assert.match(h.ui.factorName("unknown"), /未知因子（unknown）/);
+  h.element("center-copy-form").inputs = [
+    { dataset: { param: "symbols", type: "symbols" }, value: "600519 000001" },
+  ];
+  assert.deepEqual(
+    ui.readParams(h.element("center-copy-form"), { symbols: [] }).symbols,
+    ["600519", "000001"],
+  );
+});
+test("factor rows read exact codes, directions and relative weights without percent conversion", () => {
+  const original = {
+    factors: [{ code: "roe", weight: 2, direction: "desc" }],
+    commission_bps_values: [0, 5],
+  };
+  const form = {
+    querySelector: () => true,
+    querySelectorAll: (s) =>
+      s === "[data-param]"
+        ? []
+        : [
+            {
+              querySelector: (s) => ({
+                value: s.includes("code")
+                  ? "debt_asset_ratio"
+                  : s.includes("weight")
+                    ? "3.5"
+                    : "asc",
+              }),
+            },
+          ],
+  };
+  const params = ui.readParams(form, original);
+  assert.deepEqual(params.factors, [
+    { code: "debt_asset_ratio", weight: 3.5, direction: "asc" },
+  ]);
+  assert.equal(original.factors[0].weight, 2);
+  assert.deepEqual(params.commission_bps_values, [0, 5]);
+  assert.match(
+    ui.factorRow({ code: "<script>", weight: 2, direction: "asc" }),
+    /&lt;script&gt;/,
+  );
+});
+test("on-page review does not execute; final execution and duplicate guard are separate", async () => {
+  const h = harness("/backtests/configure", async (url) =>
+    url.includes("/copy?")
+      ? structuredClone(copied)
+      : url.includes("preflight")
+        ? { ready: true }
+        : { task_id: "one" },
+  );
+  await tick();
+  await h.ui.preflight();
+  h.element("center-review").querySelector = () => null;
+  await h.ui.submit({ preventDefault() {} });
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.element("center-review").hidden, false);
+  assert.match(h.element("center-review-content").innerHTML, /600519/);
+  await h.ui.submit({ preventDefault() {} }, true);
+  await h.ui.submit({ preventDefault() {} }, true);
+  assert.equal(h.calls.length, 3);
+  assert.match(
+    h.element("center-submitted-link").innerHTML,
+    /source=task&amp;record=one/,
+  );
+});
+test("failed second preflight clears previous approval", async () => {
+  let fail = false;
+  const h = harness("/backtests/configure", async (url) =>
+    url.includes("/copy?")
+      ? structuredClone(copied)
+      : fail
+        ? { error: "offline" }
+        : { ready: true },
+  );
+  await tick();
+  await h.ui.preflight();
+  fail = true;
+  await h.ui.preflight();
+  await h.ui.submit({ preventDefault() {} }, true);
+  assert.equal(h.calls.length, 3);
+  assert.match(h.element("center-error").textContent, /预检/);
+});
+test("late detail error cannot overwrite a newer identity", async () => {
+  let release;
+  const h = harness("/backtests/detail", (url) =>
+    url.includes("new")
+      ? Promise.resolve(row("new"))
+      : new Promise((r) => (release = r)),
+  );
+  await h.ui.detail("source=task&record=new");
+  release({ error: "old failed" });
+  await tick();
+  assert.equal(h.element("center-error").textContent, "");
+  assert.match(h.element("center-identity").innerHTML, /new/);
+});
+test("fresh pool selection ignores old scope and blocks failed scope until explicit selection", async () => {
+  let release;
+  const h = harness("/backtests/new", async (url) => {
+    if (url.includes("configuration")) return structuredClone(copied);
+    if (url.endsWith("include_archived=false"))
+      return [
+        { pool_id: "old", current_revision: 1, name: "old" },
+        { pool_id: "new", current_revision: 2, name: "new" },
+      ];
+    if (url.includes("/old?")) return new Promise((r) => (release = r));
+    if (url.includes("/bad?")) return { error: "revision missing" };
+    return { symbols: ["000001", "300750"] };
+  });
+  await tick();
+  const select = h.element("center-select-pool");
+  select.value = "old:1";
+  const old = select.listeners.change();
+  assert.throws(() => h.ui.currentParams(), /读取中/);
+  select.value = "new:2";
+  await select.listeners.change();
+  release({ symbols: ["600519"] });
+  await old;
+  assert.equal(h.ui.currentParams().stock_pool_id, "new");
+  assert.equal(h.ui.currentParams().stock_pool_revision, 2);
+  assert.equal(h.ui.currentParams().symbols, undefined);
+  assert.match(h.element("center-pool-preview").textContent, /000001 300750/);
+  select.value = "bad:3";
+  await select.listeners.change();
+  assert.throws(() => h.ui.currentParams(), /revision missing/);
+  select.value = "manual";
+  await select.listeners.change();
+  assert.equal(h.ui.currentParams().stock_pool_id, null);
+});
+test("copy configuration late failure cannot replace a newer record", async () => {
+  let release;
+  const h = harness("/backtests/configure", (url) =>
+    url.includes("new")
+      ? Promise.resolve(structuredClone({ ...copied, source_run_id: "new" }))
+      : new Promise((r) => (release = r)),
+  );
+  await h.ui.configure("source=index&record=new");
+  release({ error: "old missing" });
+  await tick();
+  assert.equal(h.element("center-error").textContent, "");
+  assert.match(h.element("center-copy-source").textContent, /new/);
 });

@@ -425,8 +425,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/research", include_in_schema=False)
     @app.get("/research/copilot", include_in_schema=False)
     @app.get("/system", include_in_schema=False)
-    @app.get("/backtests/new", include_in_schema=False)
-    @app.get("/backtests/factors", include_in_schema=False)
     @app.get("/backtests/screen", include_in_schema=False)
     def workbench(request: Request):
         page_id, page_title = {

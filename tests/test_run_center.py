@@ -137,6 +137,7 @@ def test_pages_api_auth_and_original_urls(tmp_path):
             "/research/copilot",
             "/system",
             "/backtests",
+            "/backtests/history",
             "/backtests/new",
             "/backtests/factors",
             "/backtests/screen",
@@ -161,6 +162,7 @@ def test_pages_api_auth_and_original_urls(tmp_path):
     with TestClient(create_app(settings), follow_redirects=False) as client:
         for path in (
             "/api/v1/run-center",
+            "/api/v1/run-center/configuration?kind=factor_lab",
             "/api/v1/run-center/copy?source=index&record=x",
             "/api/v1/run-center/record?source=task&record=x",
         ):

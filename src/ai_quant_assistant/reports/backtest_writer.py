@@ -8,14 +8,17 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from ai_quant_assistant.reports.presentation import install_filters
+
 
 class FactorBacktestReportWriter:
     def __init__(self) -> None:
         self.environment = Environment(
             loader=FileSystemLoader(Path(__file__).parent / "templates"),
-            autoescape=select_autoescape(["html", "xml"]),
+            autoescape=select_autoescape(["html", "xml"], default=True),
         )
         self.environment.filters["pct"] = self._pct
+        install_filters(self.environment)
         self.environment.filters["money"] = self._money
 
     @staticmethod
@@ -101,9 +104,9 @@ class FactorBacktestReportWriter:
             start_date=nav["date"].min() if not nav.empty else "",
             end_date=nav["date"].max() if not nav.empty else "",
             trades=trades.tail(30).to_dict(orient="records"),
-            selections=selections.loc[selections.get("selected", False)].tail(30).to_dict(
-                orient="records"
-            )
+            selections=selections.loc[selections.get("selected", False)]
+            .tail(30)
+            .to_dict(orient="records")
             if not selections.empty
             else [],
         )

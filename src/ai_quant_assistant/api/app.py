@@ -28,6 +28,7 @@ from ai_quant_assistant.api.managed_stock_routes import managed_stock_router
 from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
 from ai_quant_assistant.api.research_data_routes import research_data_router
+from ai_quant_assistant.api.run_center_routes import run_center_router
 from ai_quant_assistant.api.run_repository import BacktestRunRepository, FactorLabRunRepository
 from ai_quant_assistant.api.schemas import (
     BackupPruneRequest,
@@ -231,7 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for name in (
                 "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
-                "workbench.css", "stock-pools.css",
+                "workbench.css", "stock-pools.css", "app-shell.css", "app-shell.js", "run-center.js",
             )
         )
     ).hexdigest()[:16]
@@ -290,6 +291,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench
     app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
     app.include_router(research_dashboard_router(research_dashboard, templates, asset_version, resolved_settings.web_username))
+    app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -330,7 +332,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await call_next(request)
         if path.startswith("/api") or path == "/openapi.json":
             return JSONResponse({"detail": "authentication required"}, status_code=401)
-        return RedirectResponse(f"/login?next={quote(path, safe='/')}", status_code=303)
+        next_url = path + ("?" + request.url.query if request.url.query else "")
+        return RedirectResponse(f"/login?next={quote(next_url, safe='/')}", status_code=303)
 
     @app.get("/login", include_in_schema=False)
     def login_page(request: Request):
@@ -417,7 +420,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.get("/", include_in_schema=False)
+    @app.get("/data", include_in_schema=False)
+    @app.get("/data/pools", include_in_schema=False)
+    @app.get("/research", include_in_schema=False)
+    @app.get("/research/copilot", include_in_schema=False)
+    @app.get("/system", include_in_schema=False)
+    @app.get("/backtests/new", include_in_schema=False)
+    @app.get("/backtests/factors", include_in_schema=False)
+    @app.get("/backtests/screen", include_in_schema=False)
     def workbench(request: Request):
+        page_id, page_title = {
+            "/": ("overview", "总览"), "/data": ("data", "数据与股票池"),
+            "/data/pools": ("pools", "股票池管理"), "/research": ("research", "研究中心"),
+            "/research/copilot": ("copilot", "AI 研究助手"), "/system": ("system", "系统管理"),
+            "/backtests/new": ("backtest", "财务因子回测"),
+            "/backtests/factors": ("lab", "因子实验"),
+            "/backtests/screen": ("screen", "条件选股"),
+        }[request.url.path]
         factors = [
             {"code": code, "label": definition["label"], "unit": definition["unit"]}
             for code, definition in FINANCIAL_METRICS.items()
@@ -427,6 +446,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name="workbench.html",
             context={
                 "version": __version__,
+                "page_id": page_id,
+                "page_title": page_title,
                 "factors": factors,
                 "asset_version": asset_version,
                 "screen_fields": screener.fields()["fields"],

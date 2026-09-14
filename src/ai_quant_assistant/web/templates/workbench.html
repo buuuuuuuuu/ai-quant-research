@@ -8,7 +8,8 @@
   <link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/assets/stock-pools.css?v={{ asset_version }}">
 </head>
-<body>
+<body class="legacy-page" data-page="{{ page_id }}">
+  {% include "app-nav.html" %}
   <header class="topbar">
     <a class="brand" href="/" aria-label="澄明研究工作台首页">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -34,6 +35,7 @@
   </header>
 
   <main>
+    {% include "page-intro.html" %}
     <section class="hero">
       <div>
         <p class="eyebrow">POINT-IN-TIME RESEARCH</p>
@@ -47,7 +49,7 @@
       </div>
     </section>
 
-    <section id="copilot" class="copilot-section" aria-labelledby="copilot-title">
+    <section id="copilot" data-area="copilot" class="copilot-section" aria-labelledby="copilot-title">
       <div class="section-heading">
         <div><p class="eyebrow">AI RESEARCH COPILOT</p><h2 id="copilot-title">先看计划，再做研究</h2><p class="muted">自然语言只生成结构化计划；数据覆盖通过且由你确认后，白名单工具才会运行。</p></div>
         <button id="copilot-new" class="secondary-button" type="button">新建对话</button>
@@ -74,7 +76,7 @@
       </div>
     </section>
 
-    <section class="overview" aria-labelledby="overview-title">
+    <section data-area="overview" class="overview" aria-labelledby="overview-title">
       <div class="section-heading">
         <div><p class="eyebrow">LOCAL DATA</p><h2 id="overview-title">数据库概览</h2></div>
         <code id="database-path">正在读取数据库位置…</code>
@@ -88,7 +90,7 @@
       <div id="coverage-list" class="coverage-list" aria-live="polite"></div>
     </section>
 
-    <section id="data-explorer" class="data-explorer" aria-labelledby="data-explorer-title">
+    <section id="data-explorer" data-area="data" class="data-explorer" aria-labelledby="data-explorer-title">
       <div class="section-heading">
         <div><p class="eyebrow">DATA EXPLORER · EVIDENCE FIRST</p><h2 id="data-explorer-title">本地数据明细</h2><p class="muted">先选数据集，再进入单只股票或指数。每条记录保留质量状态、供应商、同步批次与原始文件。</p></div>
         <div class="result-actions"><a class="secondary-button" href="#managed-stock-panel">添加／管理股票</a><button id="refresh-data-explorer" class="secondary-button" type="button">刷新明细</button></div>
@@ -160,7 +162,7 @@
       <div id="record-detail-content"><p class="empty-state">正在读取…</p></div>
     </dialog>
 
-    <section id="stock-pools" class="stock-pool-section" aria-labelledby="stock-pool-title">
+    <section id="stock-pools" data-area="pools" class="stock-pool-section" aria-labelledby="stock-pool-title">
       <div class="section-heading"><div><p class="eyebrow">VERSIONED RESEARCH UNIVERSE</p><h2 id="stock-pool-title">股票池管理</h2><p class="muted">每次变更生成不可变 revision；研究提交时冻结实际代码和摘要，后续修改不会污染历史结果。</p></div><button id="stock-pool-refresh" class="icon-button" type="button" aria-label="刷新股票池">↻</button></div>
       <div class="security-master-actions"><button id="security-master-refresh" class="secondary-button" type="button">更新证券主数据</button><span class="muted">只更新代码和名称目录；不下载历史行情、不自动添加成员。</span></div>
       <p id="security-master-message" class="stock-pool-message" role="status" aria-live="polite"></p>
@@ -170,7 +172,7 @@
       </div>
     </section>
 
-    <section id="screener" class="screener-section" aria-labelledby="screener-title">
+    <section id="screener" data-area="screen" class="screener-section" aria-labelledby="screener-title">
       <div class="section-heading">
         <div><p class="eyebrow">POINT-IN-TIME SCREENER</p><h2 id="screener-title">条件选股与候选池</h2><p class="muted">只使用筛选日结束前已公开的财报和已发布行情；缺失值不会填零，观察快照不会伪装成历史。</p></div>
         <button id="screen-refresh-history" class="icon-button" type="button" aria-label="刷新筛选历史">↻</button>
@@ -212,9 +214,9 @@
       </article>
     </section>
 
-    <section id="universe" class="universe-section"><div class="section-heading"><div><p class="eyebrow">POINT-IN-TIME UNIVERSE</p><h2>股票池与行业数据</h2><p class="muted">真实历史成分与当前观察快照分开标记，不使用当前数据伪造过去。</p></div><button id="refresh-universe" class="icon-button" type="button" aria-label="刷新股票池状态">↻</button></div><div class="universe-grid"><article class="panel universe-panel"><h3>行业分类覆盖</h3><div id="universe-industries"><p class="empty-state">正在读取行业数据…</p></div></article><article class="panel universe-panel"><h3>指数成分可信度</h3><div id="universe-indexes"><p class="empty-state">正在读取指数成分…</p></div></article><article class="panel universe-panel"><h3>可用股票池</h3><div id="universe-coverage"><p class="empty-state">正在计算股票覆盖…</p></div></article></div></section>
+    <section id="universe" data-area="pools" class="universe-section"><div class="section-heading"><div><p class="eyebrow">POINT-IN-TIME UNIVERSE</p><h2>股票池与行业数据</h2><p class="muted">真实历史成分与当前观察快照分开标记，不使用当前数据伪造过去。</p></div><button id="refresh-universe" class="icon-button" type="button" aria-label="刷新股票池状态">↻</button></div><div class="universe-grid"><article class="panel universe-panel"><h3>行业分类覆盖</h3><div id="universe-industries"><p class="empty-state">正在读取行业数据…</p></div></article><article class="panel universe-panel"><h3>指数成分可信度</h3><div id="universe-indexes"><p class="empty-state">正在读取指数成分…</p></div></article><article class="panel universe-panel"><h3>可用股票池</h3><div id="universe-coverage"><p class="empty-state">正在计算股票覆盖…</p></div></article></div></section>
 
-    <section id="operations" class="operations-section" aria-labelledby="operations-title">
+    <section id="operations" data-area="system" class="operations-section" aria-labelledby="operations-title">
       <div class="section-heading">
         <div><p class="eyebrow">PLATFORM OPERATIONS</p><h2 id="operations-title">数据同步与备份</h2></div>
         <div class="operations-actions">
@@ -235,7 +237,7 @@
       </div>
     </section>
 
-    <section id="backtest" class="workspace-grid">
+    <section id="backtest" data-area="backtest lab" class="workspace-grid">
       <form id="backtest-form" class="panel form-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">NEW RESEARCH</p><h2>配置财务因子回测</h2></div>
@@ -288,7 +290,7 @@
       </aside>
     </section>
 
-    <section id="factor-lab" class="factor-lab-section">
+    <section id="factor-lab" data-area="lab" class="factor-lab-section">
       <div class="section-heading"><div><p class="eyebrow">FACTOR RESEARCH LAB</p><h2>多因子研究实验室</h2><p class="muted">沿用上方股票池和日期；验证集挑选参数，样本外独立检验。</p></div><button id="refresh-lab-history" class="icon-button" type="button" aria-label="刷新因子研究记录">↻</button></div>
       <form id="factor-lab-form" class="panel form-panel">
         <div class="factor-component-list">
@@ -315,13 +317,13 @@
       <article id="lab-results" class="panel lab-results" hidden><div class="section-heading"><div><p class="eyebrow">IC · RANK IC · OUT OF SAMPLE</p><h3>因子研究结果</h3><p id="lab-selected" class="muted"></p></div><div id="lab-actions" class="result-actions"></div></div><div id="lab-ic-chart" class="lab-ic-chart"></div><h3>因子有效性</h3><div id="lab-ic-table" class="table-shell"></div><h3>参数扫描与样本外验证</h3><div id="lab-strategy-table" class="table-shell"></div><h3>最优策略分段表现</h3><div id="lab-validation-table" class="table-shell"></div></article>
     </section>
 
-    <section id="task-progress" class="task-progress" hidden aria-live="polite">
+    <section id="task-progress" data-area="backtest lab" class="task-progress" hidden aria-live="polite">
       <div><span id="task-state">任务已提交</span><strong id="task-percent">0%</strong></div>
       <div class="progress-track"><i id="progress-bar"></i></div>
       <p id="task-message">正在等待后台执行</p>
     </section>
 
-    <section id="results" class="results-section" hidden>
+    <section id="results" data-area="backtest" class="results-section" hidden>
       <div class="section-heading result-heading">
         <div><p class="eyebrow">RESEARCH OUTPUT</p><h2>策略表现</h2><p id="result-subtitle" class="muted"></p></div>
         <div id="result-actions" class="result-actions"></div>
@@ -342,7 +344,7 @@
         <div class="table-shell"><table><thead id="detail-head"></thead><tbody id="detail-body"></tbody></table></div>
       </article>
     </section>
-    <section id="research-data-panel" class="panel" aria-label="研究数据就绪与补齐">
+    <section id="research-data-panel" data-area="data backtest lab screen copilot" class="panel" aria-label="研究数据就绪与补齐">
       <h2>研究数据就绪与确认式补齐</h2>
       <p>行情可用不等于研究就绪。请从研究表单或本地股票的财务预检入口检查当前参数；补齐确认与研究执行确认独立，补齐不会自动运行研究。</p>
       <p id="research-data-error" class="negative" aria-live="polite"></p>
@@ -360,6 +362,7 @@
   </main>
 
   <footer><span>澄明 A 股研究工作台 · v{{ version }}</span><span>仅供量化研究，不构成投资建议</span></footer>
+  <script src="/assets/run-center.js?v={{ asset_version }}" defer></script>
   <script src="/assets/workbench.js?v={{ asset_version }}" defer></script>
   <script src="/assets/managed-stocks.js?v={{ asset_version }}" defer></script>
   <script src="/assets/research-data.js?v={{ asset_version }}" defer></script>

@@ -57,6 +57,24 @@ function harness(responder, {confirm = true, immediateTimers = true} = {}) {
   return {context, element, messages, controls, calls, timers};
 }
 
+test("switching pool ignores an older success or failure and clears stale controls", async () => {
+  for (const stale of [{payload:{pool_id:"old",name:"OLD"}}, {status:500}]) {
+    let finish;
+    const h = harness((url) => url.endsWith("/old")
+      ? new Promise((resolve) => {finish=resolve;})
+      : Promise.resolve({payload:{pool_id:"new",name:"NEW",members:[]}}));
+    const old = h.context.loadStockPoolDetail("old");
+    assert.equal(vm.runInContext("state.stockPool", h.context), null);
+    assert.match(h.element("#stock-pool-detail").textContent, /正在读取/);
+    await h.context.loadStockPoolDetail("new");
+    finish(stale);
+    await old;
+    assert.equal(vm.runInContext("state.stockPool.pool_id", h.context), "new");
+    assert.match(h.element("#stock-pool-detail").innerHTML, /NEW/);
+    assert.doesNotMatch(h.element("#stock-pool-detail").innerHTML, /OLD/);
+  }
+});
+
 test("real add click shows 422 beside button, preserves input and resolves without rejection", async () => {
   const h = harness(async () => ({status: 422, payload: {detail: "symbols missing from security_master: ['600022']"}}));
   h.element("#stock-pool-add-symbols").value = "600022";

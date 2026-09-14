@@ -3,7 +3,7 @@
 <title>{{ symbol }} · 个股研究工作台</title>
 <link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
 <link rel="stylesheet" href="/assets/stock-research.css?v={{ asset_version }}"></head>
-<body data-stock-symbol="{{ symbol }}">
+<body data-stock-symbol="{{ symbol }}">{% include "app-nav.html" %}
 <header><a href="/">澄明 · 研究工作台</a> <a href="/#data-explorer">数据浏览与本地管理</a><span>{{ username }}</span></header>
 <main>
 <h1 id="stock-title">{{ symbol }} · 个股研究</h1>

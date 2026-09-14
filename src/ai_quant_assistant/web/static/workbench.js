@@ -61,7 +61,13 @@ async function loadStockPools(selectPoolId = null) {
 }
 
 async function loadStockPoolDetail(poolId) {
-  const pool = await requestJson(`/api/v1/stock-pools/${encodeURIComponent(poolId)}`);
+  const generation=state.poolDetailGeneration=(state.poolDetailGeneration||0)+1;
+  state.stockPool=null;
+  $("#stock-pool-detail").textContent="正在读取股票池…";
+  let pool;
+  try {pool=await requestJson(`/api/v1/stock-pools/${encodeURIComponent(poolId)}`);}
+  catch(error){if(generation!==state.poolDetailGeneration)return;throw error;}
+  if(generation!==state.poolDetailGeneration)return;
   state.stockPool = pool;
   const members = pool.members || [];
   $("#stock-pool-detail").innerHTML = `<div class="stock-pool-detail-head"><div><p class="eyebrow">${escapeHtml(pool.source_type)} · REVISION ${escapeHtml(pool.current_revision)}</p><h3>${escapeHtml(pool.name)}</h3><p>${escapeHtml(pool.description || "暂无描述")}</p></div><span class="quality-pill">${escapeHtml(pool.status)}</span></div>${pool.warning ? `<p class="screen-warnings">${escapeHtml(pool.warning)}</p>` : ""}<div class="form-grid"><label class="field"><span>名称</span><input id="stock-pool-name" maxlength="120" value="${escapeHtml(pool.name)}"></label><label class="field"><span>描述</span><input id="stock-pool-description" maxlength="1000" value="${escapeHtml(pool.description)}"></label></div><div class="stock-pool-actions"><button id="stock-pool-save" class="secondary-button" type="button">保存元数据</button><button id="stock-pool-default" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>设为默认</button><button id="stock-pool-duplicate" class="secondary-button" type="button">复制</button><button id="stock-pool-sync" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>同步缺失数据</button><button id="stock-pool-archive" class="secondary-button" type="button" ${pool.is_default || pool.status === "archived" ? "disabled" : ""}>归档</button></div><label class="field"><span>搜索证券代码或名称</span><input id="stock-pool-security-search" type="search" maxlength="120" placeholder="600519 或 贵州茅台"></label><div id="stock-pool-search-results"></div><label class="field"><span>批量添加六位代码</span><textarea id="stock-pool-add-symbols" rows="2" placeholder="单次最多 200 只"></textarea></label><button id="stock-pool-add" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>添加成员</button><button id="stock-pool-remove-selected" class="secondary-button" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除勾选成员</button><p id="stock-pool-member-message" class="stock-pool-message" data-stock-pool-message role="status" aria-live="polite"></p><div class="table-shell stock-pool-members"><table><thead><tr><th></th><th>代码 / 名称</th><th>交易所 / 状态</th><th>数据覆盖</th><th>备注</th><th>顺序</th><th></th></tr></thead><tbody>${members.map((member) => `<tr data-security-id="${escapeHtml(member.security_id)}"><td><input class="stock-pool-member-select" type="checkbox"></td><td>${stockResearchLink(member.symbol, member.name)}</td><td>${escapeHtml(member.exchange)} · ${escapeHtml(member.status)}</td><td>${escapeHtml(member.coverage.start_date || "—")} → ${escapeHtml(member.coverage.end_date || "—")} · ${formatNumber(member.coverage.rows)} 行</td><td><input class="stock-pool-member-note" maxlength="500" value="${escapeHtml(member.note)}"></td><td><input class="stock-pool-member-order" type="number" min="1" max="500" value="${escapeHtml(member.display_order)}"></td><td><button class="stock-pool-member-save" type="button" ${pool.status === "archived" ? "disabled" : ""}>保存</button><button class="stock-pool-member-remove" type="button" ${pool.status === "archived" ? "disabled" : ""}>移除</button></td></tr>`).join("")}</tbody></table></div>`;
@@ -307,9 +313,8 @@ function historyCard(run) {
 async function loadHistory() {
   const container = $("#history-list");
   try {
-    const runs = await requestJson("/api/v1/backtest-runs");
-    container.innerHTML = runs.length ? runs.map(historyCard).join("") : '<p class="empty-state">还没有历史回测。完成第一次研究后会出现在这里。</p>';
-    $$(".history-card").forEach((button) => button.addEventListener("click", () => loadRun(button.dataset.runId)));
+    const payload = await requestJson("/api/v1/run-center?kind=factor_backtest&page_size=8");
+    container.innerHTML = payload.items.length ? payload.items.map(run => `<a class="history-card" href="${escapeHtml(run.detail_url)}">${escapeHtml(run.run_id || run.record_id)}<small>${escapeHtml(run.status)} · ${escapeHtml(run.start_date || "未记录")} → ${escapeHtml(run.end_date || "未记录")}</small></a>`).join("") : '<p class="empty-state">还没有持久回测记录。</p>';
   } catch (error) {
     container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
   }
@@ -360,6 +365,8 @@ async function pollTask(taskId) {
 
 async function submitBacktest(event) {
   event.preventDefault();
+  if (state.backtestBusy) return;
+  state.backtestBusy = true;
   const button = $("#submit-backtest");
   const errorBox = $("#form-error");
   errorBox.hidden = true;
@@ -374,6 +381,7 @@ async function submitBacktest(event) {
     errorBox.textContent = error.message;
     errorBox.hidden = false;
   } finally {
+    state.backtestBusy = false;
     button.disabled = false;
     button.querySelector("span").textContent = "开始回测";
   }
@@ -418,8 +426,10 @@ function renderRun(run) {
 }
 
 async function loadRun(runId) {
-  try { renderRun(await requestJson(`/api/v1/backtest-runs/${encodeURIComponent(runId)}`)); }
-  catch (error) { $("#form-error").textContent = error.message; $("#form-error").hidden = false; }
+  const generation = state.runGeneration = (state.runGeneration || 0) + 1;
+  $("#results").hidden = true;
+  try { const run = await requestJson(`/api/v1/backtest-runs/${encodeURIComponent(runId)}`); if (generation === state.runGeneration) renderRun(run); }
+  catch (error) { if (generation === state.runGeneration) {$("#form-error").textContent = error.message; $("#form-error").hidden = false;} }
 }
 
 function labPayload() {
@@ -453,22 +463,23 @@ function renderLabRun(run) {
   drawIcChart(run.series || []);
 }
 
-async function loadLabRun(runId) { renderLabRun(await requestJson(`/api/v1/factor-lab-runs/${encodeURIComponent(runId)}`)); }
+async function loadLabRun(runId) { const generation=state.labRunGeneration=(state.labRunGeneration||0)+1; $("#lab-results").hidden=true; const run=await requestJson(`/api/v1/factor-lab-runs/${encodeURIComponent(runId)}`); if(generation===state.labRunGeneration)renderLabRun(run); }
 
 async function loadLabHistory() {
   try {
-    const runs = await requestJson("/api/v1/factor-lab-runs");
-    $("#lab-history").innerHTML = runs.length ? runs.slice(0, 8).map((run) => `<button class="lab-history-item" data-run="${escapeHtml(run.run_id)}">${escapeHtml(operationTime(run.completed_at))} · ${escapeHtml(run.summary?.strategy_count || 0)} 组策略 · ${escapeHtml(run.summary?.selected_strategy || "")}</button>`).join("") : '<p class="empty-state">还没有因子实验记录。</p>';
-    $$(".lab-history-item").forEach((button) => button.addEventListener("click", () => loadLabRun(button.dataset.run)));
+    const payload = await requestJson("/api/v1/run-center?kind=factor_lab&page_size=8");
+    $("#lab-history").innerHTML = payload.items.length ? payload.items.map(run=>`<a class="lab-history-item" href="${escapeHtml(run.detail_url)}">${escapeHtml(run.run_id||run.record_id)} · ${escapeHtml(run.status)}</a>`).join("") : '<p class="empty-state">还没有持久因子实验记录。</p>';
   } catch (error) { $("#lab-history").innerHTML = `<p class="negative">${escapeHtml(error.message)}</p>`; }
 }
 
 async function submitFactorLab(event) {
+  if (state.labBusy) {event.preventDefault();return;}
+  state.labBusy=true;
   event.preventDefault(); const button = $("#submit-factor-lab"), errorBox = $("#lab-error"); errorBox.hidden = true; button.disabled = true;
   try {
     const created = await requestJson("/api/v1/factor-lab", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(labPayload())});
     for (;;) {const task = await requestJson(`/api/v1/factor-lab/${encodeURIComponent(created.task_id)}`); showTask(task); if (task.status === "succeeded") {await loadLabRun(task.run_id); await loadLabHistory(); break;} if (task.status === "failed") throw new Error(task.error || "因子研究失败"); await new Promise((resolve) => setTimeout(resolve, 900));}
-  } catch (error) {errorBox.textContent = error.message; errorBox.hidden = false;} finally {button.disabled = false;}
+  } catch (error) {errorBox.textContent = error.message; errorBox.hidden = false;} finally {state.labBusy=false;button.disabled = false;}
 }
 
 const copilotStatusLabels = {draft:"等待确认",blocked:"预检阻断",confirmed:"已经确认",running:"正在执行",succeeded:"研究完成",failed:"执行失败"};
@@ -633,9 +644,11 @@ function renderScreenRun(run) {
 }
 
 async function runScreen(event) {
+  if (state.screenBusy) {event.preventDefault();return;}
+  state.screenBusy=true;
   event.preventDefault();const button=$("#screen-run");button.disabled=true;$("#screen-error").textContent="";
   try {const check=await preflightScreen();if(!check.ready)throw new Error((check.blockers||[]).join("；")||"覆盖预检未通过");const run=await requestJson("/api/v1/screens/runs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(screenPayload())});renderScreenRun(run);await loadScreenHistory();}
-  catch(error){$("#screen-error").textContent=error.message;}finally{button.disabled=false;}
+  catch(error){$("#screen-error").textContent=error.message;}finally{state.screenBusy=false;button.disabled=false;}
 }
 
 async function loadScreenHistory() {
@@ -652,6 +665,11 @@ async function saveScreenWatchlist() {
 
 function sendScreenSymbols(target) {
   const symbols=(state.screenRun?.items||[]).filter((item)=>item.selected).map((item)=>item.symbol);if(!symbols.length)return;
+  if (document.body?.dataset.page) {
+    const paths={backtest:"/backtests/new",lab:"/backtests/factors",copilot:"/research/copilot"};
+    window.location.assign(`${paths[target]||paths.copilot}?screen_source=${encodeURIComponent(state.screenRun.run_id)}`);
+    return;
+  }
   if(target==="backtest"){$("#research-stock-pool").value="manual";$("#symbols").disabled=false;$("#symbols").value=symbols.join(" ");$("#top-n").value=Math.min(Number($("#top-n").value)||1,symbols.length);$("#backtest").scrollIntoView({behavior:"smooth"});}
   else if(target==="lab"){$("#research-stock-pool").value="manual";$("#symbols").disabled=false;$("#symbols").value=symbols.join(" ");$("#factor-lab").scrollIntoView({behavior:"smooth"});}
   else {$("#copilot-question").value=`基于条件选股运行 ${state.screenRun.run_id} 的入选股票 ${symbols.join(" ")}，设计一个可复现的因子研究计划，并保留该筛选运行作为股票池来源。`;$("#copilot").scrollIntoView({behavior:"smooth"});}
@@ -916,6 +934,10 @@ async function loadExplorerEntities(page=1) {
 }
 
 async function openExplorer(dataset="prices", {scroll=true}={}) {
+  if (document.body?.dataset.page && document.body.dataset.page !== "data") {
+    window.location.assign(`/data?dataset=${encodeURIComponent(dataset)}#data-explorer`);
+    return;
+  }
   state.explorerDataset=dataset; state.explorerPage=1;
   $("#data-explorer").hidden=false;
   $$("[data-explorer-dataset]").forEach((button)=>button.classList.toggle("active",button.dataset.explorerDataset===dataset && button.closest(".explorer-tabs")));
@@ -932,7 +954,7 @@ async function initializeDataExplorer() {
   // Initial page reads are local GETs only. Do not scroll away from a deep link
   // or require a click on the navigation item to make already stored data visible.
   await Promise.all([
-    openExplorer("prices", {scroll:false}),
+    openExplorer(typeof window.location.search === "string" ? new URLSearchParams(window.location.search).get("dataset") || "prices" : "prices", {scroll:false}),
     typeof loadManagedStocks === "function" ? loadManagedStocks(1) : Promise.resolve(),
   ]);
 }
@@ -986,11 +1008,35 @@ $("#explorer-filters").addEventListener("submit", (event) => {event.preventDefau
 let explorerSearchTimer;
 $("#explorer-search").addEventListener("input", () => {clearTimeout(explorerSearchTimer); explorerSearchTimer=setTimeout(()=>loadExplorerEntities(1),250);});
 $$('.tab').forEach((button) => button.addEventListener("click", () => { $$('.tab').forEach((item) => item.classList.remove("active")); button.classList.add("active"); state.activeTab = button.dataset.tab; renderTable(state.activeTab); }));
-loadOverview(); loadHistory(); loadOperations(); loadLabHistory(); loadUniverse(); loadCopilotConversations(true); loadScreenHistory(); loadStockPools();
-window.addEventListener("DOMContentLoaded", () => {initializeDataExplorer().then(prepareStockResearchEntry).catch((error)=>{$("#explorer-entity-list").textContent=error.message;});}, {once:true});
+window.addEventListener("DOMContentLoaded", async () => {
+  const page = document.body.dataset.page;
+  if(page === "overview") loadOverview();
+  if(page === "system") loadOperations();
+  if(page === "pools") {loadStockPools();loadUniverse();}
+  if(page === "copilot") {loadCopilotConversations(true).catch(error=>{$("#copilot-error").textContent=error.message;$("#copilot-error").hidden=false;});await prepareStockResearchEntry();}
+  if(["backtest","lab","screen"].includes(page)) {
+    await loadStockPools();
+    if(page === "backtest") loadHistory();
+    if(page === "lab") loadLabHistory();
+    if(page === "screen") loadScreenHistory();
+    await prepareStockResearchEntry();
+  }
+  if(page === "data") initializeDataExplorer().then(prepareStockResearchEntry).catch(error=>{$("#explorer-entity-list").textContent=error.message;});
+}, {once:true});
 
 async function prepareStockResearchEntry() {
   const query = new URLSearchParams(window.location.search);
+  if(query.has("screen_source")) {
+    try {
+      const run=await requestJson(`/api/v1/screens/runs/${encodeURIComponent(query.get("screen_source"))}`);
+      const symbols=(run.items||[]).filter(item=>item.selected).map(item=>item.symbol);
+      if(!symbols.length||symbols.length>500)throw Error("来源筛选没有可复制的入选股票");
+      $("#research-stock-pool").value="manual";$("#symbols").disabled=false;$("#symbols").value=symbols.join(" ");$("#top-n").value=Math.min(Number($("#top-n").value)||1,symbols.length);
+      $("#research-stock-pool-preview").textContent=`来源筛选 ${run.run_id} · ${symbols.length} 只（只预填，未执行）`;
+      $("#copilot-question").value=`基于条件选股运行 ${run.run_id} 的入选股票 ${symbols.join(" ")}，设计因子研究计划。`;
+    } catch(error){$("#form-error").textContent=error.message;$("#form-error").hidden=false;$("#submit-backtest").disabled=true;$("#submit-factor-lab").disabled=true;$("#copilot-error").textContent=error.message;$("#copilot-error").hidden=false;}
+    return;
+  }
   const symbol = query.get("stock");
   if (!symbol || !/^[0-9]{6}$/.test(symbol)) return;
   $("#research-stock-pool").value = "manual";

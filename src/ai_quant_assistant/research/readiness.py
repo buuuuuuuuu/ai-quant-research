@@ -35,6 +35,7 @@ class ResearchReadiness:
             raise RuntimeError("本地数据库未初始化，请先运行 ai-quant data init；预检不会执行迁移")
         # Lazy import avoids coupling the engines to FastAPI during module load.
         from ai_quant_assistant.api.schemas import (
+            DailySignalStrategyRequest,
             FactorBacktestRequest,
             FactorLabRequest,
             PointInTimeScreenRequest,
@@ -44,6 +45,7 @@ class ResearchReadiness:
             "screen": PointInTimeScreenRequest,
             "factor_backtest": FactorBacktestRequest,
             "factor_lab": FactorLabRequest,
+            "daily_signal": DailySignalStrategyRequest,
         }
         if research_type not in models:
             raise ValueError("unsupported research type")
@@ -197,6 +199,8 @@ class ResearchReadiness:
         fields = (
             [item["field"] for item in params["conditions"]]
             if screen
+            else [item["code"] for item in params["candidate_factors"]]
+            if kind == "daily_signal"
             else (
                 [params["factor"]]
                 if kind == "factor_backtest"
@@ -209,6 +213,32 @@ class ResearchReadiness:
         market_fields = set(fields) - set(FINANCIAL_METRICS)
         screen_rows = 20 if "avg_amount_20d" in market_fields else 1
         checks, blockers, warnings = [], [], []
+        market_start = start
+        if kind == "daily_signal":
+            windows = []
+            for field in market_fields:
+                suffix = field.rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    windows.append(int(suffix))
+            for rule in [*params["buy_rules"], *params["sell_rules"]]:
+                windows.extend(
+                    int(value)
+                    for key in ("window", "short_window", "long_window")
+                    if (value := rule.get(key)) is not None
+                )
+            required = max(windows, default=2) + 1
+            with self.database.connect(read_only=True) as connection:
+                history = connection.execute(
+                    "SELECT trade_date FROM trading_calendar WHERE exchange='SSE' AND is_open "
+                    "AND trade_date<=? ORDER BY trade_date DESC LIMIT ?",
+                    [start, required],
+                ).fetchall()
+            if len(history) < required:
+                blockers.append(
+                    f"技术指标需要研究开始日前共 {required} 个可验证交易日（含交叉前值）。"
+                )
+            elif history:
+                market_start = history[-1][0]
         if frozen["stock_pool"].get("warning"):
             warnings.append(frozen["stock_pool"]["warning"])
         financial_start = date(max(1990, start.year - 2), 1, 1)
@@ -221,7 +251,7 @@ class ResearchReadiness:
                     params["benchmark_symbol"],
                     None,
                     "SSE",
-                    start,
+                    market_start,
                     end,
                     "none",
                     None,
@@ -237,12 +267,22 @@ class ResearchReadiness:
                         [params["benchmark_symbol"], start, end],
                     ).fetchall()
                 ]
-            frequencies = params.get("rebalance_values", [params.get("rebalance", "quarterly")])
+            frequencies = params.get(
+                "rebalance_values",
+                [params.get("candidate_refresh") or params.get("rebalance", "quarterly")],
+            )
             signal_days = set()
             for frequency in frequencies:
                 periods = set()
                 for day in calendar[:-1]:
-                    key = (day.year, day.month if frequency == "monthly" else (day.month - 1) // 3)
+                    key = (
+                        day.year,
+                        day.timetuple().tm_yday
+                        if frequency == "daily"
+                        else day.month
+                        if frequency == "monthly"
+                        else (day.month - 1) // 3,
+                    )
                     if key not in periods:
                         signal_days.add(day)
                         periods.add(key)
@@ -283,7 +323,7 @@ class ResearchReadiness:
                             symbol,
                             security_id,
                             exchange,
-                            start,
+                            market_start,
                             end,
                             adjustment,
                             listed,

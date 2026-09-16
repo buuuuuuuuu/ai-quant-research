@@ -485,6 +485,112 @@ class FactorLabSpec:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class DailySignalRule:
+    kind: str
+    operator: str
+    window: int | None = None
+    short_window: int | None = None
+    long_window: int | None = None
+    threshold: float | None = None
+
+    def __post_init__(self) -> None:
+        allowed = {
+            "close_vs_ma": {"above", "below"},
+            "ma_compare": {"above", "below"},
+            "ma_cross": {"cross_above", "cross_below"},
+            "return_threshold": {"above", "below"},
+        }
+        if self.kind not in allowed or self.operator not in allowed[self.kind]:
+            raise ValueError("unsupported daily signal rule")
+        if self.kind in {"close_vs_ma", "return_threshold"}:
+            low = 1 if self.kind == "return_threshold" else 2
+            if self.window is None or not low <= self.window <= 250:
+                raise ValueError(f"{self.kind} window must be between {low} and 250")
+        if self.kind in {"ma_compare", "ma_cross"}:
+            if (
+                self.short_window is None
+                or self.long_window is None
+                or not 2 <= self.short_window < self.long_window <= 250
+            ):
+                raise ValueError(
+                    "moving-average rules require 2 <= short_window < long_window <= 250"
+                )
+        if self.kind == "return_threshold" and self.threshold is None:
+            raise ValueError("return_threshold requires a threshold")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DailySignalStrategySpec:
+    symbols: tuple[str, ...]
+    start_date: date
+    end_date: date
+    candidate_factors: tuple[FactorComponent, ...]
+    candidate_count: int
+    candidate_refresh: str
+    buy_rules: tuple[DailySignalRule, ...]
+    sell_rules: tuple[DailySignalRule, ...]
+    buy_rule_mode: str = "all"
+    sell_rule_mode: str = "any"
+    exit_on_candidate_drop: bool = False
+    max_positions: int = 5
+    benchmark_symbol: str = "csi000300"
+    adjustment: str = "qfq"
+    initial_capital: float = 1_000_000.0
+    commission_bps: float = 5.0
+    slippage_bps: float = 5.0
+    stamp_duty_bps: float = 5.0
+    lot_size: int = 100
+    missing_policy: str = "exclude"
+    stock_pool: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
+        if not symbols or any(len(item) != 6 or not item.isdigit() for item in symbols):
+            raise ValueError("daily signal strategy requires at least one six-digit symbol")
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be earlier than end_date")
+        if not self.candidate_factors or len(self.candidate_factors) > 12:
+            raise ValueError("candidate_factors must contain between one and twelve factors")
+        if len({item.code for item in self.candidate_factors}) != len(self.candidate_factors):
+            raise ValueError("candidate factor codes must be unique")
+        if not 1 <= self.candidate_count <= len(symbols):
+            raise ValueError("candidate_count must not exceed the frozen universe")
+        if self.candidate_refresh not in {"daily", "monthly", "quarterly"}:
+            raise ValueError("candidate_refresh must be daily, monthly, or quarterly")
+        if not self.buy_rules or not self.sell_rules:
+            raise ValueError("buy_rules and sell_rules must not be empty")
+        if self.buy_rule_mode not in {"all", "any"} or self.sell_rule_mode not in {"all", "any"}:
+            raise ValueError("rule mode must be all or any")
+        if not 1 <= self.max_positions <= len(symbols):
+            raise ValueError("max_positions must not exceed the frozen universe")
+        if self.adjustment not in {"qfq", "hfq", "none"}:
+            raise ValueError("adjustment must be qfq, hfq, or none")
+        if self.initial_capital <= 0 or self.lot_size < 1:
+            raise ValueError("initial_capital and lot_size must be positive")
+        if min(self.commission_bps, self.slippage_bps, self.stamp_duty_bps) < 0:
+            raise ValueError("transaction cost basis points must be non-negative")
+        if self.missing_policy not in {"exclude", "available"}:
+            raise ValueError("missing_policy must be exclude or available")
+        object.__setattr__(self, "symbols", symbols)
+        object.__setattr__(
+            self, "benchmark_symbol", normalize_benchmark_symbol(self.benchmark_symbol)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["symbols"] = list(self.symbols)
+        payload["start_date"] = self.start_date.isoformat()
+        payload["end_date"] = self.end_date.isoformat()
+        payload["candidate_factors"] = [item.to_dict() for item in self.candidate_factors]
+        payload["buy_rules"] = [item.to_dict() for item in self.buy_rules]
+        payload["sell_rules"] = [item.to_dict() for item in self.sell_rules]
+        return payload
+
+
 @dataclass(slots=True)
 class EventStudyResult:
     spec: EventStudySpec

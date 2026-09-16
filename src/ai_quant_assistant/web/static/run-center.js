@@ -11,6 +11,10 @@ const RunCenterUI = (() => {
       return (
         "多因子组合：" + code.slice(10).split("+").map(factorName).join(" + ")
       );
+    if (/^return_\d+$/.test(String(code)))
+      return `${String(code).slice(7)} 日涨跌幅（${code}）`;
+    if (/^ma_deviation_\d+$/.test(String(code)))
+      return `收盘价相对 MA(${String(code).slice(13)}) 偏离率（${code}）`;
     return catalog.factors[code]
       ? `${catalog.factors[code]}（${code}）`
       : `未知因子（${code}）`;
@@ -116,6 +120,15 @@ const RunCenterUI = (() => {
     name: "筛选名称",
     conditions: "筛选条件",
     factors: "因子配置",
+    candidate_factors: "候选排序因子",
+    candidate_count: "候选股票数量",
+    candidate_refresh: "候选更新频率",
+    buy_rules: "买入信号",
+    sell_rules: "卖出信号",
+    buy_rule_mode: "买入规则组合",
+    sell_rule_mode: "卖出规则组合",
+    exit_on_candidate_drop: "退出候选即卖出",
+    max_positions: "最大持仓数量",
     top_n_values: "持仓数量扫描",
     commission_bps_values: "佣金扫描",
     rebalance_values: "调仓周期扫描",
@@ -176,6 +189,14 @@ const RunCenterUI = (() => {
         "",
       )}</select></label><label>相对权重<input data-factor-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"></label><label>方向<select data-factor-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-factor-remove type="button">移除</button></div>`;
   }
+  function candidateFactorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
+    return `<div class="factor-editor-row candidate-factor-row"><label>因子代码<input data-candidate-code list="candidate-factor-codes" value="${esc(item.code)}"><small>${esc(factorName(item.code))}；可用财务代码、return_N 或 ma_deviation_N</small></label><label>相对权重<input data-candidate-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"></label><label>方向<select data-candidate-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-candidate-remove type="button">移除</button></div>`;
+  }
+  function signalRuleRow(item = { kind: "ma_cross", operator: "cross_above", window: null, short_window: 5, long_window: 20, threshold: null }, side = "buy") {
+    const kinds = { close_vs_ma: "收盘价与均线", ma_compare: "双均线状态", ma_cross: "双均线交叉", return_threshold: "区间涨跌幅阈值" };
+    const operators = { above: "高于", below: "低于", cross_above: "上穿", cross_below: "下穿" };
+    return `<div class="signal-rule-row" data-rule-side="${side}"><label>规则<select data-rule-kind>${Object.entries(kinds).map(([k,v]) => `<option value="${k}" ${k === item.kind ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>比较<select data-rule-operator>${Object.entries(operators).map(([k,v]) => `<option value="${k}" ${k === item.operator ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>周期 N<input data-rule-window type="number" min="1" max="250" value="${esc(item.window ?? "")}"></label><label>短周期<input data-rule-short type="number" min="2" max="250" value="${esc(item.short_window ?? "")}"></label><label>长周期<input data-rule-long type="number" min="2" max="250" value="${esc(item.long_window ?? "")}"></label><label>阈值（小数）<input data-rule-threshold type="number" step="any" value="${esc(item.threshold ?? "")}"></label><button data-rule-remove type="button">移除</button></div>`;
+  }
   function field(key, value, schema) {
     const alternatives = schema.anyOf || [schema];
     const s = alternatives.find((x) => x.type !== "null") || schema;
@@ -184,6 +205,12 @@ const RunCenterUI = (() => {
     let input;
     if (key === "factors")
       return `<div class="factor-editor" data-factor-editor><p>因子组合：相对权重为合成得分输入，不代表资金百分比。</p><div id="center-factor-rows">${value.map(factorRow).join("")}</div><button id="center-factor-add" type="button">增加因子</button></div>`;
+    if (key === "candidate_factors")
+      return `<div class="factor-editor" data-candidate-editor><p>return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
+    if (["buy_rules", "sell_rules"].includes(key)) {
+      const side = key === "buy_rules" ? "buy" : "sell";
+      return `<div class="signal-rule-editor" data-signal-editor="${side}"><p>${side === "buy" ? "买入" : "卖出"}规则使用当日收盘后已完成的数据。</p><div id="center-${side}-rule-rows">${value.map(x => signalRuleRow(x, side)).join("")}</div><button data-rule-add="${side}" type="button">增加${side === "buy" ? "买入" : "卖出"}规则</button></div>`;
+    }
     if (key === "symbols")
       return `<label>冻结股票代码（空格或换行分隔）<textarea data-param="symbols" data-type="symbols">${esc(value.join("\n"))}</textarea></label>`;
     if (key === "factor")
@@ -241,6 +268,14 @@ const RunCenterUI = (() => {
           direction: r.querySelector("[data-factor-direction]").value,
         }),
       );
+    if (form.querySelector?.("[data-candidate-editor]"))
+      params.candidate_factors = [...form.querySelectorAll(".candidate-factor-row")].map(r => ({ code: r.querySelector("[data-candidate-code]").value.trim(), weight: Number(r.querySelector("[data-candidate-weight]").value), direction: r.querySelector("[data-candidate-direction]").value }));
+    for (const side of ["buy", "sell"])
+      if (form.querySelector?.(`[data-signal-editor="${side}"]`))
+        params[side + "_rules"] = [...form.querySelectorAll(`[data-rule-side="${side}"]`)].map(r => {
+          const number = key => { const value = r.querySelector(key).value; return value === "" ? null : Number(value); };
+          return { kind: r.querySelector("[data-rule-kind]").value, operator: r.querySelector("[data-rule-operator]").value, window: number("[data-rule-window]"), short_window: number("[data-rule-short]"), long_window: number("[data-rule-long]"), threshold: number("[data-rule-threshold]") };
+        });
     return params;
   }
   function resultSections(result) {
@@ -284,6 +319,8 @@ const RunCenterUI = (() => {
       field,
       readParams,
       factorRow,
+      candidateFactorRow,
+      signalRuleRow,
       factorName,
       strategyName,
       display,
@@ -377,7 +414,7 @@ const RunCenterUI = (() => {
   async function originalDetails(row, own) {
     if (
       !row.run_id ||
-      !["factor_backtest", "factor_lab", "screen"].includes(row.kind) ||
+      !["factor_backtest", "factor_lab", "daily_signal", "screen"].includes(row.kind) ||
       row.status !== "succeeded"
     )
       return;
@@ -386,7 +423,9 @@ const RunCenterUI = (() => {
         ? "backtest-runs"
         : row.kind === "factor_lab"
           ? "factor-lab-runs"
-          : "screens/runs";
+          : row.kind === "daily_signal"
+            ? "daily-signal-runs"
+            : "screens/runs";
     try {
       const data = await get(
         "/api/v1/" + endpoint + "/" + encodeURIComponent(row.run_id),
@@ -408,6 +447,9 @@ const RunCenterUI = (() => {
         group_returns: "分组收益",
         walk_forward: "滚动检验",
         coverage: "因子数据覆盖",
+        signals: "信号明细",
+        orders: "订单与成交",
+        candidates: "候选选择",
         series: "因子有效性时间序列",
       };
       const fragment = Object.entries(names)
@@ -471,7 +513,7 @@ const RunCenterUI = (() => {
           show();
         }
       }
-      if (row.kind === "factor_backtest" && data.series?.length) {
+      if (["factor_backtest", "daily_signal"].includes(row.kind) && data.series?.length) {
         const series = data.series.filter(
           (r) =>
             Number.isFinite(r.portfolio_nav) &&
@@ -528,7 +570,7 @@ const RunCenterUI = (() => {
         );
     }
   }
-  const readinessKinds = new Set(["factor_backtest", "factor_lab", "screen"]);
+  const readinessKinds = new Set(["factor_backtest", "factor_lab", "daily_signal", "screen"]);
   function invalidate() {
     checked = null;
     if ($("center-review")) $("center-review").hidden = true;
@@ -560,6 +602,10 @@ const RunCenterUI = (() => {
           throw Error("旧链接股票代码无效，请明确选择范围");
         data.params.symbols = [query.get("stock")];
         if (freshKind === "factor_backtest") data.params.top_n = 1;
+        if (freshKind === "daily_signal") {
+          data.params.candidate_count = 1;
+          data.params.max_positions = 1;
+        }
       }
       for (const key of ["start_date", "end_date", "factor", "adjustment"])
         if (query.has(key) && key in data.params)
@@ -578,9 +624,20 @@ const RunCenterUI = (() => {
         if (!symbols.length || symbols.length > 500)
           throw Error("来源选股没有可预填的冻结股票范围");
         data.params.symbols = symbols;
+        data.scope = symbols;
         data.source_run_id = run.run_id;
         if (freshKind === "factor_backtest")
           data.params.top_n = Math.min(data.params.top_n, symbols.length);
+        if (freshKind === "daily_signal") {
+          data.params.candidate_count = Math.min(
+            data.params.candidate_count,
+            symbols.length,
+          );
+          data.params.max_positions = Math.min(
+            data.params.max_positions,
+            symbols.length,
+          );
+        }
       }
     }
     copy = data;
@@ -614,6 +671,15 @@ const RunCenterUI = (() => {
       "top_n_values",
       "rebalance_values",
       "quantiles",
+      "candidate_factors",
+      "candidate_count",
+      "candidate_refresh",
+      "buy_rules",
+      "sell_rules",
+      "buy_rule_mode",
+      "sell_rule_mode",
+      "exit_on_candidate_drop",
+      "max_positions",
     ]);
     const range = new Set([
       "symbols",
@@ -673,10 +739,22 @@ const RunCenterUI = (() => {
         $("center-factor-rows").insertAdjacentHTML("beforeend", factorRow());
         invalidate();
       });
+    if ($("center-candidate-factor-add"))
+      $("center-candidate-factor-add").addEventListener("click", () => {
+        if ($("center-candidate-factor-rows").querySelectorAll(".candidate-factor-row").length >= 12) return fail(Error("最多 12 个候选因子"));
+        $("center-candidate-factor-rows").insertAdjacentHTML("beforeend", candidateFactorRow());
+        invalidate();
+      });
+    for (const button of $("center-copy-form").querySelectorAll("[data-rule-add]"))
+      button.addEventListener("click", () => {
+        const side = button.dataset.ruleAdd;
+        $("center-" + side + "-rule-rows").insertAdjacentHTML("beforeend", signalRuleRow(undefined, side));
+        invalidate();
+      });
     $("center-copy-form").addEventListener("click", (e) => {
-      const button = e.target.closest?.("[data-factor-remove]");
+      const button = e.target.closest?.("[data-factor-remove],[data-candidate-remove],[data-rule-remove]");
       if (!button) return;
-      button.closest(".factor-editor-row").remove();
+      button.closest(".factor-editor-row,.signal-rule-row").remove();
       invalidate();
     });
     $("center-missing-confirm").parentElement.hidden =
@@ -719,6 +797,13 @@ const RunCenterUI = (() => {
           copy.params.stock_pool_id = id;
           copy.params.stock_pool_revision = revision;
           copy.scope = pool.symbols;
+          if (copy.kind === "daily_signal") {
+            for (const key of ["candidate_count", "max_positions"]) {
+              const input = $("copy-" + key);
+              if (input)
+                input.value = String(Math.min(Number(input.value), pool.symbols.length));
+            }
+          }
           $("center-pool-preview").textContent =
             `冻结 ${id} · r${revision} · ${pool.symbols.length} 只：${pool.symbols.join(" ")}`;
         } catch (e) {
@@ -881,9 +966,11 @@ const RunCenterUI = (() => {
     const query = new URLSearchParams(location.search);
     const configKind = location.pathname.endsWith("/factors")
       ? "factor_lab"
-      : location.pathname.endsWith("/new")
-        ? "factor_backtest"
-        : null;
+      : location.pathname.endsWith("/daily-signals")
+        ? "daily_signal"
+        : location.pathname.endsWith("/new")
+          ? "factor_backtest"
+          : null;
     if ($("center-types"))
       $("center-types").hidden =
         location.pathname !== "/backtests" ||

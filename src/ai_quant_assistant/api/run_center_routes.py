@@ -37,7 +37,7 @@ def run_center_router(database, templates, asset_version, actor):
 
     @router.get("/api/v1/run-center/configuration")
     def configuration(kind: str):
-        if kind not in {"factor_backtest", "factor_lab"}:
+        if kind not in {"factor_backtest", "factor_lab", "daily_signal"}:
             raise HTTPException(422, "该类型请使用既有研究或筛选入口")
         label, model, endpoint = KINDS[kind]
         # Fresh configuration shows current defaults explicitly, never as replayed values.
@@ -62,6 +62,7 @@ def run_center_router(database, templates, asset_version, actor):
     @router.get("/backtests/history", include_in_schema=False)
     @router.get("/backtests/new", include_in_schema=False)
     @router.get("/backtests/factors", include_in_schema=False)
+    @router.get("/backtests/daily-signals", include_in_schema=False)
     def center(request: Request):
         return templates.TemplateResponse(
             request=request,

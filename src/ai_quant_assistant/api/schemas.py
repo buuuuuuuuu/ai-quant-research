@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai_quant_assistant.domain.models import (
     BatchEventStudySpec,
+    DailySignalRule,
+    DailySignalStrategySpec,
     EventStudySpec,
     FactorBacktestSpec,
     FactorComponent,
@@ -256,6 +258,125 @@ class FactorComponentRequest(BaseModel):
 
     def to_component(self) -> FactorComponent:
         return FactorComponent(code=self.code, weight=self.weight, direction=self.direction)
+
+
+TECHNICAL_FACTOR_RE = re.compile(
+    r"^(?:return_(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|250)|ma_deviation_(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|250))$"
+)
+
+
+class CandidateFactorRequest(BaseModel):
+    code: str
+    weight: float = Field(default=1.0, gt=0, le=1_000)
+    direction: Literal["asc", "desc"] = "desc"
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str) -> str:
+        code = value.strip().lower()
+        if code not in FINANCIAL_METRICS and not TECHNICAL_FACTOR_RE.fullmatch(code):
+            raise ValueError("candidate factor must be financial, return_N, or ma_deviation_N")
+        return code
+
+    def to_component(self) -> FactorComponent:
+        return FactorComponent(code=self.code, weight=self.weight, direction=self.direction)
+
+
+class DailySignalRuleRequest(BaseModel):
+    kind: Literal["close_vs_ma", "ma_compare", "ma_cross", "return_threshold"]
+    operator: Literal["above", "below", "cross_above", "cross_below"]
+    window: int | None = Field(default=None, ge=1, le=250)
+    short_window: int | None = Field(default=None, ge=2, le=250)
+    long_window: int | None = Field(default=None, ge=2, le=250)
+    threshold: float | None = Field(default=None, ge=-10, le=10)
+
+    @model_validator(mode="after")
+    def validate_rule(self) -> DailySignalRuleRequest:
+        self.to_rule()
+        return self
+
+    def to_rule(self) -> DailySignalRule:
+        return DailySignalRule(**self.model_dump())
+
+
+class DailySignalStrategyRequest(StockPoolSelectableRequest):
+    symbols: list[str] | None = Field(default=None, min_length=1, max_length=500)
+    start_date: date = date(2015, 1, 1)
+    end_date: date = Field(default_factory=date.today)
+    candidate_factors: list[CandidateFactorRequest] = Field(
+        default_factory=lambda: [CandidateFactorRequest(code="roe")], min_length=1, max_length=12
+    )
+    candidate_count: int = Field(default=20, ge=1, le=500)
+    candidate_refresh: Literal["daily", "monthly", "quarterly"] = "monthly"
+    buy_rules: list[DailySignalRuleRequest] = Field(
+        default_factory=lambda: [
+            DailySignalRuleRequest(
+                kind="ma_cross", operator="cross_above", short_window=5, long_window=20
+            )
+        ]
+    )
+    sell_rules: list[DailySignalRuleRequest] = Field(
+        default_factory=lambda: [
+            DailySignalRuleRequest(
+                kind="ma_cross", operator="cross_below", short_window=5, long_window=20
+            )
+        ]
+    )
+    buy_rule_mode: Literal["all", "any"] = "all"
+    sell_rule_mode: Literal["all", "any"] = "any"
+    exit_on_candidate_drop: bool = False
+    max_positions: int = Field(default=5, ge=1, le=500)
+    benchmark_symbol: str = "csi000300"
+    adjustment: Literal["none", "qfq", "hfq"] = "qfq"
+    initial_capital: float = Field(default=1_000_000.0, gt=0, le=1_000_000_000_000)
+    commission_bps: float = Field(default=5.0, ge=0, le=500)
+    slippage_bps: float = Field(default=5.0, ge=0, le=500)
+    stamp_duty_bps: float = Field(default=5.0, ge=0, le=500)
+    lot_size: int = Field(default=100, ge=1, le=100_000)
+    missing_policy: Literal["exclude", "available"] = "exclude"
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        values = list(dict.fromkeys(item.strip() for item in values))
+        if any(not re.fullmatch(r"[0-9]{6}", item) for item in values):
+            raise ValueError("symbols must contain six-digit A-share codes")
+        return values
+
+    @model_validator(mode="after")
+    def validate_strategy(self) -> DailySignalStrategyRequest:
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be earlier than end_date")
+        if self.symbols is not None:
+            self.to_spec()
+        return self
+
+    def to_spec(self, *, resolved_symbols=None, stock_pool=None) -> DailySignalStrategySpec:
+        return DailySignalStrategySpec(
+            symbols=tuple(resolved_symbols or self.symbols or ()),
+            start_date=self.start_date,
+            end_date=self.end_date,
+            candidate_factors=tuple(item.to_component() for item in self.candidate_factors),
+            candidate_count=self.candidate_count,
+            candidate_refresh=self.candidate_refresh,
+            buy_rules=tuple(item.to_rule() for item in self.buy_rules),
+            sell_rules=tuple(item.to_rule() for item in self.sell_rules),
+            buy_rule_mode=self.buy_rule_mode,
+            sell_rule_mode=self.sell_rule_mode,
+            exit_on_candidate_drop=self.exit_on_candidate_drop,
+            max_positions=self.max_positions,
+            benchmark_symbol=self.benchmark_symbol,
+            adjustment=self.adjustment,
+            initial_capital=self.initial_capital,
+            commission_bps=self.commission_bps,
+            slippage_bps=self.slippage_bps,
+            stamp_duty_bps=self.stamp_duty_bps,
+            lot_size=self.lot_size,
+            missing_policy=self.missing_policy,
+            stock_pool=stock_pool,
+        )
 
 
 class FactorLabRequest(StockPoolSelectableRequest):

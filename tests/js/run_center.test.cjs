@@ -392,6 +392,77 @@ test("factor rows read exact codes, directions and relative weights without perc
     /&lt;script&gt;/,
   );
 });
+test("daily signal editors preserve internal codes and numeric rule parameters", () => {
+  assert.match(ui.factorName("return_20"), /20 日涨跌幅（return_20）/);
+  assert.match(ui.factorName("ma_deviation_60"), /MA\(60\).*ma_deviation_60/);
+  assert.match(
+    ui.candidateFactorRow({ code: "<script>", weight: 1, direction: "desc" }),
+    /&lt;script&gt;/,
+  );
+  assert.match(
+    ui.signalRuleRow({
+      kind: "ma_cross",
+      operator: "cross_above",
+      short_window: 5,
+      long_window: 20,
+    }),
+    /上穿.*cross_above/,
+  );
+  const candidate = {
+    querySelector: (selector) => ({
+      value: selector.includes("code")
+        ? "return_20"
+        : selector.includes("weight")
+          ? "2.5"
+          : "desc",
+    }),
+  };
+  const rule = {
+    querySelector: (selector) => ({
+      value: selector.includes("kind")
+        ? "ma_cross"
+        : selector.includes("operator")
+          ? "cross_above"
+          : selector.includes("short")
+            ? "5"
+            : selector.includes("long")
+              ? "20"
+              : "",
+    }),
+  };
+  const form = {
+    querySelector: (selector) =>
+      selector === "[data-candidate-editor]" ||
+      selector === '[data-signal-editor="buy"]',
+    querySelectorAll: (selector) =>
+      selector === "[data-param]"
+        ? []
+        : selector === ".candidate-factor-row"
+          ? [candidate]
+          : selector === '[data-rule-side="buy"]'
+            ? [rule]
+            : [],
+  };
+  const params = ui.readParams(form, {
+    candidate_factors: [],
+    buy_rules: [],
+    sell_rules: [],
+  });
+  assert.deepEqual(params.candidate_factors, [
+    { code: "return_20", weight: 2.5, direction: "desc" },
+  ]);
+  assert.deepEqual(params.buy_rules, [
+    {
+      kind: "ma_cross",
+      operator: "cross_above",
+      window: null,
+      short_window: 5,
+      long_window: 20,
+      threshold: null,
+    },
+  ]);
+  assert.deepEqual(params.sell_rules, []);
+});
 test("on-page review does not execute; final execution and duplicate guard are separate", async () => {
   const h = harness("/backtests/configure", async (url) =>
     url.includes("/copy?")

@@ -5,7 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
-from ai_quant_assistant.domain.models import FactorBacktestSpec, FactorLabSpec
+from ai_quant_assistant.domain.models import (
+    DailySignalStrategySpec,
+    FactorBacktestSpec,
+    FactorLabSpec,
+)
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.storage.operations import ExclusiveOperationLock
@@ -30,11 +34,17 @@ class BacktestTaskManager:
         self.task_type = task_type
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="backtest")
 
-    def submit(self, spec: FactorBacktestSpec | FactorLabSpec) -> dict[str, Any]:
+    @staticmethod
+    def _logical_type(task: dict[str, Any]) -> str:
+        return task.get("spec", {}).get("research_type") or task["task_type"]
+
+    def submit(
+        self, spec: FactorBacktestSpec | FactorLabSpec | DailySignalStrategySpec
+    ) -> dict[str, Any]:
         payload = spec.to_dict()
         storage_type = self.task_type
-        if self.task_type == "factor_lab":
-            payload["research_type"] = "factor_lab"
+        if self.task_type != "backtest":
+            payload["research_type"] = self.task_type
             storage_type = "backtest"
         task = self.repository.create(storage_type, spec=payload, message="等待执行")
         task_id = task["task_id"]
@@ -44,7 +54,9 @@ class BacktestTaskManager:
     def _update(self, task_id: str, **changes: Any) -> None:
         self.repository.update(task_id, **changes)
 
-    def _run(self, task_id: str, spec: FactorBacktestSpec | FactorLabSpec) -> None:
+    def _run(
+        self, task_id: str, spec: FactorBacktestSpec | FactorLabSpec | DailySignalStrategySpec
+    ) -> None:
         self._update(
             task_id,
             status="running",
@@ -79,8 +91,7 @@ class BacktestTaskManager:
 
     def get(self, task_id: str) -> dict[str, Any]:
         task = self.repository.get(task_id)
-        is_factor_lab = task.get("spec", {}).get("research_type") == "factor_lab"
-        expected = "factor_lab" if is_factor_lab else task["task_type"]
+        expected = self._logical_type(task)
         if expected != self.task_type:
             raise KeyError(task_id)
         task["task_type"] = expected
@@ -90,8 +101,7 @@ class BacktestTaskManager:
         tasks = self.repository.list(task_type="backtest")
         selected = []
         for task in tasks:
-            is_factor_lab = task.get("spec", {}).get("research_type") == "factor_lab"
-            expected = "factor_lab" if is_factor_lab else task["task_type"]
+            expected = self._logical_type(task)
             if expected == self.task_type:
                 task["task_type"] = expected
                 selected.append(task)

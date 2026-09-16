@@ -42,6 +42,17 @@ SCREEN = {
     "as_of": "2024-08-30",
     "conditions": [{"field": "roe", "operator": "gte", "value": 1}],
 }
+DAILY_SIGNAL = {
+    "symbols": ["600519", "000001"],
+    "start_date": "2024-01-04",
+    "end_date": "2024-01-12",
+    "candidate_factors": [{"code": "return_1", "weight": 1, "direction": "desc"}],
+    "candidate_count": 1,
+    "candidate_refresh": "daily",
+    "buy_rules": [{"kind": "close_vs_ma", "operator": "above", "window": 2}],
+    "sell_rules": [{"kind": "close_vs_ma", "operator": "below", "window": 2}],
+    "max_positions": 1,
+}
 
 
 @pytest.fixture
@@ -194,6 +205,27 @@ def test_lab_unions_signal_frequencies_and_metric_requirements(db):
         "debt_asset_ratio",
     }
     assert result["financial_warmup_start"] == "2022-01-01"
+
+
+def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db):
+    result = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
+    assert result["ready"] is True
+    price_checks = [item for item in result["checks"] if item["dataset"] == "daily_bar"]
+    assert {item["adjustment"] for item in price_checks} == {"none", "qfq"}
+    assert all(item["required_start"] == "2024-01-02" for item in price_checks)
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM daily_bar WHERE security_id='SSE.600519' "
+            "AND trade_date=DATE '2024-01-03' AND adjustment='none'"
+        )
+    missing = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
+    assert missing["ready"] is False
+    raw = next(
+        item
+        for item in missing["checks"]
+        if item.get("symbol") == "600519" and item.get("adjustment") == "none"
+    )
+    assert raw["missing_dates"] == ["2024-01-03"]
 
 
 def test_plan_freezes_revision_and_rejects_tampering_or_overlimit(db):
@@ -410,7 +442,9 @@ def test_v15_migration_preserves_all_tables_repeatable_and_rollback(db, monkeypa
         )
         with pytest.raises(Exception, match="unknown_migration_failure"):
             apply_migrations(c)
-        assert c.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=15").fetchone()[0] == 0
+        assert (
+            c.execute("SELECT COUNT(*) FROM schema_migrations WHERE version=15").fetchone()[0] == 0
+        )
         assert (
             c.execute(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='research_data_plan'"
@@ -485,12 +519,18 @@ def test_api_cli_confirmation_and_no_browser_scope_override(db, tmp_path, monkey
         for endpoint in ("preflight", "plans"):
             rejected = client.post(
                 f"/api/v1/research-data/{endpoint}",
-                json={"research_type": "factor_backtest", "parameters": {**PARAMETERS, "symbols": []}},
+                json={
+                    "research_type": "factor_backtest",
+                    "parameters": {**PARAMETERS, "symbols": []},
+                },
             )
             assert rejected.status_code == 422
             assert rejected.json()["detail"][0]["loc"][-1] == "symbols"
         with db.connect(read_only=True) as connection:
-            assert connection.execute("SELECT COUNT(*) FROM research_data_plan").fetchone()[0] == before
+            assert (
+                connection.execute("SELECT COUNT(*) FROM research_data_plan").fetchone()[0]
+                == before
+            )
         preflight = client.post(
             "/api/v1/research-data/preflight",
             json={"research_type": "screen", "parameters": SCREEN},

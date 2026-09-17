@@ -207,7 +207,15 @@ def test_lab_unions_signal_frequencies_and_metric_requirements(db):
     assert result["financial_warmup_start"] == "2022-01-01"
 
 
-def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db):
+def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db, tmp_path):
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        response = client.post(
+            "/api/v1/research-data/preflight",
+            json={"research_type": "daily_signal", "parameters": DAILY_SIGNAL},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["input"]["research_type"] == "daily_signal"
+
     result = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
     assert result["ready"] is True
     price_checks = [item for item in result["checks"] if item["dataset"] == "daily_bar"]

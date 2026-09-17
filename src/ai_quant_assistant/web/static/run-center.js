@@ -175,6 +175,104 @@ const RunCenterUI = (() => {
         .join("")}</dl>`;
     return `<pre>${esc(JSON.stringify(value, null, 2))}</pre>`;
   }
+  function renderPreflight(report = {}) {
+    const checks = Array.isArray(report.checks) ? report.checks : [];
+    const blockers = Array.isArray(report.blockers) ? report.blockers : [];
+    const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+    const recommendations = Array.isArray(report.recommendations)
+      ? report.recommendations
+      : [];
+    const ready = report.ready === true || report.status === "ready";
+    const tone = ready ? (warnings.length ? "warning" : "ready") : "blocked";
+    const heading = ready
+      ? warnings.length
+        ? "研究数据预检：可以提交，但请先阅读提示"
+        : "研究数据预检：可以提交"
+      : "研究数据预检：暂不能提交";
+    const explanation = ready
+      ? "预检只核对数据与参数，不会自动运行研究、下载数据或修改配置。"
+      : "当前不会执行回测。请按下面建议修改参数或补齐数据，然后重新点击“研究数据预检”。";
+    const affected = Array.isArray(report.affected_symbols)
+      ? report.affected_symbols
+      : [];
+    const count = Number.isInteger(report.blocking_check_count)
+      ? report.blocking_check_count
+      : blockers.length;
+    const summary = ready
+      ? `${checks.length} 项检查 · ${warnings.length} 项提示`
+      : `${count} 项阻断${affected.length ? ` · ${affected.length} 只股票受影响` : ""}`;
+    const advice = recommendations.length
+      ? `<section class="preflight-recommendations" aria-label="处理建议">${recommendations
+          .map(
+            (item, index) =>
+              `<article><h4>${index + 1}. ${esc(item.title || "需要处理")}</h4><p>${esc(item.explanation || "未提供原因")}</p><p><strong>建议：</strong>${esc(item.action || "查看阻断明细后调整")}</p></article>`,
+          )
+          .join("")}</section>`
+      : !ready && blockers.length
+        ? '<p class="preflight-no-advice">请根据下方阻断明细调整参数或补齐数据。</p>'
+        : "";
+    const datasetLabels = {
+      benchmark_daily_bar: "基准日线",
+      daily_bar: "股票日线",
+      financial_metric: "财务因子",
+      security_master: "证券目录",
+      universe_history: "历史范围/行业",
+    };
+    const statusLabels = {
+      ready: "已就绪",
+      missing: "缺失",
+      unknown: "无法确认",
+      not_applicable: "不适用",
+    };
+    const adjustmentLabels = {
+      none: "不复权（none）",
+      qfq: "前复权（qfq）",
+      hfq: "后复权（hfq）",
+    };
+    const range = (item, prefix) => {
+      const start = item[prefix + "_start"];
+      const end = item[prefix + "_end"];
+      if (!start && !end) return "未记录";
+      return `${known(start)} 至 ${known(end)}`;
+    };
+    const checkTable = checks.length
+      ? `<section><h3>默认检查结果</h3><div class="table-shell"><table class="preflight-checks"><thead><tr><th>对象</th><th>检查项</th><th>口径 / 因子</th><th>需要覆盖</th><th>本地覆盖</th><th>状态与原因</th></tr></thead><tbody>${checks
+          .slice(0, 100)
+          .map((item) => {
+            const detail = item.metric
+              ? factorName(item.metric)
+              : adjustmentLabels[item.adjustment] || known(item.adjustment);
+            const localRange = range(item, "actual");
+            const listing = item.list_date
+              ? `<small>上市：${esc(item.list_date)}</small>`
+              : "";
+            const missing =
+              item.missing_count == null
+                ? ""
+                : `<small>缺口：${esc(item.missing_count)}</small>`;
+            return `<tr><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small></td></tr>`;
+          })
+          .join("")}</tbody></table></div>${checks.length > 100 ? "<p>仅展示前 100 项检查。</p>" : ""}</section>`
+      : "";
+    const blockerDetails = blockers.length
+      ? `<details ${recommendations.length ? "" : "open"}><summary>查看阻断明细（${blockers.length}）</summary><ul>${blockers.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details>`
+      : "";
+    const warningDetails = warnings.length
+      ? `<details><summary>查看风险提示（${warnings.length}）</summary><ul>${warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details>`
+      : "";
+    const diagnostic = {
+      checked_at: report.checked_at,
+      input: report.input,
+      required_datasets: report.required_datasets,
+      signal_count: report.signal_count,
+      signal_cutoff: report.signal_cutoff,
+      financial_warmup_start: report.financial_warmup_start,
+      financial_validity_rule: report.financial_validity_rule,
+      missing_policy: report.missing_policy,
+      checks,
+    };
+    return `<section class="preflight-summary ${tone}" aria-live="polite"><header><div><p class="preflight-kicker">${esc(report.status_label || (ready ? "可以运行" : "预检阻断"))}</p><h2>${heading}</h2></div><strong class="preflight-count">${esc(summary)}</strong></header><p>${explanation}</p>${advice}${checkTable}${blockerDetails}${warningDetails}<details><summary>查看冻结参数与完整诊断</summary>${renderValue(diagnostic)}</details></section>`;
+  }
   function factorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
     const options = { ...catalog.factors };
     if (!options[item.code]) options[item.code] = "未知因子";
@@ -316,6 +414,7 @@ const RunCenterUI = (() => {
       table,
       scope,
       renderValue,
+      renderPreflight,
       field,
       readParams,
       factorRow,
@@ -848,7 +947,7 @@ const RunCenterUI = (() => {
         body: JSON.stringify({ research_type: copy.kind, parameters: params }),
       });
       if (JSON.stringify(params) !== JSON.stringify(currentParams())) return;
-      $("center-preflight-result").innerHTML = renderValue(p);
+      $("center-preflight-result").innerHTML = renderPreflight(p);
       checked = { params: JSON.stringify(params), report: p };
       $("center-submit").disabled = !(p.ready === true || p.status === "ready");
     } catch (e) {

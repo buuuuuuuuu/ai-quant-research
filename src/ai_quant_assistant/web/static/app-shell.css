@@ -328,6 +328,78 @@ main .table-shell {
   max-width: 100%;
   overflow: auto;
 }
+.preflight-summary {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid #dce3db;
+  border-left: 5px solid #638765;
+  border-radius: 8px;
+  background: #fbfcf9;
+  overflow-wrap: anywhere;
+}
+.preflight-summary.blocked {
+  border-left-color: #a74632;
+  background: #fffaf7;
+}
+.preflight-summary.warning {
+  border-left-color: #9a7415;
+  background: #fffdf5;
+}
+.preflight-summary > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 16px;
+}
+.preflight-summary h2,
+.preflight-summary h3,
+.preflight-summary h4 {
+  margin-top: 0;
+}
+.preflight-kicker {
+  margin: 0 0 4px;
+  color: #6a746c;
+  font-size: 13px;
+  font-weight: 700;
+}
+.preflight-count {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #edf3e9;
+  font-size: 13px;
+}
+.preflight-summary.blocked .preflight-count {
+  background: #f6e7e1;
+  color: #7c2f21;
+}
+.preflight-recommendations {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.preflight-recommendations article {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #ead6ce;
+  border-radius: 8px;
+  background: #fff;
+}
+.preflight-recommendations p:last-child {
+  margin-bottom: 0;
+}
+.preflight-checks {
+  min-width: 900px;
+}
+.preflight-checks td {
+  vertical-align: top;
+}
+.preflight-checks small {
+  display: block;
+  margin-top: 4px;
+  color: #6a746c;
+}
 main dialog,
 dialog {
   max-width: calc(100vw - 24px);
@@ -429,6 +501,19 @@ summary {
   }
 }
 @media (max-width: 600px) {
+  .preflight-summary {
+    padding: 14px;
+  }
+  .preflight-summary > header {
+    display: block;
+  }
+  .preflight-count {
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+  .preflight-recommendations {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .factor-editor-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }

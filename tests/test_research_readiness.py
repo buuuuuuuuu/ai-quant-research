@@ -215,6 +215,12 @@ def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db, tmp_
         )
         assert response.status_code == 200, response.text
         assert response.json()["input"]["research_type"] == "daily_signal"
+        assert response.json()["status_label"] in {
+            "预检阻断",
+            "可以运行（有提示）",
+            "可以运行",
+        }
+        assert isinstance(response.json()["recommendations"], list)
 
     result = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
     assert result["ready"] is True
@@ -234,6 +240,24 @@ def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db, tmp_
         if item.get("symbol") == "600519" and item.get("adjustment") == "none"
     )
     assert raw["missing_dates"] == ["2024-01-03"]
+
+
+def test_daily_signal_preflight_explains_listing_boundary_and_next_action(db):
+    result = ResearchReadiness(db).run(
+        "daily_signal",
+        {**DAILY_SIGNAL, "symbols": ["300750"]},
+    )
+    recommendation = next(
+        item for item in result["recommendations"] if item["code"] == "listing_after_start"
+    )
+    assert result["status_label"] == "预检阻断"
+    assert result["blocking_check_count"] == len(result["blockers"])
+    assert "300750" in recommendation["explanation"]
+    assert "2024-03-01" in recommendation["explanation"]
+    assert "研究区间" in recommendation["action"]
+    price = next(item for item in result["checks"] if item["dataset"] == "daily_bar")
+    assert price["list_date"] == "2024-03-01"
+    assert price["latest_complete_date"]
 
 
 def test_plan_freezes_revision_and_rejects_tampering_or_overlimit(db):

@@ -8,6 +8,7 @@ import pandas as pd
 
 from ai_quant_assistant.errors import ProviderError
 from ai_quant_assistant.providers.cache import DataFrameCache, load_or_fetch
+from ai_quant_assistant.providers.cninfo import CninfoAnnouncements
 from ai_quant_assistant.providers.listing_dates import (
     SSE_LISTING_SOURCE,
     explicit_listing_date,
@@ -42,6 +43,7 @@ class AkShareProvider:
         self.retries = retries
         self.timeout_seconds = timeout_seconds
         self.refresh = refresh
+        self._announcement_client = CninfoAnnouncements(timeout_seconds=timeout_seconds)
 
     @staticmethod
     def _akshare():
@@ -70,6 +72,9 @@ class AkShareProvider:
         )
         return f"{prefix}{symbol}"
 
+    def _fetch_cninfo_announcements(self, **params) -> pd.DataFrame:
+        return self._announcement_client.fetch(**params)
+
     def get_interim_announcements(
         self, symbol: str, start_date: date, end_date: date
     ) -> pd.DataFrame:
@@ -82,8 +87,7 @@ class AkShareProvider:
         }
 
         def fetch() -> pd.DataFrame:
-            ak = self._akshare()
-            raw = ak.stock_zh_a_disclosure_report_cninfo(keyword="", **params)
+            raw = self._fetch_cninfo_announcements(keyword="", **params)
             normalized = normalize_interim_announcements(raw, symbol)
             normalized["source"] = "akshare:stock_zh_a_disclosure_report_cninfo:interim"
             return normalized
@@ -116,7 +120,7 @@ class AkShareProvider:
         }
 
         def fetch() -> pd.DataFrame:
-            raw = self._akshare().stock_zh_a_disclosure_report_cninfo(keyword="", **params)
+            raw = self._fetch_cninfo_announcements(keyword="", **params)
             return normalize_report_announcements(
                 raw,
                 symbol,

@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 import pandas as pd
-import requests
+from curl_cffi import requests
 
 from ai_quant_assistant.errors import ProviderError
 
@@ -67,34 +67,38 @@ class CninfoAnnouncements:
 
     def _request(self, session, method: str, path: str, stage: str, **kwargs):
         started = time.monotonic()
+        response = None
         try:
-            with session.request(
+            response = session.request(
                 method, BASE + path, timeout=(min(10.0, self.timeout), self.timeout),
                 allow_redirects=False, stream=True, **kwargs,
-            ) as response:
-                status = response.status_code
-                if 300 <= status < 400:
-                    raise AnnouncementResponseError(stage, "redirect", status=status)
-                if status != 200:
-                    raise AnnouncementResponseError(stage, "http", status=status)
-                body = bytearray()
-                for chunk in response.iter_content(65536):
-                    if time.monotonic() - started > self.timeout * 2:
-                        raise AnnouncementResponseError(stage, "network", status=status)
-                    body.extend(chunk)
-                    if len(body) > self.max_bytes:
-                        raise AnnouncementResponseError(stage, "limit", status=status)
-                if not body.strip():
-                    raise AnnouncementResponseError(stage, "empty", status=status)
-                try:
-                    data = json.loads(body)
-                except (ValueError, UnicodeError):
-                    raise AnnouncementResponseError(stage, "json", status=status) from None
-                if not isinstance(data, dict):
-                    raise AnnouncementResponseError(stage, "schema", status=status)
-                return data
-        except requests.RequestException:
+            )
+            status = response.status_code
+            if 300 <= status < 400:
+                raise AnnouncementResponseError(stage, "redirect", status=status)
+            if status != 200:
+                raise AnnouncementResponseError(stage, "http", status=status)
+            body = bytearray()
+            for chunk in response.iter_content(65536):
+                if time.monotonic() - started > self.timeout * 2:
+                    raise AnnouncementResponseError(stage, "network", status=status)
+                body.extend(chunk)
+                if len(body) > self.max_bytes:
+                    raise AnnouncementResponseError(stage, "limit", status=status)
+            if not body.strip():
+                raise AnnouncementResponseError(stage, "empty", status=status)
+            try:
+                data = json.loads(body)
+            except (ValueError, UnicodeError):
+                raise AnnouncementResponseError(stage, "json", status=status) from None
+            if not isinstance(data, dict):
+                raise AnnouncementResponseError(stage, "schema", status=status)
+            return data
+        except requests.exceptions.RequestException:
             raise AnnouncementResponseError(stage, "network") from None
+        finally:
+            if response is not None:
+                response.close()
 
     def fetch(self, *, symbol, market, category, start_date, end_date, keyword=""):
         if market != "沪深京" or category not in CATEGORIES or keyword:
@@ -103,8 +107,13 @@ class CninfoAnnouncements:
             raise ValueError("unsupported announcement symbol")
         start = datetime.strptime(start_date, "%Y%m%d").date()
         end = datetime.strptime(end_date, "%Y%m%d").date()
-        with requests.Session() as session:
-            session.headers.update({"Accept": "application/json", "Referer": BASE + "/"})
+        # CNINFO currently rejects ordinary requests/curl TLS clients with 403 while
+        # accepting a browser-compatible TLS/HTTP fingerprint from the same host.
+        # Use a fresh cookie-free session; do not import browser profiles or credentials.
+        with requests.Session(
+            impersonate="chrome",
+            headers={"Accept": "application/json", "Referer": BASE + "/"},
+        ) as session:
             if self._organizations is None:
                 catalog = self._request(session, "GET", "/new/data/szse_stock.json", "股票目录")
                 rows = catalog.get("stockList")

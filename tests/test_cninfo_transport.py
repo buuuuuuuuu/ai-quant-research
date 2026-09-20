@@ -3,7 +3,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
-import requests
+from curl_cffi import requests
 
 from ai_quant_assistant.errors import ProviderError
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
@@ -24,6 +24,9 @@ class Response:
         return self
 
     def __exit__(self, *args):
+        self.closed = True
+
+    def close(self):
         self.closed = True
 
     def iter_content(self, chunk_size):
@@ -73,12 +76,23 @@ def test_https_transport_matches_original_format_and_preserves_identity(monkeypa
     from akshare.stock_feature.stock_disclosure_cninfo import __format_announcement_df
 
     raw = [item(published=published)]
+    catalog_response = catalog()
     response = Response({"totalAnnouncement": 1, "announcements": raw})
-    session = Session([catalog(), response])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    session = Session([catalog_response, response])
+    session_options = {}
+
+    def session_factory(**kwargs):
+        session_options.update(kwargs)
+        return session
+
+    monkeypatch.setattr(requests, "Session", session_factory)
     result = fetch(CninfoAnnouncements(timeout_seconds=15))
     pd.testing.assert_frame_equal(result, __format_announcement_df(pd.DataFrame(raw)))
-    assert response.closed
+    assert catalog_response.closed and response.closed
+    assert session_options == {
+        "impersonate": "chrome",
+        "headers": {"Accept": "application/json", "Referer": "https://www.cninfo.com.cn/"},
+    }
     assert len(session.calls) == 2  # No duplicate first-page fetch.
     for _, url, kwargs in session.calls:
         assert url.startswith("https://www.cninfo.com.cn/")
@@ -92,7 +106,7 @@ def test_https_transport_matches_original_format_and_preserves_identity(monkeypa
 @pytest.mark.parametrize("total", [0, "0"])
 def test_only_verified_empty_response_is_success(monkeypatch, items, total):
     session = Session([catalog(), Response({"totalAnnouncement": total, "announcements": items})])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
     assert fetch(CninfoAnnouncements()).empty
 
 
@@ -108,22 +122,24 @@ def test_only_verified_empty_response_is_success(monkeypatch, items, total):
     (Response(status=403), "http"),
     (Response(status=429), "http"),
     (Response(status=503), "http"),
-    (requests.Timeout("secret upstream token"), "network"),
+    (requests.exceptions.Timeout("secret upstream token"), "network"),
 ])
 def test_bad_response_is_actionable_failure_not_empty_success(monkeypatch, response, reason):
     session = Session([catalog(), response])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
     with pytest.raises(AnnouncementResponseError) as error:
         fetch(CninfoAnnouncements())
     assert error.value.reason == reason
     assert "secret upstream token" not in str(error.value)
     assert "请检查服务器" in str(error.value)
     assert len(session.calls) == 2
+    if not isinstance(response, Exception):
+        assert response.closed
 
 
 def test_size_page_limits_and_later_page_failure_are_not_partial_success(monkeypatch):
     session = Session([catalog(), Response({"totalAnnouncement": 31, "announcements": [item(i) for i in range(30)]}), Response(body=b"not json")])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
     monkeypatch.setattr("ai_quant_assistant.providers.cninfo.time.sleep", lambda _: None)
     with pytest.raises(AnnouncementResponseError, match="JSON"):
         fetch(CninfoAnnouncements())
@@ -147,7 +163,7 @@ def test_pagination_rejects_duplicate_and_changed_total(monkeypatch):
     for second in ({"totalAnnouncement": 31, "announcements": [item(0)]},
                    {"totalAnnouncement": 32, "announcements": [item(30), item(31)]}):
         session = Session([catalog(), Response({"totalAnnouncement": 31, "announcements": [item(i) for i in range(30)]}), Response(second)])
-        monkeypatch.setattr(requests, "Session", lambda session=session: session)
+        monkeypatch.setattr(requests, "Session", lambda session=session, **_: session)
         with pytest.raises(AnnouncementResponseError) as error:
             fetch(CninfoAnnouncements())
         assert error.value.reason == "pagination"
@@ -155,7 +171,7 @@ def test_pagination_rejects_duplicate_and_changed_total(monkeypatch):
 
 def test_rate_limit_not_retried_or_cached_as_empty(tmp_path, monkeypatch):
     session = Session([catalog(), Response(status=429)])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
     monkeypatch.setattr("ai_quant_assistant.providers.cache.time.sleep", lambda _: pytest.fail("429 must not hammer upstream"))
     provider = AkShareProvider(tmp_path, retries=3, refresh=True)
     with pytest.raises(ProviderError, match="after 1 attempts") as error:
@@ -167,7 +183,7 @@ def test_rate_limit_not_retried_or_cached_as_empty(tmp_path, monkeypatch):
 def test_provider_preserves_publication_semantics_and_uses_same_transport_for_interim(tmp_path, monkeypatch):
     session = Session([catalog(), Response({"totalAnnouncement": 1, "announcements": [item()]}),
                        Response({"totalAnnouncement": 1, "announcements": [item()]})])
-    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
     provider = AkShareProvider(tmp_path, retries=1)
     reports = provider.get_report_announcements("688111", date(2024, 1, 1), date(2024, 12, 31), "interim")
     interim = provider.get_interim_announcements("688111", date(2024, 1, 1), date(2024, 12, 31))

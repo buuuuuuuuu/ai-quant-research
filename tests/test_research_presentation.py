@@ -15,6 +15,7 @@ from ai_quant_assistant.api.schemas import FactorLabRequest
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.reports.factor_lab_writer import FactorLabReportWriter
 from ai_quant_assistant.reports.presentation import (
+    daily_signal_summary,
     enum_label,
     factor_label,
     presentation_catalog,
@@ -27,12 +28,41 @@ def test_catalog_uses_existing_definitions_and_unknown_codes_are_not_replaced():
         k: v["label"] for k, v in FINANCIAL_METRICS.items()
     }
     assert factor_label("roe") == "加权净资产收益率（roe）"
-    assert factor_label("not-a-factor") == "未知因子（not-a-factor）"
+    assert factor_label("not-a-factor") == "暂无中文名称（not-a-factor）"
     assert enum_label("asc") == "低值优先（asc）"
     assert "资产负债率" in strategy_label(
         "composite:roe+debt_asset_ratio|top=3|monthly|commission=5"
     )
     assert strategy_label("legacy-name") == "未识别策略（legacy-name）"
+    summary = daily_signal_summary(
+        {
+            "candidate_factors": [{"code": "roe", "direction": "desc", "weight": 1}],
+            "candidate_refresh": "monthly",
+            "candidate_count": 10,
+            "buy_rule_mode": "all",
+            "sell_rule_mode": "any",
+            "buy_rules": [
+                {
+                    "kind": "ma_cross",
+                    "operator": "cross_above",
+                    "short_window": 5,
+                    "long_window": 20,
+                }
+            ],
+            "sell_rules": [
+                {
+                    "kind": "ma_cross",
+                    "operator": "cross_below",
+                    "short_window": 5,
+                    "long_window": 20,
+                }
+            ],
+            "exit_on_candidate_drop": False,
+        }
+    )
+    assert "加权净资产收益率（roe）" in summary
+    assert "MA(5) 上穿 MA(20)" in summary
+    assert "相对权重 1" in summary and "下一交易日开盘" in summary
 
 
 def report_fixture():

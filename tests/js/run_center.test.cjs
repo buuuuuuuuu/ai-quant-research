@@ -412,7 +412,7 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     ),
     /资产负债率/,
   );
-  assert.match(h.ui.factorName("unknown"), /未知因子（unknown）/);
+  assert.match(h.ui.factorName("unknown"), /暂无中文名称（unknown）/);
   h.element("center-copy-form").inputs = [
     { dataset: { param: "symbols", type: "symbols" }, value: "600519 000001" },
   ];
@@ -623,4 +623,44 @@ test("copy configuration late failure cannot replace a newer record", async () =
   await tick();
   assert.equal(h.element("center-error").textContent, "");
   assert.match(h.element("center-copy-source").textContent, /new/);
+});
+
+test("daily templates only contain legal rule parameters and do not contain scope", () => {
+  for (const template of Object.values(ui.dailyTemplates)) {
+    assert.equal("symbols" in template, false);
+    assert.equal("stock_pool_id" in template, false);
+    assert.equal(ui.validateDailySignal({ ...template, candidate_count: 2, max_positions: 1 }, 2).length, 0);
+  }
+});
+
+test("daily validation and summary explain periods, weights, and next-open execution", () => {
+  const params = {
+    symbols: ["600519"], start_date: "2024-01-01", end_date: "2024-12-31",
+    candidate_factors: [{ code: "roe", direction: "desc", weight: 1 }],
+    candidate_count: 1, max_positions: 1, candidate_refresh: "monthly",
+    buy_rule_mode: "all", sell_rule_mode: "any", exit_on_candidate_drop: false,
+    buy_rules: [{ kind: "ma_cross", operator: "cross_above", short_window: 20, long_window: 5 }],
+    sell_rules: [],
+  };
+  const errors = ui.validateDailySignal(params, 1);
+  assert.match(errors.join(" "), /短周期当前为 20，长周期为 5/);
+  assert.match(errors.join(" "), /卖出规则为空/);
+  params.buy_rules = ui.dailyTemplates.ma_cross.buy_rules;
+  params.sell_rules = ui.dailyTemplates.ma_cross.sell_rules;
+  const summary = ui.dailySignalSummary(params);
+  assert.match(summary, /相对权重 1/);
+  assert.match(summary, /候选名单更新与每日信号检查是两个过程/);
+  assert.match(summary, /下一交易日开盘/);
+});
+
+test("daily timeline links only saved identities and preserves missing values", () => {
+  const rows = ui.dailySignalTimeline(
+    [{ signal_date: "2024-01-02", symbol: "600519", action: "buy", signal_price: 10 }],
+    [{ signal_date: "2024-01-02", symbol: "600519", side: "buy", status: "blocked", reason: "t_plus_one" }],
+  );
+  assert.equal(rows.length, 1);
+  const html = ui.renderDailyTimeline(rows);
+  assert.match(html, /t_plus_one/);
+  assert.match(html, /未记录/);
+  assert.doesNotMatch(html, />0</);
 });

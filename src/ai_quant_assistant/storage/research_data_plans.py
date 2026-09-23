@@ -178,6 +178,15 @@ class ResearchDataPlans:
                 for other in items.values()
             ):
                 del items[item_id]
+        if any(
+            check["dataset"] == "trading_calendar" and not check["satisfied"]
+            for check in report["checks"]
+        ):
+            market_item = next(
+                (item for item in items.values() if item["dataset"] == "daily_bar"), None
+            )
+            if market_item is not None:
+                market_item["reason"] += "；沿用现有行情同步先刷新交易日历，不另建任务引擎"
         ordered = sorted(
             items.values(),
             key=lambda item: (

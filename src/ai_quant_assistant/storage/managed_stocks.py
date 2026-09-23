@@ -487,7 +487,17 @@ class ManagedStockService:
             except Exception as exc:
                 announcement_result = {"status": "failed", "error": str(exc)[:2000]}
             if announcement_result["status"] != "published":
-                announcement_error = "定期公告同步失败：" + encoded(announcement_result)
+                issues = announcement_result.get("errors") or []
+                detail = (issues[0].get("error") if issues else None) or announcement_result.get("error")
+                if announcement_result.get("paused_after_provider_failure"):
+                    detail = announcement_result.get("error") or detail
+                counts = announcement_result.get("partitions", {})
+                announcement_error = (
+                    "定期公告同步失败：" + (detail or "原因未记录")[:700]
+                    + f"（完成 {counts.get('published', 0)}、失败 {counts.get('failed', 0)}、"
+                    + f"待处理 {counts.get('planned', 0)} 个分区）。"
+                    + "请排查后重新确认同步；公告失败不代表已有行情丢失。"
+                )
                 error = f"{error}；{announcement_error}" if error else announcement_error
         if error is None:
             try:
@@ -717,7 +727,10 @@ class ManagedStockService:
             symbols=(spec["symbol"],), report_types=("q1", "interim", "q3", "annual"),
             resume=False,
         ))
-        return {key: result[key] for key in ("status", "batch_id", "row_count", "partitions", "errors")}
+        return {key: result.get(key) for key in (
+            "status", "batch_id", "row_count", "partitions", "errors", "error",
+            "paused_after_provider_failure",
+        )}
 
 
 class _FencedDatabase:

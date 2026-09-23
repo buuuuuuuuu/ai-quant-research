@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from ai_quant_assistant.api.schemas import (
     BatchInterimReportEventStudyRequest,
+    DailySignalStrategyRequest,
     DocumentEventStudyRequest,
     FactorBacktestRequest,
     FactorLabRequest,
@@ -19,6 +20,7 @@ from ai_quant_assistant.storage.research_run_index import frozen_symbols
 from ai_quant_assistant.storage.stock_pools import StockPoolService
 
 KINDS = {
+    "daily_signal": ("日线信号策略", DailySignalStrategyRequest, "/api/v1/daily-signal-strategies"),
     "factor_backtest": ("财务因子回测", FactorBacktestRequest, "/api/v1/backtests"),
     "factor_lab": ("因子实验", FactorLabRequest, "/api/v1/factor-lab"),
     "screen": ("条件选股", PointInTimeScreenRequest, "/api/v1/screens/runs"),
@@ -50,14 +52,12 @@ WITH raw AS (
  FROM stock_research_run i LEFT JOIN LATERAL (
    SELECT created_at,started_at FROM operation_task
    WHERE run_id=i.run_id AND task_type='backtest'
-   AND CASE WHEN json_extract_string(TRY_CAST(spec_json AS JSON),'$.research_type')='factor_lab'
-       THEN 'factor_lab' ELSE 'factor_backtest' END=i.research_type
+   AND COALESCE(json_extract_string(TRY_CAST(spec_json AS JSON),'$.research_type'),'factor_backtest')=i.research_type
    ORDER BY created_at,task_id LIMIT 1
  ) t ON TRUE
  UNION ALL
  SELECT 'task',task_id,
-        CASE WHEN json_extract_string(TRY_CAST(spec_json AS JSON),'$.research_type')='factor_lab'
-             THEN 'factor_lab' ELSE 'factor_backtest' END,
+        COALESCE(json_extract_string(TRY_CAST(spec_json AS JSON),'$.research_type'),'factor_backtest'),
         run_id,spec_json,COALESCE(result_json,'{}'),status,created_at,started_at,
         completed_at,created_at,error,NULL,4
  FROM operation_task WHERE task_type='backtest'
@@ -194,8 +194,12 @@ class RunCenter:
         row["detail_url"] = "/backtests/detail?" + query
         row["copy_url"] = "/backtests/configure?" + query
         row["report_url"] = None
-        if row["run_id"] and row["kind"] in {"factor_backtest", "factor_lab"}:
-            segment = "backtests" if row["kind"] == "factor_backtest" else "factor-lab"
+        if row["run_id"] and row["kind"] in {"factor_backtest", "factor_lab", "daily_signal"}:
+            segment = {
+                "factor_backtest": "backtests",
+                "factor_lab": "factor-lab",
+                "daily_signal": "daily-signals",
+            }[row["kind"]]
             row["report_url"] = f"/reports/{segment}/{quote(row['run_id'], safe='')}"
         if detail:
             row["spec"] = spec

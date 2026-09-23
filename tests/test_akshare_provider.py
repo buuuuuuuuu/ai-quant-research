@@ -225,6 +225,7 @@ def test_security_master_falls_back_when_composite_listing_fails(tmp_path, monke
 def test_report_announcements_preserve_period_and_actual_publication(tmp_path, monkeypatch) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
+    monkeypatch.setattr(provider, "_fetch_cninfo_announcements", FakeSyncAkShare().stock_zh_a_disclosure_report_cninfo)
 
     interim = provider.get_report_announcements(
         "600519", date(2024, 1, 1), date(2024, 12, 31), "interim"
@@ -246,6 +247,7 @@ def test_quarterly_announcements_preserve_report_period_and_publication_time(
 ) -> None:
     provider = AkShareProvider(cache_dir=tmp_path, retries=1)
     monkeypatch.setattr(provider, "_akshare", lambda: FakeSyncAkShare())
+    monkeypatch.setattr(provider, "_fetch_cninfo_announcements", FakeSyncAkShare().stock_zh_a_disclosure_report_cninfo)
 
     q1 = provider.get_report_announcements("600519", date(2024, 1, 1), date(2024, 12, 31), "q1")
     q3 = provider.get_report_announcements("600519", date(2024, 1, 1), date(2024, 12, 31), "q3")

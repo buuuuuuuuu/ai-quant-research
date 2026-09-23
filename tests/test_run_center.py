@@ -74,8 +74,12 @@ def test_copy_exact_costs_and_original_scope_read_only(center):
         assert c.execute("SELECT COUNT(*) FROM operation_task").fetchone()[0] == 0
 
     # API/Copilot manual inputs carry an explicit context with no pool identity.
-    original["stock_pool"] = {"pool_id": None, "pool_revision": None,
-                              "resolved_symbols": original["symbols"], "source_type": "explicit"}
+    original["stock_pool"] = {
+        "pool_id": None,
+        "pool_revision": None,
+        "resolved_symbols": original["symbols"],
+        "source_type": "explicit",
+    }
     index(center, "manual-context", spec=original)
     manual = center.copy_parameters("index", "manual-context")
     assert manual["params"]["symbols"] == original["symbols"]
@@ -140,6 +144,7 @@ def test_pages_api_auth_and_original_urls(tmp_path):
             "/backtests/history",
             "/backtests/new",
             "/backtests/factors",
+            "/backtests/daily-signals",
             "/backtests/screen",
             "/backtests/detail",
             "/backtests/configure",
@@ -163,6 +168,8 @@ def test_pages_api_auth_and_original_urls(tmp_path):
         for path in (
             "/api/v1/run-center",
             "/api/v1/run-center/configuration?kind=factor_lab",
+            "/api/v1/run-center/configuration?kind=daily_signal",
+            "/api/v1/daily-signal-strategies",
             "/api/v1/run-center/copy?source=index&record=x",
             "/api/v1/run-center/record?source=task&record=x",
         ):

@@ -291,6 +291,68 @@ test("nulls in result tables remain unknown and untrusted text is escaped", () =
   assert.match(html, /&lt;img/);
   assert.doesNotMatch(html, /<img/);
 });
+test("blocked preflight explains problems and never calls it an unfilled trade", () => {
+  const html = ui.renderPreflight({
+    status: "blocked",
+    status_label: "预检阻断",
+    ready: false,
+    blockers: ["<img onerror=x> 数据缺失"],
+    blocking_check_count: 1,
+    affected_symbols: ["300750"],
+    recommendations: [
+      {
+        title: "研究开始日早于股票上市日",
+        explanation: "300750（2024-03-01 上市）",
+        action: "将开始日期调整到 2024-03-01 之后。",
+      },
+    ],
+    checks: [
+      {
+        symbol: "300750",
+        dataset: "daily_bar",
+        adjustment: "qfq",
+        status: "missing",
+        required_start: "2024-03-01",
+        required_end: "2024-03-08",
+        actual_start: null,
+        actual_end: null,
+        missing_count: 5,
+        list_date: "2024-03-01",
+        reason: "缺少行情",
+      },
+    ],
+  });
+  assert.match(html, /暂不能提交/);
+  assert.match(html, /2024-03-01/);
+  assert.match(html, /将开始日期调整/);
+  assert.match(html, /默认检查结果/);
+  assert.doesNotMatch(html, /未成交/);
+  assert.doesNotMatch(html, /<img onerror/);
+  assert.match(html, /&lt;img onerror=x&gt;/);
+});
+test("preflight screen renders actionable blocked summary and remains disabled", async () => {
+  const h = harness("/backtests/configure", async (url) =>
+    url.includes("/copy?")
+      ? copied
+      : {
+          status: "blocked",
+          ready: false,
+          blockers: ["行情缺失"],
+          recommendations: [
+            {
+              title: "股票日线覆盖不足",
+              explanation: "需要前复权和不复权行情。",
+              action: "先同步日线，再重新预检。",
+            },
+          ],
+        },
+  );
+  await tick();
+  await h.ui.preflight();
+  assert.equal(h.element("center-submit").disabled, true);
+  assert.match(h.element("center-preflight-result").innerHTML, /先同步日线/);
+  assert.doesNotMatch(h.element("center-preflight-result").innerHTML, /未成交/);
+});
 test("fresh lab is independent, preserves legacy range query, and only reads on entry", async () => {
   const data = {
     ...copied,
@@ -391,6 +453,77 @@ test("factor rows read exact codes, directions and relative weights without perc
     ui.factorRow({ code: "<script>", weight: 2, direction: "asc" }),
     /&lt;script&gt;/,
   );
+});
+test("daily signal editors preserve internal codes and numeric rule parameters", () => {
+  assert.match(ui.factorName("return_20"), /20 日涨跌幅（return_20）/);
+  assert.match(ui.factorName("ma_deviation_60"), /MA\(60\).*ma_deviation_60/);
+  assert.match(
+    ui.candidateFactorRow({ code: "<script>", weight: 1, direction: "desc" }),
+    /&lt;script&gt;/,
+  );
+  assert.match(
+    ui.signalRuleRow({
+      kind: "ma_cross",
+      operator: "cross_above",
+      short_window: 5,
+      long_window: 20,
+    }),
+    /上穿.*cross_above/,
+  );
+  const candidate = {
+    querySelector: (selector) => ({
+      value: selector.includes("code")
+        ? "return_20"
+        : selector.includes("weight")
+          ? "2.5"
+          : "desc",
+    }),
+  };
+  const rule = {
+    querySelector: (selector) => ({
+      value: selector.includes("kind")
+        ? "ma_cross"
+        : selector.includes("operator")
+          ? "cross_above"
+          : selector.includes("short")
+            ? "5"
+            : selector.includes("long")
+              ? "20"
+              : "",
+    }),
+  };
+  const form = {
+    querySelector: (selector) =>
+      selector === "[data-candidate-editor]" ||
+      selector === '[data-signal-editor="buy"]',
+    querySelectorAll: (selector) =>
+      selector === "[data-param]"
+        ? []
+        : selector === ".candidate-factor-row"
+          ? [candidate]
+          : selector === '[data-rule-side="buy"]'
+            ? [rule]
+            : [],
+  };
+  const params = ui.readParams(form, {
+    candidate_factors: [],
+    buy_rules: [],
+    sell_rules: [],
+  });
+  assert.deepEqual(params.candidate_factors, [
+    { code: "return_20", weight: 2.5, direction: "desc" },
+  ]);
+  assert.deepEqual(params.buy_rules, [
+    {
+      kind: "ma_cross",
+      operator: "cross_above",
+      window: null,
+      short_window: 5,
+      long_window: 20,
+      threshold: null,
+    },
+  ]);
+  assert.deepEqual(params.sell_rules, []);
 });
 test("on-page review does not execute; final execution and duplicate guard are separate", async () => {
   const h = harness("/backtests/configure", async (url) =>

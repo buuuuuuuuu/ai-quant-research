@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ai_quant_assistant.api.schemas import (
+    DailySignalStrategyRequest,
     FactorBacktestRequest,
     FactorLabRequest,
     PointInTimeScreenRequest,
@@ -22,6 +23,10 @@ class BacktestParameters(FactorBacktestRequest):
 
 
 class LabParameters(FactorLabRequest):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DailySignalParameters(DailySignalStrategyRequest):
     model_config = ConfigDict(extra="forbid")
 
 
@@ -43,8 +48,15 @@ class LabCheck(BaseModel):
     parameters: LabParameters
 
 
+class DailySignalCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    research_type: Literal["daily_signal"]
+    parameters: DailySignalParameters
+
+
 ReadinessRequest = Annotated[
-    ScreenCheck | BacktestCheck | LabCheck, Field(discriminator="research_type")
+    ScreenCheck | BacktestCheck | LabCheck | DailySignalCheck,
+    Field(discriminator="research_type"),
 ]
 PlanID = Annotated[str, Path(min_length=1, max_length=100)]
 

@@ -14,6 +14,7 @@ import pandas as pd
 
 from ai_quant_assistant.domain.models import AnnouncementSyncSpec, BenchmarkSyncSpec
 from ai_quant_assistant.providers.base import ResearchDataProvider
+from ai_quant_assistant.providers.cninfo import announcement_error
 from ai_quant_assistant.providers.normalization import (
     exchange_for_symbol,
     security_id_for_symbol,
@@ -516,7 +517,7 @@ class ResearchDatasetSyncService:
             "partitions": {str(key): int(value) for key, value in partitions.items()},
         }
 
-    def _complete_batch(self, batch_id: str) -> dict[str, Any]:
+    def _complete_batch(self, batch_id: str, stop_reason: str | None = None) -> dict[str, Any]:
         with self.database.connect() as connection:
             partitions = dict(
                 connection.execute(
@@ -537,8 +538,12 @@ class ResearchDatasetSyncService:
                 ).fetchone()[0]
             )
             failed = int(partitions.get("failed", 0))
-            status = "failed" if failed else "published"
-            error = f"{failed} partitions failed; rerun with resume enabled" if failed else None
+            pending = sum(int(count) for state, count in partitions.items() if state != "published")
+            status = "failed" if pending else "published"
+            error = stop_reason or (
+                f"{failed} partitions failed; {pending - failed} uncompleted; rerun with resume enabled"
+                if pending else None
+            )
             connection.execute(
                 """
                 UPDATE sync_batch
@@ -585,6 +590,9 @@ class ResearchDatasetSyncService:
 
         pending = self._pending_partitions(batch_id)
         errors = []
+        consecutive_failures = 0
+        last_failure = None
+        stop_reason = None
         logger.info("sync %s batch %s: %s pending partitions", dataset, batch_id, len(pending))
         for index, partition in enumerate(pending, start=1):
             logger.info(
@@ -624,17 +632,34 @@ class ResearchDatasetSyncService:
                     )
                     raise ValueError(f"blocking data-quality failure: {failed_rules}")
                 self._publish_partition(batch_id, partition, frame, raw_path, raw_sha256)
+                consecutive_failures, last_failure = 0, None
             except Exception as exc:  # noqa: BLE001 - each partition is independently resumable
                 logger.warning("research partition %s failed: %s", partition["partition_key"], exc)
                 self._mark_partition(batch_id, partition["partition_key"], "failed", error=str(exc))
                 errors.append({"partition_key": partition["partition_key"], "error": str(exc)})
+                diagnostic = announcement_error(exc) if dataset == "announcement" else None
+                if diagnostic is not None:
+                    fingerprint = diagnostic.fingerprint
+                    consecutive_failures = consecutive_failures + 1 if fingerprint == last_failure else 1
+                    last_failure = fingerprint
+                    if diagnostic.stop_batch or consecutive_failures >= 3:
+                        stop_reason = (
+                            f"公告接口连续失败 {consecutive_failures} 个分区，已暂停剩余 "
+                            f"{len(pending) - index} 个分区（未标记完成）。{diagnostic}"
+                        )
+                else:
+                    consecutive_failures, last_failure = 0, None
             if self.progress_callback:
                 self.progress_callback(index, len(pending))
+            if stop_reason:
+                logger.warning("announcement batch %s paused: %s", batch_id, stop_reason)
+                break
             if self.rate_limit_seconds:
                 time.sleep(self.rate_limit_seconds)
 
         return {
-            **self._complete_batch(batch_id),
+            **self._complete_batch(batch_id, stop_reason),
+            "paused_after_provider_failure": stop_reason is not None,
             "resumed": resumed,
             "provider": self.provider.name,
             "objects": len(spec.symbols),

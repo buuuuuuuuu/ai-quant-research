@@ -133,7 +133,13 @@ def test_report_html_escapes_unknown_factor_and_strategy(tmp_path):
 def test_independent_configuration_routes_and_catalog_are_read_only(tmp_path):
     database = _explorer_database(tmp_path)
     with TestClient(create_app(_settings(tmp_path))) as client:
-        for route in ["/backtests", "/backtests/history", "/backtests/new", "/backtests/factors"]:
+        for route in [
+            "/backtests",
+            "/backtests/history",
+            "/backtests/new",
+            "/backtests/factors",
+            "/backtests/daily-signals",
+        ]:
             page = client.get(route)
             assert page.status_code == 200
             assert 'id="center-catalog"' in page.text
@@ -142,14 +148,15 @@ def test_independent_configuration_routes_and_catalog_are_read_only(tmp_path):
             )
             assert catalog["factors"]["roe"] == "加权净资产收益率"
             assert 'id="backtest-form"' not in page.text
-        for kind in ["factor_backtest", "factor_lab"]:
+        for kind in ["factor_backtest", "factor_lab", "daily_signal"]:
             config = client.get("/api/v1/run-center/configuration", params={"kind": kind}).json()
             assert config["source_run_id"] is None and config["params"]["symbols"] == []
-            assert (
-                "factors" in config["params"]
-                if kind == "factor_lab"
-                else "factor" in config["params"]
-            )
+            expected = {
+                "factor_backtest": "factor",
+                "factor_lab": "factors",
+                "daily_signal": "candidate_factors",
+            }[kind]
+            assert expected in config["params"]
         assert client.get("/api/v1/run-center/configuration?kind=unknown").status_code == 422
     with database.connect(read_only=True) as c:
         assert c.execute("SELECT COUNT(*) FROM operation_task").fetchone()[0] == 0

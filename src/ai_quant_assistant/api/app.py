@@ -29,7 +29,11 @@ from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
 from ai_quant_assistant.api.research_data_routes import research_data_router
 from ai_quant_assistant.api.run_center_routes import run_center_router
-from ai_quant_assistant.api.run_repository import BacktestRunRepository, FactorLabRunRepository
+from ai_quant_assistant.api.run_repository import (
+    BacktestRunRepository,
+    DailySignalRunRepository,
+    FactorLabRunRepository,
+)
 from ai_quant_assistant.api.schemas import (
     BackupPruneRequest,
     BackupRestoreRequest,
@@ -38,6 +42,7 @@ from ai_quant_assistant.api.schemas import (
     CopilotConfirmRequest,
     CopilotConversationRequest,
     CopilotMessageRequest,
+    DailySignalStrategyRequest,
     DocumentCompareRequest,
     DocumentEventReviewRequest,
     DocumentEventStudyRequest,
@@ -75,6 +80,7 @@ from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
+from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
 from ai_quant_assistant.research.factor_lab import FactorLabService
 from ai_quant_assistant.research.screener import PointInTimeScreener
@@ -199,6 +205,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_workers=1,
         task_type="factor_lab",
     )
+    daily_signal_repository = DailySignalRunRepository(resolved_settings.artifact_dir)
+    daily_signal_manager = BacktestTaskManager(
+        DailySignalStrategyService(database=database, artifact_dir=resolved_settings.artifact_dir),
+        task_repository,
+        operation_lock,
+        max_workers=1,
+        task_type="daily_signal",
+    )
     copilot_repository = CopilotRepository(database)
     data_explorer = DataExplorer(database)
     screener = PointInTimeScreener(database)
@@ -246,6 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         research_data_tasks.shutdown()
         task_manager.shutdown()
         factor_lab_manager.shutdown()
+        daily_signal_manager.shutdown()
         copilot_tasks.shutdown()
         operation_manager.shutdown()
         document_tasks.shutdown()
@@ -264,6 +279,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.backtest_runs = run_repository
     app.state.factor_lab_tasks = factor_lab_manager
     app.state.factor_lab_runs = factor_lab_repository
+    app.state.daily_signal_tasks = daily_signal_manager
+    app.state.daily_signal_runs = daily_signal_repository
     app.state.operation_tasks = operation_manager
     app.state.task_repository = task_repository
     app.state.backup_service = backup_service
@@ -289,6 +306,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router
     from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench
+
     app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
     app.include_router(research_dashboard_router(research_dashboard, templates, asset_version, resolved_settings.web_username))
     app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username))
@@ -463,6 +481,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "workbench": "/",
             "backtests": "/api/v1/backtests",
             "factor_lab": "/api/v1/factor-lab",
+            "daily_signal_strategies": "/api/v1/daily-signal-strategies",
             "universe": "/api/v1/universe/overview",
             "screens": "/api/v1/screens/runs",
             "copilot": "/api/v1/copilot/conversations",
@@ -1579,6 +1598,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             path, _ = factor_lab_repository.file(run_id, "report.html")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="factor lab report not found") from exc
+        return FileResponse(path, media_type="text/html")
+
+    @app.post("/api/v1/daily-signal-strategies", status_code=202)
+    def create_daily_signal_strategy(request: DailySignalStrategyRequest) -> dict[str, Any]:
+        try:
+            symbols, context = resolve_stock_selection(request)
+            task = daily_signal_manager.submit(
+                request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="stock pool not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit_repository.record(
+            "daily_signal_strategy_requested",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task["task_id"],
+            details={
+                "candidate_factor_count": len(request.candidate_factors),
+                "symbol_count": len(symbols),
+            },
+        )
+        return task
+
+    @app.get("/api/v1/daily-signal-strategies")
+    def list_daily_signal_tasks() -> list[dict[str, Any]]:
+        return daily_signal_manager.list()
+
+    @app.get("/api/v1/daily-signal-strategies/{task_id}")
+    def get_daily_signal_task(task_id: str) -> dict[str, Any]:
+        try:
+            return daily_signal_manager.get(task_id)
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal task not found") from exc
+
+    @app.get("/api/v1/daily-signal-runs/{run_id}")
+    def get_daily_signal_run(run_id: str) -> dict[str, Any]:
+        try:
+            return daily_signal_repository.detail(run_id)
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal run not found") from exc
+
+    @app.get("/api/v1/daily-signal-runs/{run_id}/downloads/{filename}")
+    def download_daily_signal_file(run_id: str, filename: str) -> FileResponse:
+        try:
+            path, media_type = daily_signal_repository.file(run_id, filename)
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal artifact not found") from exc
+        return FileResponse(path, media_type=media_type, filename=f"{run_id}-{filename}")
+
+    @app.get("/reports/daily-signals/{run_id}", include_in_schema=False)
+    def daily_signal_report(run_id: str) -> FileResponse:
+        try:
+            path, _ = daily_signal_repository.file(run_id, "report.html")
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal report not found") from exc
         return FileResponse(path, media_type="text/html")
 
     @app.post(

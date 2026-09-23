@@ -35,6 +35,7 @@ class ResearchReadiness:
             raise RuntimeError("本地数据库未初始化，请先运行 ai-quant data init；预检不会执行迁移")
         # Lazy import avoids coupling the engines to FastAPI during module load.
         from ai_quant_assistant.api.schemas import (
+            DailySignalStrategyRequest,
             FactorBacktestRequest,
             FactorLabRequest,
             PointInTimeScreenRequest,
@@ -44,6 +45,7 @@ class ResearchReadiness:
             "screen": PointInTimeScreenRequest,
             "factor_backtest": FactorBacktestRequest,
             "factor_lab": FactorLabRequest,
+            "daily_signal": DailySignalStrategyRequest,
         }
         if research_type not in models:
             raise ValueError("unsupported research type")
@@ -186,6 +188,9 @@ class ResearchReadiness:
             "reason": reason,
             "can_backfill": not outside_lifetime,
             "cannot_backfill_reason": None,
+            "list_date": str(listed) if listed else None,
+            "delist_date": str(delisted) if delisted else None,
+            "latest_complete_date": str(completed_date(end)),
         }
 
     def check(self, frozen: dict[str, Any]) -> dict[str, Any]:
@@ -197,6 +202,8 @@ class ResearchReadiness:
         fields = (
             [item["field"] for item in params["conditions"]]
             if screen
+            else [item["code"] for item in params["candidate_factors"]]
+            if kind == "daily_signal"
             else (
                 [params["factor"]]
                 if kind == "factor_backtest"
@@ -209,6 +216,32 @@ class ResearchReadiness:
         market_fields = set(fields) - set(FINANCIAL_METRICS)
         screen_rows = 20 if "avg_amount_20d" in market_fields else 1
         checks, blockers, warnings = [], [], []
+        market_start = start
+        if kind == "daily_signal":
+            windows = []
+            for field in market_fields:
+                suffix = field.rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    windows.append(int(suffix))
+            for rule in [*params["buy_rules"], *params["sell_rules"]]:
+                windows.extend(
+                    int(value)
+                    for key in ("window", "short_window", "long_window")
+                    if (value := rule.get(key)) is not None
+                )
+            required = max(windows, default=2) + 1
+            with self.database.connect(read_only=True) as connection:
+                history = connection.execute(
+                    "SELECT trade_date FROM trading_calendar WHERE exchange='SSE' AND is_open "
+                    "AND trade_date<=? ORDER BY trade_date DESC LIMIT ?",
+                    [start, required],
+                ).fetchall()
+            if len(history) < required:
+                blockers.append(
+                    f"技术指标需要研究开始日前共 {required} 个可验证交易日（含交叉前值）。"
+                )
+            elif history:
+                market_start = history[-1][0]
         if frozen["stock_pool"].get("warning"):
             warnings.append(frozen["stock_pool"]["warning"])
         financial_start = date(max(1990, start.year - 2), 1, 1)
@@ -221,7 +254,7 @@ class ResearchReadiness:
                     params["benchmark_symbol"],
                     None,
                     "SSE",
-                    start,
+                    market_start,
                     end,
                     "none",
                     None,
@@ -237,12 +270,22 @@ class ResearchReadiness:
                         [params["benchmark_symbol"], start, end],
                     ).fetchall()
                 ]
-            frequencies = params.get("rebalance_values", [params.get("rebalance", "quarterly")])
+            frequencies = params.get(
+                "rebalance_values",
+                [params.get("candidate_refresh") or params.get("rebalance", "quarterly")],
+            )
             signal_days = set()
             for frequency in frequencies:
                 periods = set()
                 for day in calendar[:-1]:
-                    key = (day.year, day.month if frequency == "monthly" else (day.month - 1) // 3)
+                    key = (
+                        day.year,
+                        day.timetuple().tm_yday
+                        if frequency == "daily"
+                        else day.month
+                        if frequency == "monthly"
+                        else (day.month - 1) // 3,
+                    )
                     if key not in periods:
                         signal_days.add(day)
                         periods.add(key)
@@ -283,7 +326,7 @@ class ResearchReadiness:
                             symbol,
                             security_id,
                             exchange,
-                            start,
+                            market_start,
                             end,
                             adjustment,
                             listed,
@@ -430,8 +473,137 @@ class ResearchReadiness:
             if not check["satisfied"]:
                 text = f"{check.get('symbol', '')} {check['dataset']}: {check['reason']}"
                 (blockers if check["severity"] == "blocking" else warnings).append(text)
+        recommendations = []
+
+        def recommend(code, title, explanation, action):
+            if any(item["code"] == code for item in recommendations):
+                return
+            recommendations.append(
+                {
+                    "code": code,
+                    "title": title,
+                    "explanation": explanation,
+                    "action": action,
+                }
+            )
+
+        if kind == "daily_signal":
+            listing_dates = {
+                item["symbol"]: item["list_date"]
+                for item in checks
+                if item["dataset"] == "daily_bar" and item.get("list_date")
+            }
+            listed_after_start = {
+                symbol: listed
+                for symbol, listed in listing_dates.items()
+                if date.fromisoformat(listed) > start
+            }
+            if listed_after_start:
+                examples = "、".join(
+                    f"{symbol}（{listed} 上市）"
+                    for symbol, listed in list(listed_after_start.items())[:5]
+                )
+                entirely_before_listing = len(listing_dates) == len(symbols) and all(
+                    date.fromisoformat(listed) > end for listed in listing_dates.values()
+                )
+                if entirely_before_listing:
+                    first_listing = min(listing_dates.values())
+                    blockers.append(
+                        f"整个研究区间早于全部冻结股票的上市日；最早上市日为 {first_listing}。"
+                    )
+                    action = (
+                        f"将研究区间整体调整到 {first_listing} 之后并保留技术指标预热，"
+                        "或加入研究期间已经上市的股票。"
+                    )
+                elif len(listed_after_start) == len(symbols):
+                    action = (
+                        f"将开始日期调整到 {max(listed_after_start.values())} 之后并保留技术指标预热，"
+                        "或加入研究开始日已经上市的股票。"
+                    )
+                else:
+                    action = "缩短研究区间，或加入研究开始日已经上市且数据完整的股票。"
+                recommend(
+                    "listing_after_start",
+                    "研究开始日早于股票上市日",
+                    f"{examples}；上市前不存在行情和财务数据，不能通过补齐生成。",
+                    action,
+                )
+            latest_complete = completed_date(end)
+            if end > latest_complete:
+                recommend(
+                    "unfinished_end_date",
+                    "结束日期尚不是可验证的完整交易日",
+                    f"当前结束日期为 {end}，保守可验证日期截至 {latest_complete}。",
+                    f"将结束日期改为 {latest_complete} 或更早，再重新预检。",
+                )
+            benchmark_gaps = [
+                item
+                for item in checks
+                if item["dataset"] == "benchmark_daily_bar" and not item["satisfied"]
+            ]
+            if benchmark_gaps:
+                item = benchmark_gaps[0]
+                recommend(
+                    "benchmark_coverage",
+                    "基准行情或交易日历覆盖不足",
+                    f"{item['symbol']} 需要覆盖 {item['required_start']} 至 {item['required_end']}。",
+                    "先同步交易日历和基准日线；预检不会自动下载。",
+                )
+            price_gaps = [
+                item
+                for item in checks
+                if item["dataset"] == "daily_bar" and not item["satisfied"]
+            ]
+            if price_gaps:
+                names = "、".join(sorted({item["symbol"] for item in price_gaps})[:5])
+                adjustments = "、".join(
+                    {
+                        "none": "不复权（none）",
+                        "qfq": "前复权（qfq）",
+                        "hfq": "后复权（hfq）",
+                    }.get(code, code)
+                    for code in sorted(
+                        {str(item.get("adjustment") or "none") for item in price_gaps}
+                    )
+                )
+                recommend(
+                    "price_coverage",
+                    "股票日线覆盖不足",
+                    f"受影响股票：{names}；所需复权口径：{adjustments}。",
+                    "同步前复权信号数据和未复权开盘/记账数据，并保留最长均线及交叉前值的预热区间。",
+                )
+            financial_gaps = [
+                item
+                for item in checks
+                if item["dataset"] == "financial_metric" and not item["satisfied"]
+            ]
+            if financial_gaps:
+                metric_codes = sorted(
+                    {str(item.get("metric", "未知因子")) for item in financial_gaps}
+                )
+                metrics = "、".join(
+                    f"{FINANCIAL_METRICS[code]['label']}（{code}）"
+                    if code in FINANCIAL_METRICS
+                    else code
+                    for code in metric_codes
+                )
+                recommend(
+                    "financial_coverage",
+                    "候选财务因子在部分时点不可用",
+                    f"缺失或无法验证的因子：{metrics}；系统不会用当前值回填历史。",
+                    "同步带实际公开时间的历史财务报告；若只想先验证技术链路，可明确改用 return_N 或 ma_deviation_N 后重新预检。",
+                )
+            if any("合格财务样本少于" in item for item in blockers):
+                recommend(
+                    "candidate_sample_shortage",
+                    "部分候选更新日无法选满股票",
+                    f"候选数量要求为 {params['candidate_count']}，但部分时点的有效样本更少。",
+                    "缩短到数据完整区间、扩充当时已经上市的股票范围，或补齐已公开财务数据；不要把缺失值填零。",
+                )
+        blocking_check_count = len(blockers)
         return {
             "status": "blocked" if blockers else "warning" if warnings else "ready",
+            "status_label": "预检阻断" if blockers else "可以运行（有提示）" if warnings else "可以运行",
             "ready": not blockers,
             "complete": all(item["satisfied"] for item in checks),
             "checked_at": datetime.now(UTC).isoformat(),
@@ -439,6 +611,8 @@ class ResearchReadiness:
             "checks": checks,
             "blockers": blockers,
             "warnings": warnings,
+            "recommendations": recommendations,
+            "blocking_check_count": blocking_check_count,
             "required_datasets": sorted({item["dataset"] for item in checks}),
             "signal_count": len(signals),
             "signal_cutoff": "as_of end-of-day inclusive"

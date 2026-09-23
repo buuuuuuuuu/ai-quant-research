@@ -769,6 +769,8 @@ def test_announcement_failure_does_not_revoke_ready_prices_and_can_retry(setup, 
     failed = service.run(task["task_id"])
     asset = service.get("SZSE.003816")
     assert failed["status"] == "failed" and "定期公告同步失败" in failed["error"]
+    assert "controlled annual source failure" in failed["error"]
+    assert len(failed["error"]) < 1000
     assert asset["availability"] == "ready" and asset["eligible"]
     assert asset["coverage"]["announcement_sync"]["row_count"] == 3
     monkeypatch.setattr(provider, "get_report_announcements", announcement_fixture)
@@ -776,6 +778,28 @@ def test_announcement_failure_does_not_revoke_ready_prices_and_can_retry(setup, 
                                confirm=True, include_announcements=True, expected_revision=asset["revision"])
     assert retry["task_id"] != task["task_id"]
     assert service.run(retry["task_id"])["status"] == "succeeded"
+
+
+def test_announcement_outage_keeps_ready_prices_and_explains_paused_partitions(setup, monkeypatch):
+    from ai_quant_assistant.providers.cninfo import AnnouncementResponseError
+
+    _, provider, service = setup
+
+    def blocked(*args):
+        raise AnnouncementResponseError("公告查询", "http", status=403)
+
+    monkeypatch.setattr(provider, "get_report_announcements", blocked, raising=False)
+    task, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
+                              confirm=True, include_announcements=True)
+    result = service.run(task["task_id"])
+    assert result["status"] == "failed"
+    assert "HTTP 403" in result["error"] and "待处理 3" in result["error"]
+    assert "重新确认同步" in result["error"] and len(result["error"]) < 1000
+    asset = service.get("SZSE.003816")
+    assert asset["availability"] == "ready" and asset["eligible"]
+    report = asset["coverage"]["announcement_sync"]
+    assert report["paused_after_provider_failure"] and report["partitions"] == {"failed": 1, "planned": 3}
+    assert len(report["errors"]) == 1
 
 
 def test_combined_claims_deduplicate_and_never_downgrade_requested_datasets(setup):

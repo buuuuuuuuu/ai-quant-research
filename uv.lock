@@ -12,6 +12,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "akshare" },
+    { name = "curl-cffi" },
     { name = "duckdb" },
     { name = "fastapi" },
     { name = "jinja2" },
@@ -35,6 +36,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "akshare", specifier = ">=1.18.91,<2" },
+    { name = "curl-cffi", specifier = ">=0.16,<1" },
     { name = "duckdb", specifier = ">=1.2,<2" },
     { name = "fastapi", specifier = ">=0.116,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },

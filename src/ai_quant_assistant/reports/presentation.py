@@ -9,6 +9,38 @@ ENUM_LABELS = {
     "desc": "高值优先",
     "monthly": "按月",
     "quarterly": "按季度",
+    "daily": "每日",
+    "all": "全部满足",
+    "any": "任意满足",
+    "above": "高于",
+    "below": "低于",
+    "cross_above": "上穿",
+    "cross_below": "下穿",
+    "close_vs_ma": "收盘价与均线",
+    "ma_compare": "双均线状态",
+    "ma_cross": "双均线交叉",
+    "return_threshold": "区间涨跌幅阈值",
+    "buy": "买入",
+    "sell": "卖出",
+    "generated": "已生成",
+    "executed": "已模拟成交",
+    "blocked": "未成交",
+    "end_of_backtest": "回测结束未执行",
+    "expired": "已失效",
+    "held": "继续持有",
+    "closed": "已退出",
+    "retry_next_trading_day": "下一交易日继续尝试退出",
+    "missing_raw_open": "缺少未复权开盘数据",
+    "missing_raw_open_or_previous_close": "缺少未复权开盘价或前收盘价",
+    "opening_at_upper_price_limit": "开盘达到涨停限制",
+    "opening_at_lower_price_limit": "开盘达到跌停限制",
+    "t_plus_one": "T+1 限制",
+    "already_held": "已持有，不重复买入",
+    "sold_same_execution_batch": "同批次已卖出，不立即买回",
+    "max_positions": "已达到持仓上限",
+    "insufficient_cash_or_round_lot": "资金不足或不足一手",
+    "reduced_for_opening_gap_and_cash": "开盘跳空后按可用资金缩量",
+    "candidate_drop": "退出候选名单",
     "training": "训练集",
     "train": "训练集",
     "validation": "验证集",
@@ -100,6 +132,28 @@ FIELD_LABELS = {
     "run_id": "运行 ID",
     "symbol": "股票代码",
     "date": "日期",
+    "candidate_factors": "候选排序因子",
+    "candidate_refresh": "候选更新频率",
+    "buy_rules": "买入信号",
+    "sell_rules": "卖出信号",
+    "signal_count": "信号数量",
+    "order_attempt_count": "订单尝试数量",
+    "executed_order_count": "成交订单数量",
+    "open_position_count": "期末持仓数量",
+    "pending_exit_count": "期末待退出数量",
+    "action": "动作",
+    "side": "方向",
+    "planned_execution_date": "计划执行日",
+    "execution_date": "实际模拟成交日",
+    "signal_price": "信号收盘价",
+    "execution_price": "开盘参考成交价",
+    "shares": "数量（股）",
+    "reason": "未成交或调整原因",
+    "next_action": "后续处理",
+    "candidate_score": "候选得分",
+    "candidate_rank": "候选排名",
+    "candidate_eligible": "具备候选资格",
+    "rule_evidence": "规则与触发依据",
 }
 IC_EXPLANATION = (
     "IC 为因子值与可观察未来收益的 Pearson 相关系数；Rank IC 为两者排名的 Pearson 相关系数。"
@@ -113,12 +167,44 @@ def factor_label(code):
         return "多因子组合（composite）"
     if isinstance(code, str) and code.startswith("composite:"):
         return "多因子组合：" + " + ".join(factor_label(x) for x in code[10:].split("+"))
-    definition = FINANCIAL_METRICS.get(str(code))
+    text = str(code)
+    if text.startswith("return_") and text[7:].isdigit():
+        return f"{text[7:]} 日涨跌幅（{text}）"
+    if text.startswith("ma_deviation_") and text[13:].isdigit():
+        return f"收盘价相对 MA({text[13:]}) 偏离率（{text}）"
+    definition = FINANCIAL_METRICS.get(text)
     return f"{definition['label']}（{code}）" if definition else f"未知因子（{code}）"
 
 
 def enum_label(code):
     return f"{ENUM_LABELS[code]}（{code}）" if code in ENUM_LABELS else str(code)
+
+
+def field_label(code):
+    return FIELD_LABELS.get(str(code), str(code))
+
+
+def rule_label(rule):
+    if not isinstance(rule, dict):
+        return str(rule)
+    kind, operator = rule.get("kind"), rule.get("operator")
+    if kind == "close_vs_ma":
+        text = f"收盘价 {ENUM_LABELS.get(operator, operator)} MA({rule.get('window')})"
+    elif kind in {"ma_compare", "ma_cross"}:
+        text = (
+            f"MA({rule.get('short_window')}) {ENUM_LABELS.get(operator, operator)} "
+            f"MA({rule.get('long_window')})"
+        )
+    elif kind == "return_threshold":
+        threshold = rule.get("threshold")
+        readable = f"{threshold * 100:.2f}%" if isinstance(threshold, (int, float)) else threshold
+        text = (
+            f"{rule.get('window')} 日涨跌幅 {ENUM_LABELS.get(operator, operator)} "
+            f"{readable}（原值 {threshold}）"
+        )
+    else:
+        return f"未识别规则（{kind}/{operator}）"
+    return f"{text}（{kind}/{operator}）"
 
 
 def strategy_label(value):
@@ -162,5 +248,9 @@ def presentation_catalog():
 
 def install_filters(environment):
     environment.filters.update(
-        factor_label=factor_label, enum_label=enum_label, strategy_label=strategy_label
+        factor_label=factor_label,
+        enum_label=enum_label,
+        field_label=field_label,
+        rule_label=rule_label,
+        strategy_label=strategy_label,
     )

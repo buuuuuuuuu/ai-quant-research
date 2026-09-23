@@ -705,3 +705,51 @@ class LocalDatabase:
             return pd.DataFrame(columns=columns)
         frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
         return frame[columns]
+
+    def read_daily_signal_prices(
+        self, symbols: tuple[str, ...], end_date: Any, adjustment: str
+    ) -> pd.DataFrame:
+        """Return adjusted signal bars joined to real unadjusted execution bars.
+
+        M12-A deliberately uses an inner join.  An adjusted bar cannot silently
+        stand in for an unadjusted opening price or price-limit reference.
+        """
+        columns = [
+            "symbol",
+            "date",
+            "signal_open",
+            "signal_close",
+            "execution_open",
+            "execution_close",
+            "previous_execution_close",
+            "source_batch_id",
+        ]
+        if not self.path.is_file() or not symbols:
+            return pd.DataFrame(columns=columns)
+        placeholders = ", ".join("?" for _ in symbols)
+        with self.connect(read_only=True) as connection:
+            frame = connection.execute(
+                f"""
+                WITH raw AS (
+                    SELECT security_id,trade_date,open,close,
+                           LAG(close) OVER (PARTITION BY security_id ORDER BY trade_date)
+                             AS previous_close
+                    FROM published_daily_bar WHERE adjustment='none' AND trade_date<=?
+                )
+                SELECT security.symbol,bar.trade_date AS date,
+                       bar.open AS signal_open,bar.close AS signal_close,
+                       raw.open AS execution_open,raw.close AS execution_close,
+                       raw.previous_close AS previous_execution_close,bar.source_batch_id
+                FROM published_daily_bar bar
+                JOIN security_master security USING(security_id)
+                JOIN raw USING(security_id,trade_date)
+                WHERE security.symbol IN ({placeholders}) AND bar.adjustment=?
+                  AND bar.trade_date<=?
+                ORDER BY date,symbol
+                """,
+                [end_date, *symbols, adjustment, end_date],
+            ).fetchdf()
+        if frame.empty:
+            return pd.DataFrame(columns=columns)
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        return frame[columns]

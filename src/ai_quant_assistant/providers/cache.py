@@ -68,10 +68,12 @@ def load_or_fetch(
             return frame
         except Exception as exc:  # noqa: BLE001 - provider boundary records original failure
             error = exc
+            if getattr(exc, "retryable", True) is False:
+                break
             if attempt + 1 < max(1, retries):
                 time.sleep(2**attempt)
 
     if cached is not None:
         cached.attrs["cache_status"] = "stale_fallback"
         return cached
-    raise ProviderError(f"{namespace} failed after {retries} attempts: {error}") from error
+    raise ProviderError(f"{namespace} failed after {attempt + 1} attempts: {error}") from error

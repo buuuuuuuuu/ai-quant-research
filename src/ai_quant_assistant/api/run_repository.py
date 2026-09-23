@@ -40,6 +40,18 @@ LAB_DOWNLOAD_FILES = {
     "report.html": "text/html",
     "run.json": "application/json",
 }
+SIGNAL_RUN_ID_RE = re.compile(r"^daily-signal-\d{8}T\d{6}Z-[0-9a-f]{8}$")
+SIGNAL_DOWNLOAD_FILES = {
+    **{
+        f"{item}.csv": "text/csv"
+        for item in ("daily_nav", "signals", "orders", "positions", "candidate_selections")
+    },
+    "metrics.json": "application/json",
+    "diagnostics.json": "application/json",
+    "daily_signal_result.xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "report.html": "text/html",
+    "run.json": "application/json",
+}
 
 
 class BacktestRunRepository:
@@ -183,6 +195,42 @@ class FactorLabRunRepository(BacktestRunRepository):
 
     def file(self, run_id: str, filename: str) -> tuple[Path, str]:
         media_type = LAB_DOWNLOAD_FILES.get(filename)
+        if media_type is None:
+            raise KeyError(filename)
+        path = self.run_dir(run_id) / filename
+        if not path.is_file():
+            raise KeyError(filename)
+        return path, media_type
+
+
+class DailySignalRunRepository(BacktestRunRepository):
+    def __init__(self, artifact_dir: Path) -> None:
+        self.root = (artifact_dir / "daily-signals").resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def run_dir(self, run_id: str) -> Path:
+        if not SIGNAL_RUN_ID_RE.fullmatch(run_id):
+            raise KeyError(run_id)
+        directory = (self.root / run_id).resolve()
+        if directory.parent != self.root or not directory.is_dir():
+            raise KeyError(run_id)
+        return directory
+
+    def detail(self, run_id: str) -> dict[str, Any]:
+        directory = self.run_dir(run_id)
+        return {
+            **self.manifest(run_id),
+            "series": self._records(directory / "daily_nav.csv", downsample=True),
+            "signals": self._records(directory / "signals.csv"),
+            "orders": self._records(directory / "orders.csv"),
+            "positions": self._records(directory / "positions.csv"),
+            "candidates": self._records(directory / "candidate_selections.csv"),
+            "downloads": list(SIGNAL_DOWNLOAD_FILES),
+            "report_url": f"/reports/daily-signals/{run_id}",
+        }
+
+    def file(self, run_id: str, filename: str) -> tuple[Path, str]:
+        media_type = SIGNAL_DOWNLOAD_FILES.get(filename)
         if media_type is None:
             raise KeyError(filename)
         path = self.run_dir(run_id) / filename

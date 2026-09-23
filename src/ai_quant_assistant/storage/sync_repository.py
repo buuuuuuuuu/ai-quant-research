@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
@@ -10,6 +12,7 @@ import pandas as pd
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.quality import DataQualityCheck
 
+logger = logging.getLogger(__name__)
 
 def _db_value(value: Any) -> Any:
     if value is None or (not isinstance(value, str) and pd.isna(value)):
@@ -167,29 +170,38 @@ class SyncRepository:
     def upsert_trading_calendar(self, frame: pd.DataFrame, batch_id: str) -> None:
         if frame.empty:
             return
+        # Prepare outside the access lock; retain executemany's last-row-wins semantics.
+        columns = [
+            "exchange", "trade_date", "is_open", "previous_open_date", "next_open_date",
+            "session_no", "source", "source_batch_id",
+        ]
         rows = [
-            [
-                row.exchange,
-                _db_value(row.trade_date),
-                bool(row.is_open),
-                _db_value(row.previous_open_date),
-                _db_value(row.next_open_date),
-                int(row.session_no),
-                row.source,
-                batch_id,
-            ]
+            [row.exchange, _db_value(row.trade_date), bool(row.is_open),
+             _db_value(row.previous_open_date), _db_value(row.next_open_date),
+             int(row.session_no), row.source, batch_id]
             for row in frame.itertuples(index=False)
         ]
+        incoming = pd.DataFrame(rows, columns=columns).drop_duplicates(
+            ["exchange", "trade_date"], keep="last"
+        )
+        relation = "calendar_incoming_" + uuid4().hex
         with self.database.connect() as connection:
-            connection.executemany(
-                """
-                INSERT OR REPLACE INTO trading_calendar (
-                    exchange, trade_date, is_open, previous_open_date, next_open_date,
-                    session_no, source, source_batch_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+            started = time.monotonic()
+            connection.register(relation, incoming)
+            try:
+                connection.execute(f"""
+                    INSERT OR REPLACE INTO trading_calendar (
+                        exchange, trade_date, is_open, previous_open_date, next_open_date,
+                        session_no, source, source_batch_id
+                    ) SELECT CAST(exchange AS VARCHAR), CAST(trade_date AS DATE),
+                        CAST(is_open AS BOOLEAN), CAST(previous_open_date AS DATE),
+                        CAST(next_open_date AS DATE), CAST(session_no AS BIGINT),
+                        CAST(source AS VARCHAR), CAST(source_batch_id AS VARCHAR)
+                    FROM {relation}
+                """)
+            finally:
+                connection.unregister(relation)
+        logger.info("trading calendar upsert: %s rows in %.3fs", len(incoming), time.monotonic() - started)
 
     def plan_partitions(self, batch_id: str, partitions: list[dict[str, Any]]) -> None:
         if not partitions:

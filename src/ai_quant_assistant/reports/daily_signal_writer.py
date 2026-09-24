@@ -146,12 +146,27 @@ class DailySignalReportWriter:
                     f"{'满足' if item.get('matched') is True else '不满足或数据不足'}"
                     for item in evidence
                 )
+        order_preview = orders.tail(80).to_dict(orient="records")
+        signal_lookup = {
+            (str(row.get("signal_date")), row.get("symbol"), row.get("action")): row
+            for row in signal_preview
+        }
+        timeline = [
+            {
+                "signal": signal_lookup.get(
+                    (str(order.get("signal_date")), order.get("symbol"), order.get("side"))
+                ),
+                "order": order,
+            }
+            for order in order_preview
+        ]
         html = self.environment.get_template("daily_signal.html.j2").render(
             spec=spec,
             metrics=metrics,
             diagnostics=diagnostics,
             signals=signal_preview,
-            orders=orders.tail(80).to_dict(orient="records"),
+            orders=order_preview,
+            timeline=timeline,
             candidates=candidates.loc[candidates.get("selected", False)]
             .tail(40)
             .to_dict(orient="records")

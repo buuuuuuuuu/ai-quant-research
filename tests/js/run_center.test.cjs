@@ -412,7 +412,7 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     ),
     /资产负债率/,
   );
-  assert.match(h.ui.factorName("unknown"), /未知因子（unknown）/);
+  assert.match(h.ui.factorName("unknown"), /暂无中文名称（unknown）/);
   h.element("center-copy-form").inputs = [
     { dataset: { param: "symbols", type: "symbols" }, value: "600519 000001" },
   ];
@@ -623,4 +623,133 @@ test("copy configuration late failure cannot replace a newer record", async () =
   await tick();
   assert.equal(h.element("center-error").textContent, "");
   assert.match(h.element("center-copy-source").textContent, /new/);
+});
+
+test("daily templates only contain legal rule parameters and do not contain scope", () => {
+  for (const template of Object.values(ui.dailyTemplates)) {
+    assert.equal("symbols" in template, false);
+    assert.equal("stock_pool_id" in template, false);
+    assert.equal(ui.validateDailySignal({ ...template, candidate_count: 2, max_positions: 1 }, 2).length, 0);
+  }
+});
+
+test("daily validation and summary explain periods, weights, and next-open execution", () => {
+  const params = {
+    symbols: ["600519"], start_date: "2024-01-01", end_date: "2024-12-31",
+    candidate_factors: [{ code: "roe", direction: "desc", weight: 1 }],
+    candidate_count: 1, max_positions: 1, candidate_refresh: "monthly",
+    buy_rule_mode: "all", sell_rule_mode: "any", exit_on_candidate_drop: false,
+    buy_rules: [{ kind: "ma_cross", operator: "cross_above", short_window: 20, long_window: 5 }],
+    sell_rules: [],
+  };
+  const errors = ui.validateDailySignal(params, 1);
+  assert.match(errors.join(" "), /短周期当前为 20，长周期为 5/);
+  assert.match(errors.join(" "), /卖出规则为空/);
+  params.buy_rules = ui.dailyTemplates.ma_cross.buy_rules;
+  params.sell_rules = ui.dailyTemplates.ma_cross.sell_rules;
+  const summary = ui.dailySignalSummary(params);
+  assert.match(summary, /相对权重 1/);
+  assert.match(summary, /候选名单更新与每日信号检查是两个过程/);
+  assert.match(summary, /下一交易日开盘/);
+});
+
+test("daily timeline links only saved identities and preserves missing values", () => {
+  const rows = ui.dailySignalTimeline(
+    [{ signal_date: "2024-01-02", symbol: "600519", action: "buy", signal_price: 10 }],
+    [{ signal_date: "2024-01-02", symbol: "600519", side: "buy", status: "blocked", reason: "t_plus_one" }],
+  );
+  assert.equal(rows.length, 1);
+  const html = ui.renderDailyTimeline(rows);
+  assert.match(html, /t_plus_one/);
+  assert.match(html, /未记录/);
+  assert.doesNotMatch(html, />0</);
+});
+
+test("completed data plan restores its frozen pool before automatic recheck", async () => {
+  const params = {
+    symbols: null,
+    stock_pool_id: "pool-frozen",
+    stock_pool_revision: 2,
+    start_date: "2025-01-01",
+    end_date: "2025-12-31",
+    candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }],
+    candidate_count: 1,
+    candidate_refresh: "monthly",
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+    buy_rule_mode: "all",
+    sell_rule_mode: "any",
+    exit_on_candidate_drop: false,
+    max_positions: 1,
+  };
+  const configuration = {
+    kind: "daily_signal",
+    label: "日线信号策略",
+    source_run_id: null,
+    params: { symbols: [] },
+    schema: { properties: Object.fromEntries(Object.keys(params).map((key) => [key, {}])) },
+    warnings: [],
+    missing_fields: [],
+    endpoint: "/api/v1/daily-signal-strategies",
+    scope: [],
+  };
+  const plan = {
+    plan_id: "data-plan-frozen",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      research_type: "daily_signal",
+      parameters: params,
+      resolved_symbols: ["688111"],
+      symbols_sha256: "b".repeat(64),
+    },
+    items: [{ symbol: "csi000300", dataset: "benchmark_daily_bar", status: "published" }],
+    task: { status: "succeeded", progress: 100 },
+  };
+  const h = harness(
+    "/backtests/daily-signals",
+    async (url) => {
+      if (url.includes("/configuration?")) return structuredClone(configuration);
+      if (url.endsWith("/plans/data-plan-frozen/preflight"))
+        return { ready: true, status: "ready", complete: true };
+      if (url.endsWith("/plans/data-plan-frozen")) return structuredClone(plan);
+      if (url.includes("/stock-pools?"))
+        return [{ pool_id: "pool-frozen", current_revision: 3, name: "当前版本" }];
+      throw Error("unexpected request " + url);
+    },
+    { search: "?data_plan=data-plan-frozen" },
+  );
+  await tick();
+  await tick();
+  assert.equal(h.element("center-error").textContent, "");
+  assert.equal(h.ui.currentParams().stock_pool_id, "pool-frozen");
+  assert.equal(h.ui.currentParams().stock_pool_revision, 2);
+  assert.equal(h.ui.currentParams().symbols, undefined);
+  assert.match(h.element("center-pool-preview").textContent, /r2 · 1 只：688111/);
+  assert.equal(h.element("center-submit").disabled, false);
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/plans/data-plan-frozen")).length,
+    1,
+  );
+  assert.equal(
+    h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies").length,
+    0,
+  );
+});
+
+test("data plan restore rejects missing or mismatched frozen identity", () => {
+  const base = { params: { symbols: [] }, warnings: [] };
+  assert.throws(
+    () => ui.restoreDataPlanConfiguration(base, { input: { research_type: "factor_lab" } }, "daily_signal"),
+    /类型/,
+  );
+  assert.throws(
+    () => ui.restoreDataPlanConfiguration(base, { input: { research_type: "daily_signal", parameters: {} } }, "daily_signal"),
+    /冻结股票范围/,
+  );
+  assert.deepEqual(
+    ui.normalizedParameterIdentity({ stock_pool_id: "pool-a", symbols: null }),
+    { stock_pool_id: "pool-a" },
+  );
 });

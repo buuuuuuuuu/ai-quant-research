@@ -113,6 +113,41 @@ class ResearchReadiness:
         return days, known
 
     @staticmethod
+    def _calendar_check(connection, exchange, start, end):
+        bounds = connection.execute(
+            "SELECT MIN(trade_date), MAX(trade_date), COUNT(*) FROM trading_calendar "
+            "WHERE exchange=?",
+            [exchange],
+        ).fetchone()
+        actual_start, actual_end, rows = bounds
+        satisfied = bool(actual_start and actual_start <= start and actual_end >= end)
+        missing_edges = []
+        if not actual_start or actual_start > start:
+            missing_edges.append("起点")
+        if not actual_end or actual_end < end:
+            missing_edges.append("终点")
+        return {
+            "symbol": exchange,
+            "dataset": "trading_calendar",
+            "status": "ready" if satisfied else "missing",
+            "satisfied": satisfied,
+            "severity": "info" if satisfied else "blocking",
+            "required_start": str(start),
+            "required_end": str(end),
+            "rows": rows,
+            "actual_start": str(actual_start) if actual_start else None,
+            "actual_end": str(actual_end) if actual_end else None,
+            "missing_count": None,
+            "reason": (
+                "交易日历边界覆盖研究与技术指标预热区间"
+                if satisfied
+                else f"交易日历{'和'.join(missing_edges)}边界不足，无法完整验证应有交易日"
+            ),
+            "can_backfill": True,
+            "cannot_backfill_reason": None,
+        }
+
+    @staticmethod
     def _price_check(
         connection,
         symbol,
@@ -217,6 +252,7 @@ class ResearchReadiness:
         screen_rows = 20 if "avg_amount_20d" in market_fields else 1
         checks, blockers, warnings = [], [], []
         market_start = start
+        warmup_required = 0
         if kind == "daily_signal":
             windows = []
             for field in market_fields:
@@ -230,6 +266,7 @@ class ResearchReadiness:
                     if (value := rule.get(key)) is not None
                 )
             required = max(windows, default=2) + 1
+            warmup_required = required
             with self.database.connect(read_only=True) as connection:
                 history = connection.execute(
                     "SELECT trade_date FROM trading_calendar WHERE exchange='SSE' AND is_open "
@@ -249,6 +286,8 @@ class ResearchReadiness:
             signals = [datetime.combine(end, time.max)]
         else:
             with self.database.connect(read_only=True) as connection:
+                if kind == "daily_signal":
+                    checks.append(self._calendar_check(connection, "SSE", market_start, end))
                 bench = self._price_check(
                     connection,
                     params["benchmark_symbol"],
@@ -545,14 +584,26 @@ class ResearchReadiness:
                 item = benchmark_gaps[0]
                 recommend(
                     "benchmark_coverage",
-                    "基准行情或交易日历覆盖不足",
+                    "基准日线覆盖不足",
                     f"{item['symbol']} 需要覆盖 {item['required_start']} 至 {item['required_end']}。",
-                    "先同步交易日历和基准日线；预检不会自动下载。",
+                    "查看补齐计划并明确确认后同步基准日线；预检和查看计划都不会自动下载。",
                 )
-            price_gaps = [
+            calendar_gaps = [
                 item
                 for item in checks
-                if item["dataset"] == "daily_bar" and not item["satisfied"]
+                if item["dataset"] == "trading_calendar" and not item["satisfied"]
+            ]
+            if calendar_gaps:
+                item = calendar_gaps[0]
+                recommend(
+                    "calendar_coverage",
+                    "交易日历覆盖不足",
+                    f"上交所交易日历需要覆盖 {item['required_start']} 至 {item['required_end']}；"
+                    "日历不足时无法判断行情是否缺少交易日。",
+                    "查看补齐计划并明确确认后同步；修改日期或规则后必须重新预检。",
+                )
+            price_gaps = [
+                item for item in checks if item["dataset"] == "daily_bar" and not item["satisfied"]
             ]
             if price_gaps:
                 names = "、".join(sorted({item["symbol"] for item in price_gaps})[:5])
@@ -603,7 +654,11 @@ class ResearchReadiness:
         blocking_check_count = len(blockers)
         return {
             "status": "blocked" if blockers else "warning" if warnings else "ready",
-            "status_label": "预检阻断" if blockers else "可以运行（有提示）" if warnings else "可以运行",
+            "status_label": "预检阻断"
+            if blockers
+            else "可以运行（有提示）"
+            if warnings
+            else "可以运行",
             "ready": not blockers,
             "complete": all(item["satisfied"] for item in checks),
             "checked_at": datetime.now(UTC).isoformat(),
@@ -618,6 +673,14 @@ class ResearchReadiness:
             "signal_cutoff": "as_of end-of-day inclusive"
             if screen
             else "signal day 15:00 exclusive",
+            "technical_warmup_start": str(market_start) if kind == "daily_signal" else None,
+            "technical_warmup_trading_days": warmup_required if kind == "daily_signal" else None,
+            "technical_warmup_explanation": (
+                f"研究从 {start} 开始。当前规则最长窗口及交叉前值需要读取 {market_start} 之后的"
+                f" {warmup_required} 个可验证交易日；预热期只计算指标，不会在研究开始日前产生交易。"
+                if kind == "daily_signal"
+                else None
+            ),
             "financial_warmup_start": str(financial_start),
             "financial_validity_rule": "沿用引擎最新已公开报告，无固定季度有效期；补齐默认向前两年，不能保证缺失可补齐",
             "missing_policy": params.get("missing_policy", "exclude"),

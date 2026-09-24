@@ -17,13 +17,13 @@ const RunCenterUI = (() => {
       return `收盘价相对 MA(${String(code).slice(13)}) 偏离率（${code}）`;
     return catalog.factors[code]
       ? `${catalog.factors[code]}（${code}）`
-      : `未知因子（${code}）`;
+      : `暂无中文名称（${code}）`;
   }
   function enumName(value, key) {
     if (value === "none" && key === "adjustment") return "不复权（none）";
     return catalog.enums[value]
       ? `${catalog.enums[value]}（${value}）`
-      : String(value);
+      : `${String(value)}（暂无中文说明）`;
   }
   function strategyName(value) {
     const p = String(value).split("|");
@@ -76,10 +76,17 @@ const RunCenterUI = (() => {
       throw Error("登录已过期");
     }
     const p = await r.json();
-    if (!r.ok)
-      throw Error(
-        typeof p.detail === "string" ? p.detail : JSON.stringify(p.detail || p),
-      );
+    if (!r.ok) {
+      const detail = p.detail;
+      if (Array.isArray(detail)) {
+        const messages = detail.map((item) => {
+          const field = (item.loc || []).filter((part) => !["body", "parameters"].includes(part)).join(" → ");
+          return `${field ? field + "：" : ""}${String(item.msg || "参数不合法").replace(/^Value error,\s*/, "")}`;
+        });
+        throw Error(messages.join("；"));
+      }
+      throw Error(typeof detail === "string" ? detail : JSON.stringify(detail || p));
+    }
     return p;
   }
   function scope(row) {
@@ -108,11 +115,11 @@ const RunCenterUI = (() => {
     rebalance: "调仓周期",
     benchmark_symbol: "基准",
     adjustment: "复权口径",
-    initial_capital: "初始资金",
+    initial_capital: "初始资金（元）",
     commission_bps: "佣金（bp）",
     slippage_bps: "滑点（bp）",
     stamp_duty_bps: "卖出印花税（bp）",
-    lot_size: "买入整手",
+    lot_size: "买入整手（股/手）",
     source: "数据来源",
     windows: "事件窗口（交易日）",
     round_trip_cost_bps: "往返成本（bp）",
@@ -212,6 +219,7 @@ const RunCenterUI = (() => {
         ? '<p class="preflight-no-advice">请根据下方阻断明细调整参数或补齐数据。</p>'
         : "";
     const datasetLabels = {
+      trading_calendar: "交易日历",
       benchmark_daily_bar: "基准日线",
       daily_bar: "股票日线",
       financial_metric: "财务因子",
@@ -267,6 +275,9 @@ const RunCenterUI = (() => {
       signal_count: report.signal_count,
       signal_cutoff: report.signal_cutoff,
       financial_warmup_start: report.financial_warmup_start,
+      technical_warmup_start: report.technical_warmup_start,
+      technical_warmup_trading_days: report.technical_warmup_trading_days,
+      technical_warmup_explanation: report.technical_warmup_explanation,
       financial_validity_rule: report.financial_validity_rule,
       missing_policy: report.missing_policy,
       checks,
@@ -275,7 +286,7 @@ const RunCenterUI = (() => {
   }
   function factorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
     const options = { ...catalog.factors };
-    if (!options[item.code]) options[item.code] = "未知因子";
+    if (!options[item.code]) options[item.code] = "暂无中文名称";
     return `<div class="factor-editor-row"><label>因子<select data-factor-code>${Object.keys(
       options,
     )
@@ -288,12 +299,109 @@ const RunCenterUI = (() => {
       )}</select></label><label>相对权重<input data-factor-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"></label><label>方向<select data-factor-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-factor-remove type="button">移除</button></div>`;
   }
   function candidateFactorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
-    return `<div class="factor-editor-row candidate-factor-row"><label>因子代码<input data-candidate-code list="candidate-factor-codes" value="${esc(item.code)}"><small>${esc(factorName(item.code))}；可用财务代码、return_N 或 ma_deviation_N</small></label><label>相对权重<input data-candidate-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"></label><label>方向<select data-candidate-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-candidate-remove type="button">移除</button></div>`;
+    return `<div class="factor-editor-row candidate-factor-row"><label>因子代码<input data-candidate-code list="candidate-factor-codes" value="${esc(item.code)}"><small>${esc(factorName(item.code))}；可用财务代码、return_N 或 ma_deviation_N</small></label><label>相对权重<input data-candidate-weight type="number" min="0.001" max="1000" step="any" value="${esc(item.weight)}"><small>用于合成候选得分，不代表持仓资金比例</small></label><label>方向<select data-candidate-direction>${["desc", "asc"].map((k) => `<option value="${k}" ${k === item.direction ? "selected" : ""}>${esc(enumName(k))}</option>`).join("")}</select></label><button data-candidate-remove type="button">移除</button></div>`;
   }
   function signalRuleRow(item = { kind: "ma_cross", operator: "cross_above", window: null, short_window: 5, long_window: 20, threshold: null }, side = "buy") {
     const kinds = { close_vs_ma: "收盘价与均线", ma_compare: "双均线状态", ma_cross: "双均线交叉", return_threshold: "区间涨跌幅阈值" };
     const operators = { above: "高于", below: "低于", cross_above: "上穿", cross_below: "下穿" };
-    return `<div class="signal-rule-row" data-rule-side="${side}"><label>规则<select data-rule-kind>${Object.entries(kinds).map(([k,v]) => `<option value="${k}" ${k === item.kind ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>比较<select data-rule-operator>${Object.entries(operators).map(([k,v]) => `<option value="${k}" ${k === item.operator ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>周期 N<input data-rule-window type="number" min="1" max="250" value="${esc(item.window ?? "")}"></label><label>短周期<input data-rule-short type="number" min="2" max="250" value="${esc(item.short_window ?? "")}"></label><label>长周期<input data-rule-long type="number" min="2" max="250" value="${esc(item.long_window ?? "")}"></label><label>阈值（小数）<input data-rule-threshold type="number" step="any" value="${esc(item.threshold ?? "")}"></label><button data-rule-remove type="button">移除</button></div>`;
+    return `<div class="signal-rule-row" data-rule-side="${side}"><label>规则类型<select data-rule-kind>${Object.entries(kinds).map(([k,v]) => `<option value="${k}" ${k === item.kind ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>比较方向<select data-rule-operator>${Object.entries(operators).map(([k,v]) => `<option value="${k}" ${k === item.operator ? "selected" : ""}>${v}（${k}）</option>`).join("")}</select></label><label>周期 N（交易日）<input data-rule-window type="number" min="1" max="250" value="${esc(item.window ?? "")}"></label><label>短周期（交易日）<input data-rule-short type="number" min="2" max="250" value="${esc(item.short_window ?? "")}"></label><label>长周期（交易日）<input data-rule-long type="number" min="2" max="250" value="${esc(item.long_window ?? "")}"></label><label>阈值（小数；0.05=5%）<input data-rule-threshold type="number" min="-10" max="10" step="any" value="${esc(item.threshold ?? "")}"></label><p class="rule-explanation">${esc(ruleText(item))}</p><button data-rule-remove type="button">移除</button></div>`;
+  }
+
+  function ruleText(rule = {}) {
+    const op = { above: "高于", below: "低于", cross_above: "从下方向上穿越", cross_below: "从上方向下穿越" }[rule.operator] || rule.operator || "未选择";
+    if (rule.kind === "close_vs_ma") return `收盘价${op} MA${rule.window ?? "N"}（持续状态）`;
+    if (rule.kind === "ma_compare") return `MA${rule.short_window ?? "短"}${op} MA${rule.long_window ?? "长"}（持续状态）`;
+    if (rule.kind === "ma_cross") return `MA${rule.short_window ?? "短"}${op} MA${rule.long_window ?? "长"}（变化事件）`;
+    if (rule.kind === "return_threshold") {
+      const threshold = Number.isFinite(rule.threshold) ? `${(rule.threshold * 100).toFixed(2)}%（原值 ${rule.threshold}）` : "未填写阈值";
+      return `${rule.window ?? "N"} 日涨跌幅${op}${threshold}`;
+    }
+    return `${rule.kind || "未知规则"}（暂无中文说明）`;
+  }
+
+  const dailyTemplates = {
+    ma_cross: {
+      buy_rules: [{ kind: "ma_cross", operator: "cross_above", window: null, short_window: 5, long_window: 20, threshold: null }],
+      sell_rules: [{ kind: "ma_cross", operator: "cross_below", window: null, short_window: 5, long_window: 20, threshold: null }],
+      buy_rule_mode: "all", sell_rule_mode: "any",
+    },
+    trend_state: {
+      buy_rules: [{ kind: "close_vs_ma", operator: "above", window: 20, short_window: null, long_window: null, threshold: null }],
+      sell_rules: [{ kind: "close_vs_ma", operator: "below", window: 20, short_window: null, long_window: null, threshold: null }],
+      buy_rule_mode: "all", sell_rule_mode: "any",
+    },
+    momentum_confirm: {
+      buy_rules: [
+        { kind: "return_threshold", operator: "above", window: 20, short_window: null, long_window: null, threshold: 0.05 },
+        { kind: "close_vs_ma", operator: "above", window: 20, short_window: null, long_window: null, threshold: null },
+      ],
+      sell_rules: [
+        { kind: "return_threshold", operator: "below", window: 20, short_window: null, long_window: null, threshold: -0.03 },
+        { kind: "close_vs_ma", operator: "below", window: 20, short_window: null, long_window: null, threshold: null },
+      ],
+      buy_rule_mode: "all", sell_rule_mode: "any",
+    },
+  };
+
+  function validateDailySignal(params, scopeSize) {
+    const errors = [];
+    if (!params.buy_rules?.length) errors.push("买入规则为空。空规则不会被解释为始终满足，请至少添加一条买入规则；修改后需要重新检查数据。");
+    if (!params.sell_rules?.length) errors.push("卖出规则为空。现有引擎要求至少一条卖出规则；修改后需要重新检查数据。");
+    for (const [side, rules] of [["买入", params.buy_rules || []], ["卖出", params.sell_rules || []]])
+      rules.forEach((rule, index) => {
+        if (["ma_compare", "ma_cross"].includes(rule.kind) && !(rule.short_window >= 2 && rule.short_window < rule.long_window && rule.long_window <= 250))
+          errors.push(`${side}规则 ${index + 1}：MA 短周期当前为 ${known(rule.short_window)}，长周期为 ${known(rule.long_window)}。短周期必须小于长周期，且均在 2～250 之间，例如 MA5 与 MA20；修改后需要重新检查数据。`);
+        const low = rule.kind === "return_threshold" ? 1 : 2;
+        if (["close_vs_ma", "return_threshold"].includes(rule.kind) && !(rule.window >= low && rule.window <= 250))
+          errors.push(`${side}规则 ${index + 1}：周期当前为 ${known(rule.window)}，合法范围为 ${low}～250 个交易日；修改后需要重新检查数据。`);
+        if (rule.kind === "return_threshold" && !Number.isFinite(rule.threshold))
+          errors.push(`${side}规则 ${index + 1}：涨跌幅阈值未填写，例如 0.05 表示 5%；修改后需要重新检查数据。`);
+      });
+    if (Number.isFinite(scopeSize) && params.candidate_count > scopeSize)
+      errors.push(`候选数量当前为 ${params.candidate_count}，冻结股票范围只有 ${scopeSize} 只。请减少候选数量或扩大范围；修改后需要重新检查数据。`);
+    if (params.max_positions > params.candidate_count)
+      errors.push(`最大持仓数量当前为 ${params.max_positions}，候选数量为 ${params.candidate_count}。最大持仓数量不能大于候选数量；修改后需要重新检查数据。`);
+    if (params.start_date && params.end_date && params.start_date >= params.end_date)
+      errors.push(`开始日期 ${params.start_date} 不早于结束日期 ${params.end_date}。请调整区间；修改后需要重新检查数据。`);
+    return errors;
+  }
+
+  function dailySignalSummary(params = {}) {
+    const refresh = catalog.enums[params.candidate_refresh] || params.candidate_refresh || "未知频率";
+    const factors = (params.candidate_factors || []).map((item) => `${factorName(item.code)}${item.direction === "desc" ? "从高到低" : "从低到高"}（相对权重 ${known(item.weight)}）`).join("、") || "候选因子未配置";
+    const rules = (side) => (params[side + "_rules"] || []).map(ruleText).join("；") || "未配置";
+    return `${refresh}更新候选股票，根据${factors}合成得分，选择前 ${known(params.candidate_count)} 只。候选名单更新与每日信号检查是两个过程。每天收盘后检查候选股票；买入规则${enumName(params.buy_rule_mode)}：${rules("buy")}。满足时生成买入指令，最早在下一交易日开盘按滑点、费用、整手和资金约束尝试成交。卖出规则${enumName(params.sell_rule_mode)}：${rules("sell")}；${params.exit_on_candidate_drop ? "退出候选名单时也生成卖出指令" : "退出候选名单后继续持有，直到出现卖出信号"}。卖出受限时保留退出意图并继续尝试，回测结束不会隐含强制平仓。`;
+  }
+
+  function dailySignalTimeline(signals = [], orders = []) {
+    const used = new Set();
+    const rows = [];
+    for (const signal of signals) {
+      const matches = orders.map((order, index) => ({ order, index })).filter(({ order }) =>
+        order.symbol === signal.symbol &&
+        String(order.signal_date || "") === String(signal.signal_date || "") &&
+        String(order.side || "") === String(signal.action || ""));
+      if (!matches.length) rows.push({ signal, order: null });
+      for (const match of matches) {
+        used.add(match.index);
+        rows.push({ signal, order: match.order });
+      }
+    }
+    orders.forEach((order, index) => {
+      if (!used.has(index)) rows.push({ signal: null, order });
+    });
+    return rows.sort((a, b) => String(b.order?.execution_date || b.signal?.signal_date || "").localeCompare(String(a.order?.execution_date || a.signal?.signal_date || "")));
+  }
+
+  function renderDailyTimeline(rows, filters = {}) {
+    const selected = rows.filter(({ signal, order }) => {
+      const symbol = order?.symbol || signal?.symbol;
+      const side = order?.side || signal?.action;
+      const status = order?.status || signal?.status;
+      const group = status === "executed" ? "executed" : ["retry_next_trading_day", "pending"].includes(order?.next_action) ? "retry" : "unfilled";
+      return (!filters.symbol || symbol === filters.symbol) && (!filters.side || side === filters.side) && (!filters.status || group === filters.status) && (!filters.reason || order?.reason === filters.reason);
+    }).slice(0, 100);
+    return `<div class="table-shell"><table class="signal-timeline"><thead><tr><th>信号</th><th>候选 / 触发依据</th><th>计划执行</th><th>成交或未成交</th><th>后续处理</th></tr></thead><tbody>${selected.map(({ signal, order }) => `<tr><td><strong>${esc(enumName(order?.side || signal?.action))}</strong> · ${esc(known(signal?.signal_date || order?.signal_date))}<small>${esc(known(order?.symbol || signal?.symbol))} · 收盘价 ${esc(known(signal?.signal_price ?? order?.signal_price))}</small></td><td>资格：${esc(display(signal?.candidate_eligible, "candidate_eligible"))}<small>排名 ${esc(known(signal?.candidate_rank ?? order?.candidate_rank))} · 得分 ${esc(known(signal?.candidate_score ?? order?.candidate_score))}</small><details><summary>触发依据</summary><code>${esc(known(signal?.rule_evidence))}</code></details></td><td>${esc(known(order?.planned_execution_date || signal?.planned_execution_date))}<small>开盘参考价 ${esc(known(order?.opening_price ?? order?.execution_open))}</small></td><td><strong>${esc(enumName(order?.status || signal?.status))}</strong><small>模拟成交日 ${esc(known(order?.execution_date))} · 价格 ${esc(known(order?.execution_price))} · 数量 ${esc(known(order?.shares ?? signal?.planned_shares))}</small><small>${order?.reason ? esc(enumName(order.reason)) : "没有保存未成交原因"}</small></td><td>${esc(order?.next_action ? enumName(order.next_action) : "未记录")}</td></tr>`).join("") || '<tr><td colspan="5">没有符合筛选条件的已保存记录；不推算缺失字段。</td></tr>'}</tbody></table></div><p>当前仅展示匹配结果前 100 条；接口最多读取每类最近 2,000 条，完整数据请下载原 CSV。</p>`;
   }
   function field(key, value, schema) {
     const alternatives = schema.anyOf || [schema];
@@ -313,7 +421,7 @@ const RunCenterUI = (() => {
       return `<label>冻结股票代码（空格或换行分隔）<textarea data-param="symbols" data-type="symbols">${esc(value.join("\n"))}</textarea></label>`;
     if (key === "factor")
       input = `<select id="${id}" data-param="${key}" data-type="string">${Object.keys(
-        { ...catalog.factors, [value]: catalog.factors[value] || "未知因子" },
+        { ...catalog.factors, [value]: catalog.factors[value] || "暂无中文名称" },
       )
         .map(
           (k) =>
@@ -409,6 +517,42 @@ const RunCenterUI = (() => {
       })
       .join("");
   }
+  function renderDataPlan(plan = {}) {
+    const task = plan.task;
+    const itemRows = (plan.items || []).map((item) => `<tr><td>${esc(item.symbol || "共享")}</td><td>${esc(enumName(item.dataset))}</td><td>${esc(item.adjustment ? enumName(item.adjustment, "adjustment") : "不适用")}</td><td>${esc(known(item.start_date))} 至 ${esc(known(item.end_date))}</td><td>${esc(known(item.estimated_partitions))}</td><td>${esc(enumName(item.status))}<small>${esc(item.attempts?.at?.(-1)?.error || item.reason || "")}</small></td></tr>`).join("");
+    const taskText = task
+      ? `${enumName(task.status)} · ${known(task.progress)}% · ${task.message || task.error || "等待更新"}`
+      : "尚未确认：不会联网或下载";
+    return `<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>`;
+  }
+  function restoreDataPlanConfiguration(configuration, plan, expectedKind) {
+    const input = plan?.input;
+    if (input?.research_type !== expectedKind)
+      throw Error(`计划类型 ${known(input?.research_type)} 与当前页面 ${expectedKind} 不一致`);
+    if (!input.parameters || typeof input.parameters !== "object" || Array.isArray(input.parameters))
+      throw Error("补齐计划没有保存可恢复的策略参数");
+    if (!Array.isArray(input.resolved_symbols) || !input.resolved_symbols.length)
+      throw Error("补齐计划没有保存冻结股票范围，不能使用当前默认股票池替代");
+    const params = structuredClone(input.parameters);
+    // Keep an editable explicit-symbol field available without changing the
+    // frozen pool identity. currentParams removes it while a pool is selected.
+    if (params.stock_pool_id && params.symbols == null) params.symbols = [];
+    return {
+      ...configuration,
+      params,
+      scope: [...input.resolved_symbols],
+      source_run_id: null,
+      warnings: [
+        ...(configuration.warnings || []),
+        `已从补齐计划 ${plan.plan_id} 恢复冻结参数和 ${input.resolved_symbols.length} 只股票；尚未运行策略。`,
+      ],
+    };
+  }
+  function normalizedParameterIdentity(value) {
+    const normalized = structuredClone(value || {});
+    if (normalized.stock_pool_id) delete normalized.symbols;
+    return normalized;
+  }
   if (typeof module !== "undefined")
     module.exports = {
       table,
@@ -420,10 +564,19 @@ const RunCenterUI = (() => {
       factorRow,
       candidateFactorRow,
       signalRuleRow,
+      ruleText,
+      dailyTemplates,
+      validateDailySignal,
+      dailySignalSummary,
+      dailySignalTimeline,
+      renderDailyTimeline,
       factorName,
       strategyName,
       display,
       resultSections,
+      renderDataPlan,
+      restoreDataPlanConfiguration,
+      normalizedParameterIdentity,
     };
   if (typeof document === "undefined") return {};
   const $ = (id) => document.getElementById(id);
@@ -433,7 +586,11 @@ const RunCenterUI = (() => {
     busy = false,
     submitted = false,
     copy = null,
-    checked = null;
+    checked = null,
+    dataPlan = null,
+    planSequence = 0,
+    planPolls = 0,
+    planTimer = null;
   const fail = (e) => {
     if ($("center-error")) $("center-error").textContent = e.message;
   };
@@ -493,7 +650,7 @@ const RunCenterUI = (() => {
         : "") +
       resultSections(row.result);
     $("center-parameters").innerHTML =
-      `<details><summary>原运行参数（中文展示，内部代码保留）</summary>${renderValue(row.spec)}</details>`;
+      `${row.kind === "daily_signal" ? `<article class="strategy-summary"><h3>原运行策略中文摘要</h3><p>${esc(dailySignalSummary(row.spec))}</p></article>` : ""}<details><summary>原运行参数（中文展示，内部代码保留）</summary>${renderValue(row.spec)}</details>`;
     if (row.kind === "factor_lab")
       $("center-result").insertAdjacentHTML(
         "beforeend",
@@ -552,7 +709,7 @@ const RunCenterUI = (() => {
         series: "因子有效性时间序列",
       };
       const fragment = Object.entries(names)
-        .filter(([k]) => data[k] != null)
+        .filter(([k]) => data[k] != null && !(row.kind === "daily_signal" && ["signals", "orders"].includes(k)))
         .map(
           ([k, label]) =>
             (k === "metrics" || k === "ic_summary" || k === "validation"
@@ -565,6 +722,22 @@ const RunCenterUI = (() => {
         )
         .join("");
       $("center-result").insertAdjacentHTML("beforeend", fragment);
+      if (row.kind === "daily_signal") {
+        const timeline = dailySignalTimeline(data.signals || [], data.orders || []);
+        const reasons = [...new Set((data.orders || []).map((item) => item.reason).filter(Boolean))].sort();
+        const symbols = [...new Set(timeline.map((item) => item.order?.symbol || item.signal?.symbol).filter(Boolean))].sort();
+        const metrics = { ...(data.metrics || {}), ...(data.summary || {}) };
+        $("center-result").insertAdjacentHTML("beforeend", `<article class="daily-result-summary"><h3>信号、指令与成交摘要</h3><dl class="center-meta"><div><dt>信号数量</dt><dd>${esc(known(metrics.signal_count))}</dd></div><div><dt>指令尝试数量</dt><dd>${esc(known(metrics.order_attempt_count))}</dd></div><div><dt>成交笔数</dt><dd>${esc(known(metrics.executed_order_count))}</dd></div><div><dt>未成交数量</dt><dd>${metrics.order_attempt_count != null && metrics.executed_order_count != null ? esc(metrics.order_attempt_count - metrics.executed_order_count) : "未记录"}</dd></div><div><dt>等待退出的卖出意图</dt><dd>${esc(known(metrics.pending_exit_count))}</dd></div><div><dt>期末持仓数量</dt><dd>${esc(known(metrics.open_position_count))}</dd></div></dl><p>信号、指令和成交分别统计；缺失值不会填零。买入失效数量若原结果未单独保存则显示“未记录”。</p></article><section class="daily-timeline"><h3>信号 → 指令 → 成交或未成交</h3><form id="center-timeline-filters" class="center-filters"><label>股票<select id="center-timeline-symbol"><option value="">全部</option>${symbols.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}</select></label><label>动作<select id="center-timeline-side"><option value="">全部</option><option value="buy">买入</option><option value="sell">卖出</option></select></label><label>结果<select id="center-timeline-status"><option value="">全部</option><option value="executed">已成交</option><option value="unfilled">未成交/失效</option><option value="retry">等待重试</option></select></label><label>未成交原因<select id="center-timeline-reason"><option value="">全部</option>${reasons.map((value) => `<option value="${esc(value)}">${esc(enumName(value))}</option>`).join("")}</select></label></form><div id="center-timeline-list">${renderDailyTimeline(timeline)}</div></section>`);
+        const updateTimeline = () => {
+          $("center-timeline-list").innerHTML = renderDailyTimeline(timeline, {
+            symbol: $("center-timeline-symbol").value,
+            side: $("center-timeline-side").value,
+            status: $("center-timeline-status").value,
+            reason: $("center-timeline-reason").value,
+          });
+        };
+        $("center-timeline-filters").addEventListener("change", updateTimeline);
+      }
       if (row.kind === "factor_lab" && data.series?.length) {
         const groups = new Map();
         for (const point of data.series) {
@@ -670,28 +843,77 @@ const RunCenterUI = (() => {
     }
   }
   const readinessKinds = new Set(["factor_backtest", "factor_lab", "daily_signal", "screen"]);
+  function refreshDailyUX() {
+    if (!copy || copy.kind !== "daily_signal" || !$(`center-daily-summary-text`)) return;
+    try {
+      const params = readParams($("center-copy-form"), copy.params);
+      const scopeSize = params.stock_pool_id ? copy.scope?.length : params.symbols?.length;
+      $("center-daily-summary-text").textContent = dailySignalSummary(params);
+      const errors = validateDailySignal(params, scopeSize);
+      $("center-daily-errors").innerHTML = errors.length
+        ? `<div class="field-errors"><strong>请先修正 ${errors.length} 个配置问题：</strong><ul>${errors.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>`
+        : '<p class="positive">字段格式检查通过；仍需执行后端本地数据预检。</p>';
+      const rows = $("center-copy-form").querySelectorAll(".signal-rule-row");
+      for (const row of rows) {
+        const number = (selector) => {
+          const value = row.querySelector(selector).value;
+          return value === "" ? null : Number(value);
+        };
+        row.querySelector(".rule-explanation").textContent = ruleText({
+          kind: row.querySelector("[data-rule-kind]").value,
+          operator: row.querySelector("[data-rule-operator]").value,
+          window: number("[data-rule-window]"),
+          short_window: number("[data-rule-short]"),
+          long_window: number("[data-rule-long]"),
+          threshold: number("[data-rule-threshold]"),
+        });
+      }
+    } catch (error) {
+      $("center-daily-errors").textContent = "配置暂时无法读取：" + error.message;
+    }
+  }
   function invalidate() {
     checked = null;
+    dataPlan = null;
+    planSequence++;
+    planPolls = 0;
+    if (planTimer && typeof clearTimeout === "function") clearTimeout(planTimer);
     if ($("center-review")) $("center-review").hidden = true;
     if ($("center-submit"))
       $("center-submit").disabled =
         busy || !copy || readinessKinds.has(copy.kind);
     if ($("center-preflight-result"))
       $("center-preflight-result").textContent = "参数有变化，请重新预检。";
+    if ($("center-data-plan")) $("center-data-plan").hidden = true;
+    if ($("center-plan-status")) $("center-plan-status").textContent = "";
+    refreshDailyUX();
   }
   async function configure(query, freshKind = null) {
+    if (typeof query === "string") query = new URLSearchParams(query);
     const own = ++sequence;
     copy = null;
     checked = null;
-    let data;
+    let data,
+      restoredPlan = null;
     try {
       data = await get(
         freshKind
           ? "/api/v1/run-center/configuration?kind=" + freshKind
           : "/api/v1/run-center/copy?" + query,
       );
+      if (freshKind && query.has("data_plan")) {
+        restoredPlan = await get(
+          `/api/v1/research-data/plans/${encodeURIComponent(query.get("data_plan"))}`,
+        );
+        data = restoreDataPlanConfiguration(data, restoredPlan, freshKind);
+      }
     } catch (e) {
-      if (own === sequence) fail(e);
+      if (own === sequence)
+        fail(
+          query.has("data_plan")
+            ? Error("补齐计划恢复失败：" + e.message)
+            : e,
+        );
       return;
     }
     if (own !== sequence) return;
@@ -805,6 +1027,9 @@ const RunCenterUI = (() => {
     for (const id of [
       "center-scope-fields",
       "center-common-fields",
+      "center-candidate-fields",
+      "center-buy-fields",
+      "center-sell-fields",
       "center-advanced-fields",
       "center-cost-fields",
     ])
@@ -812,15 +1037,28 @@ const RunCenterUI = (() => {
     for (const [key, value] of Object.entries(data.params)) {
       if (value === null) continue;
       const html = field(key, value, data.schema.properties[key] || {});
-      $(
-        range.has(key)
-          ? "center-scope-fields"
-          : costs.has(key)
-            ? "center-cost-fields"
-            : common.has(key)
-              ? "center-common-fields"
-              : "center-advanced-fields",
-      ).insertAdjacentHTML("beforeend", html);
+      let destination = range.has(key)
+        ? "center-scope-fields"
+        : costs.has(key) || (data.kind === "daily_signal" && key === "max_positions")
+          ? "center-cost-fields"
+          : common.has(key)
+            ? "center-common-fields"
+            : "center-advanced-fields";
+      if (data.kind === "daily_signal") {
+        if (["candidate_factors", "candidate_count", "candidate_refresh"].includes(key)) destination = "center-candidate-fields";
+        if (["buy_rules", "buy_rule_mode"].includes(key)) destination = "center-buy-fields";
+        if (["sell_rules", "sell_rule_mode", "exit_on_candidate_drop"].includes(key)) destination = "center-sell-fields";
+      }
+      $(destination).insertAdjacentHTML("beforeend", html);
+    }
+    const isDaily = data.kind === "daily_signal";
+    $("center-generic-method").hidden = isDaily;
+    for (const id of ["center-daily-templates", "center-daily-candidates", "center-daily-buy", "center-daily-sell", "center-daily-summary"])
+      $(id).hidden = !isDaily;
+    if (isDaily) {
+      const assumptions = catalog.daily_signal_execution || {};
+      $("center-execution-assumptions").innerHTML = Object.values(assumptions)
+        .map((item) => `<li>${esc(item)}</li>`).join("");
     }
     if (!freshKind && data.params.stock_pool_id) {
       for (const key of ["stock_pool_id", "stock_pool_revision"])
@@ -850,6 +1088,18 @@ const RunCenterUI = (() => {
         $("center-" + side + "-rule-rows").insertAdjacentHTML("beforeend", signalRuleRow(undefined, side));
         invalidate();
       });
+    for (const button of $("center-copy-form").querySelectorAll("[data-daily-template]"))
+      button.addEventListener("click", () => {
+        const template = dailyTemplates[button.dataset.dailyTemplate];
+        if (!template || copy.kind !== "daily_signal") return;
+        for (const side of ["buy", "sell"])
+          $("center-" + side + "-rule-rows").innerHTML = template[side + "_rules"]
+            .map((item) => signalRuleRow(item, side)).join("");
+        $("copy-buy_rule_mode").value = template.buy_rule_mode;
+        $("copy-sell_rule_mode").value = template.sell_rule_mode;
+        invalidate();
+        $("center-copy-warning").textContent = "已套用配置示例；冻结股票范围和 revision 未改变。模板不会预检、下载或执行。";
+      });
     $("center-copy-form").addEventListener("click", (e) => {
       const button = e.target.closest?.("[data-factor-remove],[data-candidate-remove],[data-rule-remove]");
       if (!button) return;
@@ -861,14 +1111,44 @@ const RunCenterUI = (() => {
     $("center-preflight").hidden = !readinessKinds.has(data.kind);
     invalidate();
     if (freshKind) await loadPools(own);
+    if (restoredPlan && copy.kind === "daily_signal") {
+      const planOwn = planSequence;
+      try {
+        const plan = restoredPlan;
+        if (planOwn === planSequence) {
+          planPolls = 0;
+          showDataPlan(plan);
+          if (plan.task?.status === "succeeded") await recheckCompletedPlan(plan, planOwn);
+          else schedulePlanRefresh(planOwn);
+        }
+      } catch (error) {
+        if (planOwn === planSequence) fail(Error("补齐计划恢复失败：" + error.message));
+      }
+    }
   }
   async function loadPools(own) {
     try {
       const pools = await get("/api/v1/stock-pools?include_archived=false");
       if (own !== sequence) return;
       const items = Array.isArray(pools) ? pools : pools.items;
+      const frozenValue = copy.params.stock_pool_id
+        ? `${copy.params.stock_pool_id}:${copy.params.stock_pool_revision}`
+        : null;
+      const frozenListed = items.some(
+        (item) => `${item.pool_id}:${item.current_revision}` === frozenValue,
+      );
       $("center-pool-selector").innerHTML =
-        `<label>范围来源<select id="center-select-pool"><option value="manual">手动股票代码（不冒充历史指数成分）</option>${items.map((p) => `<option value="${esc(p.pool_id)}:${p.current_revision}">${esc(p.name)} · r${p.current_revision}</option>`).join("")}</select></label><p id="center-pool-preview"></p>`;
+        `<label>范围来源<select id="center-select-pool"><option value="manual">手动股票代码（不冒充历史指数成分）</option>${frozenValue && !frozenListed ? `<option value="${esc(frozenValue)}">补齐计划冻结股票池 · r${esc(copy.params.stock_pool_revision)}</option>` : ""}${items.map((p) => `<option value="${esc(p.pool_id)}:${p.current_revision}">${esc(p.name)} · r${p.current_revision}</option>`).join("")}</select></label><p id="center-pool-preview"></p>`;
+      if (frozenValue) {
+        $("center-select-pool").value = frozenValue;
+        const manualInput = $("center-copy-form").querySelector?.('[data-param="symbols"]');
+        if (manualInput) manualInput.disabled = true;
+        $("center-pool-preview").textContent =
+          `已恢复计划冻结范围 ${copy.params.stock_pool_id} · r${copy.params.stock_pool_revision} · ${copy.scope.length} 只：${copy.scope.join(" ")}`;
+      } else if (copy.scope?.length) {
+        $("center-pool-preview").textContent =
+          `已恢复计划明确范围 · ${copy.scope.length} 只：${copy.scope.join(" ")}`;
+      }
       $("center-select-pool").addEventListener("change", async () => {
         const generation = ++poolSequence;
         invalidate();
@@ -931,11 +1211,119 @@ const RunCenterUI = (() => {
       delete params.symbols;
     } else if ("symbols" in params && !params.symbols?.length)
       throw Error("请明确输入冻结股票范围，不能使用隐式默认池");
+    if (copy.kind === "daily_signal") {
+      const errors = validateDailySignal(
+        params,
+        params.stock_pool_id ? copy.scope?.length : params.symbols?.length,
+      );
+      if (errors.length) throw Error(errors[0]);
+    }
     return params;
+  }
+  const paramsKey = (value) => JSON.stringify(normalizedParameterIdentity(value));
+  function setPlanUrl(planId) {
+    const query = new URLSearchParams(location.search);
+    if (planId) query.set("data_plan", planId);
+    else query.delete("data_plan");
+    window.history.replaceState(null, "", location.pathname + (query.size ? "?" + query : ""));
+  }
+  function showDataPlan(plan) {
+    dataPlan = plan;
+    $("center-data-plan").hidden = false;
+    $("center-plan-status").innerHTML = renderDataPlan(plan);
+    const taskStatus = plan.task?.status;
+    $("center-plan-create").hidden = true;
+    $("center-plan-confirm").hidden = !(plan.status === "draft" && plan.items?.length);
+    $("center-plan-retry").hidden = taskStatus !== "failed";
+    $("center-plan-refresh").hidden = !plan.plan_id;
+    setPlanUrl(plan.plan_id);
+  }
+  async function recheckCompletedPlan(plan, own) {
+    const report = await get(`/api/v1/research-data/plans/${encodeURIComponent(plan.plan_id)}/preflight`, { method: "POST" });
+    if (own !== planSequence || dataPlan?.plan_id !== plan.plan_id) return;
+    const current = currentParams();
+    const frozen = plan.input?.parameters;
+    if (paramsKey(current) !== paramsKey(frozen)) {
+      $("center-plan-status").insertAdjacentHTML("afterbegin", '<p class="negative">计划已完成，但当前参数已经变化。旧结果不会覆盖当前页面，请重新检查本地数据。</p>');
+      return;
+    }
+    checked = { params: paramsKey(current), report };
+    $("center-preflight-result").innerHTML = renderPreflight(report);
+    $("center-warmup-summary").hidden = !report.technical_warmup_explanation;
+    $("center-warmup-summary").textContent = report.technical_warmup_explanation || "";
+    $("center-submit").disabled = !(report.ready === true || report.status === "ready");
+    $("center-plan-status").insertAdjacentHTML("afterbegin", '<p class="positive">补齐任务完成，已自动重新预检当前冻结参数；不会自动运行策略。</p>');
+  }
+  function schedulePlanRefresh(own) {
+    if (planTimer && typeof clearTimeout === "function") clearTimeout(planTimer);
+    if (!["queued", "running"].includes(dataPlan?.task?.status)) return;
+    if (planPolls >= 120) {
+      $("center-plan-status").insertAdjacentHTML("afterbegin", '<p class="page-notice">已停止自动刷新以避免无上限轮询。任务仍在后台运行，可稍后手动刷新或通过计划 ID 恢复。</p>');
+      return;
+    }
+    planPolls++;
+    if (typeof setTimeout === "function")
+      planTimer = setTimeout(() => refreshPlan(own), 2000);
+  }
+  async function refreshPlan(own = planSequence) {
+    const planId = dataPlan?.plan_id;
+    if (!planId) return;
+    try {
+      const updated = await get(`/api/v1/research-data/plans/${encodeURIComponent(planId)}`);
+      if (own !== planSequence || dataPlan?.plan_id !== planId) return;
+      const previous = dataPlan?.task?.status;
+      showDataPlan(updated);
+      if (updated.task?.status === "succeeded" && previous !== "succeeded")
+        await recheckCompletedPlan(updated, own);
+      else schedulePlanRefresh(own);
+    } catch (error) {
+      if (own === planSequence) fail(error);
+    }
+  }
+  async function planAction(action) {
+    if (busy || !copy || copy.kind !== "daily_signal") return;
+    const own = planSequence;
+    busy = true;
+    try {
+      if (action === "create") {
+        const params = currentParams();
+        if (!checked || checked.params !== paramsKey(params))
+          throw Error("请先检查当前参数的本地数据；参数变化后旧预检不能创建补齐计划。");
+        const plan = await get("/api/v1/research-data/plans", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ research_type: copy.kind, parameters: params }),
+        });
+        if (own !== planSequence) return;
+        planPolls = 0;
+        showDataPlan(plan);
+        return;
+      }
+      if (!dataPlan) throw Error("请先查看当前参数的补齐计划。");
+      if (action === "refresh") return await refreshPlan(own);
+      const retry = action === "retry";
+      const verb = retry ? "重试失败分区" : "补齐缺失数据";
+      if (!window.confirm(`确认${verb}？这会访问公网并启动后台任务，但不会运行策略或调用模型。`)) return;
+      await get(`/api/v1/research-data/plans/${encodeURIComponent(dataPlan.plan_id)}/${retry ? "retry" : "confirm"}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: dataPlan.version, input_sha256: dataPlan.input_sha256, confirm: true }),
+      });
+      if (own !== planSequence) return;
+      planPolls = 0;
+      await refreshPlan(own);
+    } catch (error) {
+      if (own === planSequence) fail(error);
+    } finally {
+      busy = false;
+    }
   }
   async function preflight() {
     if (busy || !copy) return;
     checked = null;
+    const own = ++planSequence;
+    dataPlan = null;
+    planPolls = 0;
+    if (planTimer && typeof clearTimeout === "function") clearTimeout(planTimer);
+    if ($("center-data-plan")) $("center-data-plan").hidden = true;
     busy = true;
     $("center-preflight").disabled = true;
     $("center-submit").disabled = true;
@@ -946,12 +1334,22 @@ const RunCenterUI = (() => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ research_type: copy.kind, parameters: params }),
       });
-      if (JSON.stringify(params) !== JSON.stringify(currentParams())) return;
+      if (own !== planSequence || paramsKey(params) !== paramsKey(currentParams())) return;
       $("center-preflight-result").innerHTML = renderPreflight(p);
-      checked = { params: JSON.stringify(params), report: p };
+      checked = { params: paramsKey(params), report: p };
+      $("center-warmup-summary").hidden = !p.technical_warmup_explanation;
+      $("center-warmup-summary").textContent = p.technical_warmup_explanation || "";
       $("center-submit").disabled = !(p.ready === true || p.status === "ready");
+      if (copy.kind === "daily_signal" && p.complete !== true) {
+        $("center-data-plan").hidden = false;
+        $("center-plan-create").hidden = false;
+        $("center-plan-confirm").hidden = true;
+        $("center-plan-retry").hidden = true;
+        $("center-plan-refresh").hidden = true;
+        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“查看补齐计划”只会冻结计划，不联网下载。</p>';
+      }
     } catch (e) {
-      fail(e);
+      if (own === planSequence) fail(e);
     } finally {
       busy = false;
       $("center-preflight").disabled = false;
@@ -967,13 +1365,13 @@ const RunCenterUI = (() => {
       if (
         readinessKinds.has(copy.kind) &&
         (!checked ||
-          checked.params !== JSON.stringify(params) ||
+          checked.params !== paramsKey(params) ||
           !(checked.report.ready === true || checked.report.status === "ready"))
       )
         throw Error("请先通过当前参数的数据预检");
       if (!execute && $("center-review")?.querySelector) {
         $("center-review-content").innerHTML =
-          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。执行假设沿用原模型。</p>`;
+          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
         $("center-review").hidden = false;
         $("center-review").scrollIntoView({ block: "nearest" });
         return;
@@ -1088,6 +1486,10 @@ const RunCenterUI = (() => {
       $("center-copy-form").addEventListener("input", invalidate);
       $("center-copy-form").addEventListener("submit", submit);
       $("center-preflight").addEventListener("click", preflight);
+      $("center-plan-create").addEventListener("click", () => planAction("create"));
+      $("center-plan-confirm").addEventListener("click", () => planAction("confirm"));
+      $("center-plan-retry").addEventListener("click", () => planAction("retry"));
+      $("center-plan-refresh").addEventListener("click", () => planAction("refresh"));
       $("center-copy-form").addEventListener("change", invalidate);
       $("center-execute").addEventListener("click", (e) => submit(e, true));
       $("center-review-cancel").addEventListener("click", () => {

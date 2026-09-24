@@ -30,6 +30,20 @@ ENUM_LABELS = {
     "held": "继续持有",
     "closed": "已退出",
     "retry_next_trading_day": "下一交易日继续尝试退出",
+    "pending": "等待处理",
+    "draft": "待确认",
+    "confirmed": "已确认",
+    "planned": "已计划",
+    "fetching": "同步中",
+    "published": "同步完成",
+    "verified": "已验证",
+    "warning": "有提示",
+    "rejected": "已拒绝",
+    "queued": "等待执行",
+    "running": "执行中",
+    "succeeded": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
     "missing_raw_open": "缺少未复权开盘数据",
     "missing_raw_open_or_previous_close": "缺少未复权开盘价或前收盘价",
     "opening_at_upper_price_limit": "开盘达到涨停限制",
@@ -56,6 +70,11 @@ ENUM_LABELS = {
     "exclude": "排除缺失样本",
     "available": "使用有效因子并重新归一权重",
     "show": "保留缺失诊断",
+    "daily_bar": "股票日线",
+    "benchmark_daily_bar": "基准日线",
+    "trading_calendar": "交易日历",
+    "financial_metric": "财务因子",
+    "announcement": "定期公告元数据",
 }
 FIELD_LABELS = {
     "factor": "因子",
@@ -173,7 +192,7 @@ def factor_label(code):
     if text.startswith("ma_deviation_") and text[13:].isdigit():
         return f"收盘价相对 MA({text[13:]}) 偏离率（{text}）"
     definition = FINANCIAL_METRICS.get(text)
-    return f"{definition['label']}（{code}）" if definition else f"未知因子（{code}）"
+    return f"{definition['label']}（{code}）" if definition else f"暂无中文名称（{code}）"
 
 
 def enum_label(code):
@@ -207,6 +226,38 @@ def rule_label(rule):
     return f"{text}（{kind}/{operator}）"
 
 
+def daily_signal_summary(spec):
+    """Build one display-only description from saved strategy parameters."""
+    if not isinstance(spec, dict):
+        return "策略参数未记录，无法生成中文摘要。"
+    factors = (
+        "、".join(
+            f"{factor_label(item.get('code'))}{'从高到低' if item.get('direction') == 'desc' else '从低到高'}"
+            f"（相对权重 {item.get('weight', '未记录')}）"
+            for item in spec.get("candidate_factors", [])
+            if isinstance(item, dict)
+        )
+        or "候选因子未记录"
+    )
+    refresh = ENUM_LABELS.get(spec.get("candidate_refresh"), spec.get("candidate_refresh", "未知"))
+    buy = "；".join(rule_label(item) for item in spec.get("buy_rules", [])) or "未配置"
+    sell = "；".join(rule_label(item) for item in spec.get("sell_rules", [])) or "未配置"
+    buy_mode = ENUM_LABELS.get(spec.get("buy_rule_mode"), spec.get("buy_rule_mode", "未知"))
+    sell_mode = ENUM_LABELS.get(spec.get("sell_rule_mode"), spec.get("sell_rule_mode", "未知"))
+    exit_text = (
+        "退出候选名单时同时生成卖出指令"
+        if spec.get("exit_on_candidate_drop")
+        else "退出候选名单后继续持有，直到卖出信号出现"
+    )
+    return (
+        f"{refresh}更新候选股票，根据{factors}合成得分，选择前 {spec.get('candidate_count', '未记录')} 只。"
+        f"每天收盘后检查信号；买入规则为{buy_mode}：{buy}。满足时生成买入指令，最早在下一交易日开盘"
+        "按滑点、费用、整手和资金约束尝试成交。"
+        f"卖出规则为{sell_mode}：{sell}；{exit_text}。卖出受 T+1、停牌或交易限制影响时，"
+        "保留退出意图并在后续交易日继续尝试；回测结束不会隐含强制平仓。"
+    )
+
+
 def strategy_label(value):
     parts = str(value).split("|")
     if len(parts) != 4 or not parts[1].startswith("top=") or not parts[3].startswith("commission="):
@@ -220,6 +271,16 @@ def presentation_catalog():
         "enums": ENUM_LABELS,
         "fields": FIELD_LABELS,
         "ic_explanation": IC_EXPLANATION,
+        "daily_signal_execution": {
+            "signal_timing": "使用当日收盘后完整数据确认信号",
+            "execution_timing": "最早在下一交易日开盘尝试成交",
+            "buy_expiry": "买单在计划执行日未成交即失效",
+            "sell_retry": "卖出受限时保留退出意图并逐交易日重试",
+            "sell_first": "同一执行批次卖出优先",
+            "no_same_batch_rebuy": "同只股票卖出后不在同一批次立即买回",
+            "end_behavior": "回测结束不隐含强制平仓",
+            "position_weighting": "最大持仓数量内按等权目标资金计算，不因每日目标变化强制再平衡",
+        },
         "percent_fields": [
             "total_return",
             "benchmark_total_return",
@@ -252,5 +313,6 @@ def install_filters(environment):
         enum_label=enum_label,
         field_label=field_label,
         rule_label=rule_label,
+        daily_signal_summary=daily_signal_summary,
         strategy_label=strategy_label,
     )

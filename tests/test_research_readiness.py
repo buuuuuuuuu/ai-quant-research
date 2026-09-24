@@ -224,6 +224,11 @@ def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db, tmp_
 
     result = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
     assert result["ready"] is True
+    calendar = next(item for item in result["checks"] if item["dataset"] == "trading_calendar")
+    assert calendar["satisfied"] is True
+    assert result["technical_warmup_start"] == "2024-01-02"
+    assert result["technical_warmup_trading_days"] == 3
+    assert "不会在研究开始日前产生交易" in result["technical_warmup_explanation"]
     price_checks = [item for item in result["checks"] if item["dataset"] == "daily_bar"]
     assert {item["adjustment"] for item in price_checks} == {"none", "qfq"}
     assert all(item["required_start"] == "2024-01-02" for item in price_checks)
@@ -240,6 +245,24 @@ def test_daily_signal_preflight_requires_warmup_and_paired_price_series(db, tmp_
         if item.get("symbol") == "600519" and item.get("adjustment") == "none"
     )
     assert raw["missing_dates"] == ["2024-01-03"]
+
+
+def test_daily_signal_calendar_and_benchmark_gaps_are_explained_separately(db):
+    with db.connect() as connection:
+        connection.execute("DELETE FROM trading_calendar WHERE trade_date >= DATE '2024-01-10'")
+    result = ResearchReadiness(db).run("daily_signal", DAILY_SIGNAL)
+    recommendations = {item["code"]: item for item in result["recommendations"]}
+    assert recommendations["calendar_coverage"]["title"] == "交易日历覆盖不足"
+    assert recommendations["benchmark_coverage"]["title"] == "基准日线覆盖不足"
+    calendar = next(item for item in result["checks"] if item["dataset"] == "trading_calendar")
+    assert calendar["status"] == "missing"
+    assert calendar["actual_end"] == "2024-01-09"
+    plan = plan_service(db).create("daily_signal", DAILY_SIGNAL)
+    assert any(
+        item["dataset"] == "daily_bar" and "刷新交易日历" in item["reason"]
+        for item in plan["items"]
+    ), plan["items"]
+    assert plan["task"] is None  # Viewing a frozen plan never starts network work.
 
 
 def test_daily_signal_preflight_explains_listing_boundary_and_next_action(db):

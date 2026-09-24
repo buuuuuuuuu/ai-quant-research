@@ -292,6 +292,25 @@ class DailySignalRuleRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_rule(self) -> DailySignalRuleRequest:
+        if self.kind in {"close_vs_ma", "return_threshold"}:
+            low = 1 if self.kind == "return_threshold" else 2
+            if self.window is None or not low <= self.window <= 250:
+                raise ValueError(
+                    f"周期 N 当前为 {self.window}；{self.kind} 要求 {low}～250 个交易日。"
+                    "修改周期后需要重新检查数据"
+                )
+        if self.kind in {"ma_compare", "ma_cross"} and (
+            self.short_window is None
+            or self.long_window is None
+            or not 2 <= self.short_window < self.long_window <= 250
+        ):
+            raise ValueError(
+                f"MA 短周期当前为 {self.short_window}，长周期为 {self.long_window}。"
+                "短周期必须小于长周期，且均在 2～250 之间，例如 MA5 与 MA20。"
+                "修改周期后需要重新检查数据"
+            )
+        if self.kind == "return_threshold" and self.threshold is None:
+            raise ValueError("N 日涨跌幅规则缺少阈值；例如 0.05 表示 5%。修改后需要重新检查数据")
         self.to_rule()
         return self
 
@@ -348,14 +367,32 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
     @model_validator(mode="after")
     def validate_strategy(self) -> DailySignalStrategyRequest:
         if self.start_date >= self.end_date:
-            raise ValueError("start_date must be earlier than end_date")
+            raise ValueError(
+                f"研究开始日期 {self.start_date} 不早于结束日期 {self.end_date}；"
+                "请调整时间区间，修改后需要重新检查数据"
+            )
+        if not self.buy_rules:
+            raise ValueError("买入规则为空；空规则不会被解释为始终满足，请至少添加一条买入规则")
+        if not self.sell_rules:
+            raise ValueError("卖出规则为空；现有引擎要求至少一条卖出规则，请添加后重新检查数据")
+        if self.max_positions > self.candidate_count:
+            raise ValueError(
+                f"最大持仓数量当前为 {self.max_positions}，候选数量为 {self.candidate_count}。"
+                "最大持仓数量不能大于候选数量；修改后需要重新检查数据"
+            )
         if self.symbols is not None:
             self.to_spec()
         return self
 
     def to_spec(self, *, resolved_symbols=None, stock_pool=None) -> DailySignalStrategySpec:
+        scope = tuple(resolved_symbols or self.symbols or ())
+        if scope and self.candidate_count > len(set(scope)):
+            raise ValueError(
+                f"候选数量当前为 {self.candidate_count}，冻结股票范围只有 {len(set(scope))} 只。"
+                "请减少候选数量或重新选择股票范围；修改后需要重新检查数据"
+            )
         return DailySignalStrategySpec(
-            symbols=tuple(resolved_symbols or self.symbols or ()),
+            symbols=scope,
             start_date=self.start_date,
             end_date=self.end_date,
             candidate_factors=tuple(item.to_component() for item in self.candidate_factors),

@@ -11,6 +11,7 @@ from test_factor_backtest import _database
 from test_web_workbench import _settings
 
 from ai_quant_assistant.api.app import create_app
+from ai_quant_assistant.api.schemas import DailySignalStrategyRequest
 from ai_quant_assistant.domain.models import (
     DailySignalRule,
     DailySignalStrategySpec,
@@ -18,6 +19,24 @@ from ai_quant_assistant.domain.models import (
 )
 from ai_quant_assistant.reports.daily_signal_writer import DailySignalReportWriter
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
+
+
+def test_daily_signal_request_has_actionable_chinese_validation():
+    base = _spec().to_dict()
+    base["buy_rules"] = [
+        {
+            "kind": "ma_cross",
+            "operator": "cross_above",
+            "short_window": 20,
+            "long_window": 5,
+        }
+    ]
+    with pytest.raises(ValueError, match="MA 短周期当前为 20，长周期为 5"):
+        DailySignalStrategyRequest.model_validate(base)
+    base = _spec().to_dict()
+    base["max_positions"] = 2
+    with pytest.raises(ValueError, match="最大持仓数量当前为 2，候选数量为 1"):
+        DailySignalStrategyRequest.model_validate(base)
 
 
 def _spec(**changes):
@@ -294,8 +313,45 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
         spec=spec,
         metrics={},
         nav=pd.DataFrame(columns=["date", "portfolio_nav"]),
-        signals=pd.DataFrame(),
-        orders=pd.DataFrame(),
+        signals=pd.DataFrame(
+            [
+                {
+                    "signal_date": "2024-01-04",
+                    "planned_execution_date": "2024-01-05",
+                    "symbol": "600519",
+                    "action": "buy",
+                    "status": "generated",
+                    "signal_price": 10,
+                    "rule_evidence": json.dumps(
+                        [
+                            {
+                                "rule": {
+                                    "kind": "ma_cross",
+                                    "operator": "cross_above",
+                                    "short_window": 5,
+                                    "long_window": 20,
+                                },
+                                "matched": True,
+                            }
+                        ]
+                    ),
+                }
+            ]
+        ),
+        orders=pd.DataFrame(
+            [
+                {
+                    "signal_date": "2024-01-04",
+                    "planned_execution_date": "2024-01-05",
+                    "execution_date": "2024-01-05",
+                    "symbol": "600519",
+                    "side": "buy",
+                    "status": "blocked",
+                    "reason": "insufficient_cash_or_round_lot",
+                    "next_action": "expired",
+                }
+            ]
+        ),
         positions=pd.DataFrame(),
         candidates=pd.DataFrame(),
         diagnostics={},
@@ -303,6 +359,9 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
     html = path.read_text(encoding="utf-8")
     assert "&lt;img" in html
     assert "<img src" not in html
+    assert "信号 → 指令 → 成交或未成交" in html
+    assert "资金不足或不足一手（insufficient_cash_or_round_lot）" in html
+    assert "MA(5) 上穿 MA(20)" in html
 
 
 def test_api_history_copy_report_and_read_only_configuration(tmp_path):

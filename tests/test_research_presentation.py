@@ -30,6 +30,8 @@ def test_catalog_uses_existing_definitions_and_unknown_codes_are_not_replaced():
     assert factor_label("roe") == "加权净资产收益率（roe）"
     assert factor_label("not-a-factor") == "暂无中文名称（not-a-factor）"
     assert enum_label("asc") == "低值优先（asc）"
+    assert enum_label("published") == "同步完成（published）"
+    assert enum_label("verified") == "已验证（verified）"
     assert "资产负债率" in strategy_label(
         "composite:roe+debt_asset_ratio|top=3|monthly|commission=5"
     )

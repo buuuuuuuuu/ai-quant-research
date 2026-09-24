@@ -664,3 +664,92 @@ test("daily timeline links only saved identities and preserves missing values", 
   assert.match(html, /未记录/);
   assert.doesNotMatch(html, />0</);
 });
+
+test("completed data plan restores its frozen pool before automatic recheck", async () => {
+  const params = {
+    symbols: null,
+    stock_pool_id: "pool-frozen",
+    stock_pool_revision: 2,
+    start_date: "2025-01-01",
+    end_date: "2025-12-31",
+    candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }],
+    candidate_count: 1,
+    candidate_refresh: "monthly",
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+    buy_rule_mode: "all",
+    sell_rule_mode: "any",
+    exit_on_candidate_drop: false,
+    max_positions: 1,
+  };
+  const configuration = {
+    kind: "daily_signal",
+    label: "日线信号策略",
+    source_run_id: null,
+    params: { symbols: [] },
+    schema: { properties: Object.fromEntries(Object.keys(params).map((key) => [key, {}])) },
+    warnings: [],
+    missing_fields: [],
+    endpoint: "/api/v1/daily-signal-strategies",
+    scope: [],
+  };
+  const plan = {
+    plan_id: "data-plan-frozen",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      research_type: "daily_signal",
+      parameters: params,
+      resolved_symbols: ["688111"],
+      symbols_sha256: "b".repeat(64),
+    },
+    items: [{ symbol: "csi000300", dataset: "benchmark_daily_bar", status: "published" }],
+    task: { status: "succeeded", progress: 100 },
+  };
+  const h = harness(
+    "/backtests/daily-signals",
+    async (url) => {
+      if (url.includes("/configuration?")) return structuredClone(configuration);
+      if (url.endsWith("/plans/data-plan-frozen/preflight"))
+        return { ready: true, status: "ready", complete: true };
+      if (url.endsWith("/plans/data-plan-frozen")) return structuredClone(plan);
+      if (url.includes("/stock-pools?"))
+        return [{ pool_id: "pool-frozen", current_revision: 3, name: "当前版本" }];
+      throw Error("unexpected request " + url);
+    },
+    { search: "?data_plan=data-plan-frozen" },
+  );
+  await tick();
+  await tick();
+  assert.equal(h.element("center-error").textContent, "");
+  assert.equal(h.ui.currentParams().stock_pool_id, "pool-frozen");
+  assert.equal(h.ui.currentParams().stock_pool_revision, 2);
+  assert.equal(h.ui.currentParams().symbols, undefined);
+  assert.match(h.element("center-pool-preview").textContent, /r2 · 1 只：688111/);
+  assert.equal(h.element("center-submit").disabled, false);
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/plans/data-plan-frozen")).length,
+    1,
+  );
+  assert.equal(
+    h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies").length,
+    0,
+  );
+});
+
+test("data plan restore rejects missing or mismatched frozen identity", () => {
+  const base = { params: { symbols: [] }, warnings: [] };
+  assert.throws(
+    () => ui.restoreDataPlanConfiguration(base, { input: { research_type: "factor_lab" } }, "daily_signal"),
+    /类型/,
+  );
+  assert.throws(
+    () => ui.restoreDataPlanConfiguration(base, { input: { research_type: "daily_signal", parameters: {} } }, "daily_signal"),
+    /冻结股票范围/,
+  );
+  assert.deepEqual(
+    ui.normalizedParameterIdentity({ stock_pool_id: "pool-a", symbols: null }),
+    { stock_pool_id: "pool-a" },
+  );
+});

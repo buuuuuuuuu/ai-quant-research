@@ -525,6 +525,34 @@ const RunCenterUI = (() => {
       : "尚未确认：不会联网或下载";
     return `<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>`;
   }
+  function restoreDataPlanConfiguration(configuration, plan, expectedKind) {
+    const input = plan?.input;
+    if (input?.research_type !== expectedKind)
+      throw Error(`计划类型 ${known(input?.research_type)} 与当前页面 ${expectedKind} 不一致`);
+    if (!input.parameters || typeof input.parameters !== "object" || Array.isArray(input.parameters))
+      throw Error("补齐计划没有保存可恢复的策略参数");
+    if (!Array.isArray(input.resolved_symbols) || !input.resolved_symbols.length)
+      throw Error("补齐计划没有保存冻结股票范围，不能使用当前默认股票池替代");
+    const params = structuredClone(input.parameters);
+    // Keep an editable explicit-symbol field available without changing the
+    // frozen pool identity. currentParams removes it while a pool is selected.
+    if (params.stock_pool_id && params.symbols == null) params.symbols = [];
+    return {
+      ...configuration,
+      params,
+      scope: [...input.resolved_symbols],
+      source_run_id: null,
+      warnings: [
+        ...(configuration.warnings || []),
+        `已从补齐计划 ${plan.plan_id} 恢复冻结参数和 ${input.resolved_symbols.length} 只股票；尚未运行策略。`,
+      ],
+    };
+  }
+  function normalizedParameterIdentity(value) {
+    const normalized = structuredClone(value || {});
+    if (normalized.stock_pool_id) delete normalized.symbols;
+    return normalized;
+  }
   if (typeof module !== "undefined")
     module.exports = {
       table,
@@ -547,6 +575,8 @@ const RunCenterUI = (() => {
       display,
       resultSections,
       renderDataPlan,
+      restoreDataPlanConfiguration,
+      normalizedParameterIdentity,
     };
   if (typeof document === "undefined") return {};
   const $ = (id) => document.getElementById(id);
@@ -863,15 +893,27 @@ const RunCenterUI = (() => {
     const own = ++sequence;
     copy = null;
     checked = null;
-    let data;
+    let data,
+      restoredPlan = null;
     try {
       data = await get(
         freshKind
           ? "/api/v1/run-center/configuration?kind=" + freshKind
           : "/api/v1/run-center/copy?" + query,
       );
+      if (freshKind && query.has("data_plan")) {
+        restoredPlan = await get(
+          `/api/v1/research-data/plans/${encodeURIComponent(query.get("data_plan"))}`,
+        );
+        data = restoreDataPlanConfiguration(data, restoredPlan, freshKind);
+      }
     } catch (e) {
-      if (own === sequence) fail(e);
+      if (own === sequence)
+        fail(
+          query.has("data_plan")
+            ? Error("补齐计划恢复失败：" + e.message)
+            : e,
+        );
       return;
     }
     if (own !== sequence) return;
@@ -1069,10 +1111,10 @@ const RunCenterUI = (() => {
     $("center-preflight").hidden = !readinessKinds.has(data.kind);
     invalidate();
     if (freshKind) await loadPools(own);
-    if (query.has("data_plan") && copy.kind === "daily_signal") {
+    if (restoredPlan && copy.kind === "daily_signal") {
       const planOwn = planSequence;
       try {
-        const plan = await get(`/api/v1/research-data/plans/${encodeURIComponent(query.get("data_plan"))}`);
+        const plan = restoredPlan;
         if (planOwn === planSequence) {
           planPolls = 0;
           showDataPlan(plan);
@@ -1089,8 +1131,24 @@ const RunCenterUI = (() => {
       const pools = await get("/api/v1/stock-pools?include_archived=false");
       if (own !== sequence) return;
       const items = Array.isArray(pools) ? pools : pools.items;
+      const frozenValue = copy.params.stock_pool_id
+        ? `${copy.params.stock_pool_id}:${copy.params.stock_pool_revision}`
+        : null;
+      const frozenListed = items.some(
+        (item) => `${item.pool_id}:${item.current_revision}` === frozenValue,
+      );
       $("center-pool-selector").innerHTML =
-        `<label>范围来源<select id="center-select-pool"><option value="manual">手动股票代码（不冒充历史指数成分）</option>${items.map((p) => `<option value="${esc(p.pool_id)}:${p.current_revision}">${esc(p.name)} · r${p.current_revision}</option>`).join("")}</select></label><p id="center-pool-preview"></p>`;
+        `<label>范围来源<select id="center-select-pool"><option value="manual">手动股票代码（不冒充历史指数成分）</option>${frozenValue && !frozenListed ? `<option value="${esc(frozenValue)}">补齐计划冻结股票池 · r${esc(copy.params.stock_pool_revision)}</option>` : ""}${items.map((p) => `<option value="${esc(p.pool_id)}:${p.current_revision}">${esc(p.name)} · r${p.current_revision}</option>`).join("")}</select></label><p id="center-pool-preview"></p>`;
+      if (frozenValue) {
+        $("center-select-pool").value = frozenValue;
+        const manualInput = $("center-copy-form").querySelector?.('[data-param="symbols"]');
+        if (manualInput) manualInput.disabled = true;
+        $("center-pool-preview").textContent =
+          `已恢复计划冻结范围 ${copy.params.stock_pool_id} · r${copy.params.stock_pool_revision} · ${copy.scope.length} 只：${copy.scope.join(" ")}`;
+      } else if (copy.scope?.length) {
+        $("center-pool-preview").textContent =
+          `已恢复计划明确范围 · ${copy.scope.length} 只：${copy.scope.join(" ")}`;
+      }
       $("center-select-pool").addEventListener("change", async () => {
         const generation = ++poolSequence;
         invalidate();
@@ -1162,7 +1220,7 @@ const RunCenterUI = (() => {
     }
     return params;
   }
-  const paramsKey = (value) => JSON.stringify(value);
+  const paramsKey = (value) => JSON.stringify(normalizedParameterIdentity(value));
   function setPlanUrl(planId) {
     const query = new URLSearchParams(location.search);
     if (planId) query.set("data_plan", planId);

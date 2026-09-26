@@ -1641,6 +1641,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "daily signal run not found") from exc
 
+    @app.get("/api/v1/daily-signal-runs/{run_id}/price-signals")
+    def get_daily_signal_price_signals(
+        run_id: str,
+        symbol: Annotated[str, Query(pattern=r"^[0-9]{6}$")],
+        limit: Annotated[int, Query(ge=100, le=2_000)] = 1_200,
+    ) -> dict[str, Any]:
+        try:
+            return daily_signal_repository.price_signals(run_id, symbol, limit=limit)
+        except KeyError as exc:
+            raise HTTPException(404, "price and signal artifact not found") from exc
+
     @app.get("/api/v1/daily-signal-runs/{run_id}/downloads/{filename}")
     def download_daily_signal_file(run_id: str, filename: str) -> FileResponse:
         try:

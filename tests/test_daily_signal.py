@@ -17,7 +17,11 @@ from ai_quant_assistant.domain.models import (
     DailySignalStrategySpec,
     FactorComponent,
 )
-from ai_quant_assistant.reports.daily_signal_writer import DailySignalReportWriter
+from ai_quant_assistant.reports.daily_signal_writer import (
+    DailySignalReportWriter,
+    daily_signal_chart,
+    daily_signal_result_view,
+)
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
 
 
@@ -299,6 +303,88 @@ def test_nav_cash_positions_and_open_end_state_reconcile(tmp_path):
     assert result["diagnostics"]["open_positions"] == ["600519"]
 
 
+def test_result_view_uses_saved_account_orders_and_final_positions_only():
+    nav = pd.DataFrame(
+        [
+            {
+                "date": "2024-01-02",
+                "cash": 1000.0,
+                "position_value": 0.0,
+                "portfolio_value": 1000.0,
+                "portfolio_nav": 1.0,
+                "benchmark_nav": 1.0,
+                "total_cost": 0.0,
+            },
+            {
+                "date": "2024-01-03",
+                "cash": 380.0,
+                "position_value": 650.0,
+                "portfolio_value": 1030.0,
+                "portfolio_nav": 1.03,
+                "benchmark_nav": 1.01,
+                "total_cost": 2.0,
+            },
+        ]
+    )
+    orders = pd.DataFrame(
+        [
+            {"side": "buy", "status": "executed", "shares": 100, "notional": 620.0},
+            {
+                "side": "sell",
+                "status": "blocked",
+                "shares": 100,
+                "reason": "t_plus_one",
+                "next_action": "retry_next_trading_day",
+            },
+        ]
+    )
+    positions = pd.DataFrame(
+        [
+            {"date": "2024-01-02", "symbol": "600519", "market_value": 610.0},
+            {
+                "date": "2024-01-03",
+                "symbol": "600519",
+                "shares": 100,
+                "price": 6.5,
+                "market_value": 650.0,
+                "pending_exit": True,
+            },
+        ]
+    )
+    view = daily_signal_result_view(
+        spec={"initial_capital": 1000.0},
+        metrics={"total_return": 0.03, "total_transaction_cost": 2.0},
+        nav=nav,
+        orders=orders,
+        positions=positions,
+        diagnostics={"open_positions": ["600519"], "open_exit_intents": ["600519"]},
+    )
+    assert view["account"]["final_cash"] == 380.0
+    assert view["account"]["buy_execution_count"] == 1
+    assert view["account"]["sell_execution_count"] == 0
+    assert view["account"]["unfilled_count"] == 1
+    assert len(view["executed"]) == 1 and len(view["unfilled"]) == 1
+    assert view["final_positions"][0]["asset_ratio"] == pytest.approx(650 / 1030)
+    assert "realized_pnl" not in view["final_positions"][0]
+
+
+def test_daily_signal_chart_has_axes_ticks_and_preserves_missing_gaps():
+    chart = daily_signal_chart(
+        pd.DataFrame(
+            [
+                {"date": "2024-01-02", "portfolio_nav": 1.0, "benchmark_nav": 1.0},
+                {"date": "2024-01-03", "portfolio_nav": None, "benchmark_nav": 1.0},
+                {"date": "2024-01-04", "portfolio_nav": 1.0, "benchmark_nav": 1.0},
+            ]
+        )
+    )
+    assert chart["x_ticks"][0]["label"] == "2024-01-02"
+    assert chart["x_ticks"][-1]["label"] == "2024-01-04"
+    assert len(chart["y_ticks"]) == 6
+    assert len(chart["segments"]["portfolio_nav"]) == 2
+    assert len(chart["segments"]["benchmark_nav"]) == 1
+
+
 def test_existing_factor_backtest_artifacts_are_not_reused(tmp_path):
     result, _ = _run(tmp_path)
     assert "/daily-signals/" in result["artifacts"]["run_manifest"]
@@ -312,7 +398,19 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
         tmp_path,
         spec=spec,
         metrics={},
-        nav=pd.DataFrame(columns=["date", "portfolio_nav"]),
+        nav=pd.DataFrame(
+            [
+                {
+                    "date": "2024-01-05",
+                    "cash": 1000.0,
+                    "position_value": 0.0,
+                    "portfolio_value": 1000.0,
+                    "portfolio_nav": 1.0,
+                    "benchmark_nav": 1.0,
+                    "total_cost": 0.0,
+                }
+            ]
+        ),
         signals=pd.DataFrame(
             [
                 {
@@ -362,6 +460,12 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
     assert "信号 → 指令 → 成交或未成交" in html
     assert "资金不足或不足一手（insufficient_cash_or_round_lot）" in html
     assert "MA(5) 上穿 MA(20)" in html
+    assert "累计净值（初始值=1.00）" in html
+    assert "策略累计净值" in html and "基准累计净值" in html
+    assert "账户结果概览" in html
+    assert "实际成交明细" in html
+    assert "回测结束日持仓" in html
+    assert "未成交与等待退出" in html
 
 
 def test_api_history_copy_report_and_read_only_configuration(tmp_path):

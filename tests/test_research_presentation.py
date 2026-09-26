@@ -32,6 +32,11 @@ def test_catalog_uses_existing_definitions_and_unknown_codes_are_not_replaced():
     assert enum_label("asc") == "低值优先（asc）"
     assert enum_label("published") == "同步完成（published）"
     assert enum_label("verified") == "已验证（verified）"
+    assert enum_label("future-status") == "future-status（暂无中文说明）"
+    terms = presentation_catalog()["terms"]
+    assert terms["nav"]["code"] == "portfolio_nav"
+    assert "不代表持仓资金比例" in terms["factor_weight"]["short"]
+    assert "未复权开盘参考价" in terms["execution"]["calculation"]
     assert "资产负债率" in strategy_label(
         "composite:roe+debt_asset_ratio|top=3|monthly|commission=5"
     )

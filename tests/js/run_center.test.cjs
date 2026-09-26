@@ -30,7 +30,8 @@ function harness(
   options = {},
 ) {
   const elements = new Map(),
-    calls = [];
+    calls = [],
+    assigned = [];
   const element = (id) => {
     if (!elements.has(id))
       elements.set(id, {
@@ -60,8 +61,9 @@ function harness(
   const location = {
     pathname,
     search: options.search || "?source=task&record=original",
-    assign() {
-      throw Error("unexpected redirect");
+    assign(value) {
+      if (!options.allowRedirect) throw Error("unexpected redirect");
+      assigned.push(value);
     },
   };
   const context = vm.createContext({
@@ -96,6 +98,7 @@ function harness(
     context,
     element,
     calls,
+    assigned,
     ui: vm.runInContext("RunCenterUI", context),
   };
 }
@@ -398,6 +401,17 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     factors: { roe: "加权净资产收益率", debt_asset_ratio: "资产负债率" },
     enums: { desc: "高值优先", asc: "低值优先", monthly: "按月" },
     fields: { factor: "因子" },
+    terms: {
+      nav: {
+        label: "累计净值",
+        short: "把初始资金看作 1.00。",
+        professional: "累计净值（NAV）",
+        calculation: "账户总资产除以初始资金。",
+        example: "1.08 表示增长约 8%。",
+        limitations: "不是股票价格。",
+        code: "portfolio_nav",
+      },
+    },
   };
   const h = harness(
     "/backtests/detail",
@@ -413,6 +427,10 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     /资产负债率/,
   );
   assert.match(h.ui.factorName("unknown"), /暂无中文名称（unknown）/);
+  const help = h.ui.termHelp("nav");
+  assert.match(help, /aria-expanded="false"/);
+  assert.match(help, /data-term-close/);
+  assert.match(help, /账户总资产除以初始资金/);
   h.element("center-copy-form").inputs = [
     { dataset: { param: "symbols", type: "symbols" }, value: "600519 000001" },
   ];
@@ -752,4 +770,104 @@ test("data plan restore rejects missing or mismatched frozen identity", () => {
     ui.normalizedParameterIdentity({ stock_pool_id: "pool-a", symbols: null }),
     { stock_pool_id: "pool-a" },
   );
+});
+
+test("nav chart keeps axes, legend, end ticks, gaps, and selected markers", () => {
+  const rows = [
+    { date: "2024-01-02", portfolio_nav: 1, benchmark_nav: 1, cash: 1000, position_value: 0, portfolio_value: 1000, total_cost: 0 },
+    { date: "2024-01-03", portfolio_nav: null, benchmark_nav: 1.01 },
+    { date: "2024-01-04", portfolio_nav: 1.02, benchmark_nav: 1.01, cash: 400, position_value: 620, portfolio_value: 1020, total_cost: 2 },
+  ];
+  const model = ui.navChartModel(rows, 2);
+  assert.equal(model.xTicks[0].label, "2024-01-02");
+  assert.equal(model.xTicks.at(-1).label, "2024-01-04");
+  assert.equal(model.segments.portfolio_nav.length, 2);
+  assert.equal(model.yTicks.length, 6);
+  const html = ui.renderNavChart(rows, 2);
+  assert.match(html, /累计净值（初始值=1.00）/);
+  assert.match(html, /策略累计净值/);
+  assert.match(html, /基准累计净值/);
+  assert.match(html, /nav-selection/);
+  assert.match(html, /strategy-point/);
+  assert.match(html, /benchmark-point/);
+  assert.doesNotMatch(html, />价格</);
+});
+
+test("daily result separates executions, unfilled orders, and final positions", () => {
+  const view = ui.dailyResultView(
+    {
+      series: [
+        { date: "2024-01-03", cash: 380, position_value: 650, portfolio_value: 1030, portfolio_nav: 1.03, benchmark_nav: 1.01, total_cost: 2 },
+      ],
+      orders: [
+        { symbol: "600519", side: "buy", status: "executed", shares: 100, notional: 620, cost: 2 },
+        { symbol: "600519", side: "sell", status: "blocked", reason: "t_plus_one", next_action: "retry_next_trading_day" },
+      ],
+      positions: [
+        { date: "2024-01-02", symbol: "600519", market_value: 610 },
+        { date: "2024-01-03", symbol: "600519", shares: 100, price: 6.5, market_value: 650, pending_exit: true },
+      ],
+      diagnostics: { open_positions: ["600519"], open_exit_intents: ["600519"] },
+      metrics: { total_return: 0.03 },
+    },
+    { initial_capital: 1000 },
+  );
+  assert.equal(view.executed.length, 1);
+  assert.equal(view.unfilled.length, 1);
+  assert.equal(view.account.buy_execution_count, 1);
+  assert.equal(view.account.sell_execution_count, 0);
+  assert.equal(view.finalPositions.length, 1);
+  assert.equal(view.finalPositions[0].asset_ratio, 650 / 1030);
+  assert.match(ui.renderExecutedTrades(view.executed), /620\.00/);
+  assert.doesNotMatch(ui.renderExecutedTrades(view.executed), /t_plus_one/);
+  assert.match(ui.renderUnfilledOrders(view.unfilled), /t_plus_one/);
+});
+
+test("successful daily signal submission redirects to exact highlighted history task", async () => {
+  const daily = {
+    kind: "daily_signal",
+    label: "日线信号策略",
+    source_run_id: "source-run",
+    params: {
+      symbols: ["600519"], start_date: "2024-01-01", end_date: "2024-12-31",
+      candidate_factors: [{ code: "roe", direction: "desc", weight: 1 }],
+      candidate_count: 1, candidate_refresh: "monthly",
+      buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+      sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+      buy_rule_mode: "all", sell_rule_mode: "any", exit_on_candidate_drop: false,
+      max_positions: 1,
+    },
+    schema: { properties: {} }, warnings: [], missing_fields: [], scope: ["600519"],
+    endpoint: "/api/v1/daily-signal-strategies",
+  };
+  daily.schema.properties = Object.fromEntries(Object.keys(daily.params).map((key) => [key, {}]));
+  const h = harness(
+    "/backtests/configure",
+    async (url) => url.includes("/copy?") ? structuredClone(daily) : url.includes("preflight") ? { ready: true, status: "ready" } : { task_id: "task-123" },
+    { allowRedirect: true },
+  );
+  await tick();
+  await h.ui.preflight();
+  h.element("center-review").querySelector = () => null;
+  await h.ui.submit({ preventDefault() {} });
+  await h.ui.submit({ preventDefault() {} }, true);
+  assert.deepEqual(h.assigned, ["/backtests/history?kind=daily_signal&submitted=task-123"]);
+  assert.equal(h.calls.filter((call) => call.options.method === "POST" && call.url === daily.endpoint).length, 1);
+});
+
+test("submitted history uses one exact task read and highlights persisted status", async () => {
+  const h = harness(
+    "/backtests/history",
+    async (url) => url.startsWith("/api/v1/run-center?")
+      ? { items: [], total: 0, notice: "bounded" }
+      : { task_id: "task-123", status: "succeeded", progress: 100, run_id: "daily-signal-run" },
+    { search: "?kind=daily_signal&submitted=task-123" },
+  );
+  await tick();
+  await tick();
+  assert.equal(h.element("center-kind").value, "daily_signal");
+  assert.match(h.element("center-submitted-task").innerHTML, /task-123/);
+  assert.match(h.element("center-submitted-task").innerHTML, /回测已完成/);
+  assert.equal(h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies/task-123").length, 1);
+  assert.ok(h.calls.every((call) => !call.url.includes("daily-signal-strategies?")));
 });

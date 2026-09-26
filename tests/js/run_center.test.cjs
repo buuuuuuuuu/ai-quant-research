@@ -869,6 +869,8 @@ test("data plan separates completed gaps from real download failures", () => {
   const html = ui.renderDataPlan(completed);
   assert.match(html, /同步已完成，但最终检查仍有数据缺口/);
   assert.match(html, /排除缺失历史时点，不会填零/);
+  assert.match(html, /查看最终预检、受影响股票和日期/);
+  assert.match(html, /财务因子/);
   assert.match(html, /执行结束（存在问题） · 100%/);
   assert.doesNotMatch(html, /95%/);
   assert.equal(ui.dataPlanExecutionSummary(completed).retryable, 0);

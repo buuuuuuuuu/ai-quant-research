@@ -777,7 +777,10 @@ const RunCenterUI = (() => {
     const taskText = task
       ? `${taskStatusLabels[task.status] || `${task.status}（暂无中文说明）`} · ${known(progress)}% · ${task.message || task.error || "等待更新"}`
       : "尚未确认：不会联网或下载";
-    return `${dataPlanOutcomeNotice(plan)}<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>补齐结果</dt><dd>${esc(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>`;
+    const finalReport = plan.report
+      ? `<details><summary>查看最终预检、受影响股票和日期</summary>${renderPreflight(plan.report)}</details>`
+      : "";
+    return `${dataPlanOutcomeNotice(plan)}<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>补齐结果</dt><dd>${esc(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>${finalReport}`;
   }
   function restoreDataPlanConfiguration(configuration, plan, expectedKind) {
     const input = plan?.input;

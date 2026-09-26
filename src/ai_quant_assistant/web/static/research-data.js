@@ -12,9 +12,51 @@ function updateResearchDataControls() {
   const hasPlan = Boolean(plan?.input_sha256 && Array.isArray(plan.items));
   $("#research-data-create").disabled = waiting || !request || preflightStatus !== "checked" || hasPlan;
   $("#research-data-confirm").disabled = waiting || failedCheck || !hasPlan || plan.status !== "draft" || !plan.items.length;
-  $("#research-data-retry").disabled = waiting || failedCheck || !hasPlan || plan.task?.status !== "failed" || !plan.items.length;
+  $("#research-data-retry").disabled = waiting || failedCheck || !hasPlan || plan.task?.status !== "failed" || researchDataRetryableCount(plan) < 1;
   $("#research-data-refresh").disabled = waiting || !hasPlan;
   $("#research-data-recheck").disabled = waiting || !hasPlan;
+}
+
+function researchDataExecutionSummary(plan = {}) {
+  if (plan.execution_summary) return plan.execution_summary;
+  const summary = {total:0,published:0,verified:0,failed:0,pending:0,retryable:0,unknown:0};
+  for (const item of plan.items || []) {
+    summary.total++;
+    const status = item.status || "pending";
+    if (["published","verified","failed"].includes(status)) summary[status]++;
+    else if (["pending","planned","fetching"].includes(status)) summary.pending++;
+    else summary.unknown++;
+    if (["failed","pending","planned","fetching"].includes(status)) summary.retryable++;
+  }
+  return summary;
+}
+
+function researchDataRetryableCount(plan) {
+  return Number(researchDataExecutionSummary(plan).retryable || 0);
+}
+
+function researchDataOutcome(plan = {}) {
+  if (plan.outcome) return plan.outcome;
+  const summary = researchDataExecutionSummary(plan);
+  if (["queued","running"].includes(plan.task?.status)) return plan.task.status;
+  if (plan.task?.status === "failed") return summary.failed ? "download_failed" : summary.retryable ? "interrupted" : "unknown";
+  if (plan.task?.status === "succeeded" || plan.status === "succeeded") return plan.report?.complete ? "ready" : "completed_with_gaps";
+  return "planned";
+}
+
+function researchDataOutcomeHtml(plan) {
+  const outcome = researchDataOutcome(plan), summary = researchDataExecutionSummary(plan);
+  const counts = `计划项已处理完成：同步完成 ${summary.published || 0} 项、验证完成 ${summary.verified || 0} 项、失败 ${summary.failed || 0} 项、待处理 ${summary.pending || 0} 项${summary.unknown ? `、未知 ${summary.unknown} 项` : ""}。`;
+  if (outcome === "ready") return `<p class="positive"><strong>补齐完成，数据检查通过。</strong> ${escapeHtml(counts)}研究仍需单独确认执行。</p>`;
+  if (outcome === "completed_with_gaps") {
+    const financial = (plan.report?.checks || []).filter(check => check.dataset === "financial_metric" && check.satisfied !== true);
+    const exclude = plan.input?.parameters?.missing_policy === "exclude" && financial.length
+      ? " 当前策略会排除这些历史时点的缺失样本，不会填零；是否可以运行仍以最新预检为准。"
+      : " 是否可以运行仍以最新预检为准。";
+    return `<p class="page-notice"><strong>同步已经完成，但最终检查仍有数据缺口。</strong> ${escapeHtml(counts)}这不代表行情、公告接口或后台任务失败；重复下载相同范围通常无法解决。${escapeHtml(exclude)}可重新检查本地数据、查看下方受影响日期，或返回修改策略。</p>`;
+  }
+  if (["download_failed","interrupted"].includes(outcome)) return `<p class="negative"><strong>${outcome === "download_failed" ? "存在真实同步失败" : "补齐任务被中断"}。</strong> ${escapeHtml(counts)}只有 ${escapeHtml(summary.retryable || 0)} 个失败或未处理项可以重试；已发布或已验证项目不会重新下载。</p>`;
+  return `<p class="page-notice">${escapeHtml(counts)}${outcome === "unknown" ? "无法从该历史计划可靠判断执行结果，请查看原错误和检查明细。" : "尚未开始下载。"}</p>`;
 }
 
 function beginResearchDataContext({scroll = true} = {}) {
@@ -79,7 +121,11 @@ function renderResearchDataPlan(plan) {
   researchDataState.preflightStatus = "checked";
   const task = plan.task;
   $("#research-data-input").textContent = JSON.stringify(plan.input, null, 2);
-  $("#research-data-plan").innerHTML = `<p>${escapeHtml(plan.plan_id)} · version ${escapeHtml(plan.version)} · ${escapeHtml(plan.status)}</p><p>${escapeHtml(plan.network_notice)}</p><p>${escapeHtml(task ? `${task.task_id} · ${task.status} · ${task.progress}% · ${task.error || task.message}` : "尚未确认，不会下载")}</p><ul>${plan.items.map((item) => `<li>${escapeHtml(item.symbol)} ${escapeHtml(item.dataset)} ${escapeHtml(item.adjustment || "")}：${escapeHtml(item.start_date)} → ${escapeHtml(item.end_date)}；约 ${escapeHtml(item.estimated_partitions ?? "未知")} 分区；${escapeHtml(item.status)}；${escapeHtml(item.reason)} ${escapeHtml(item.attempts?.at(-1)?.error || "")}</li>`).join("")}</ul>`;
+  const outcome = researchDataOutcome(plan);
+  const outcomeLabels = {ready:"同步完成且检查通过",completed_with_gaps:"同步完成但仍有数据缺口",download_failed:"数据同步失败",interrupted:"任务中断",queued:"等待执行",running:"正在执行",planned:"尚未执行",unknown:"结果未知"};
+  const taskStatusLabels = {queued:"等待执行",running:"正在执行",succeeded:"执行完成",failed:"执行结束（存在问题）"};
+  const progress = task && ["succeeded","failed"].includes(task.status) ? 100 : task?.progress;
+  $("#research-data-plan").innerHTML = `<p>${escapeHtml(plan.plan_id)} · version ${escapeHtml(plan.version)} · ${escapeHtml(plan.status)}</p>${researchDataOutcomeHtml(plan)}<p>${escapeHtml(plan.network_notice)}</p><p>${escapeHtml(task ? `${task.task_id} · ${taskStatusLabels[task.status] || `${task.status}（暂无中文说明）`} · ${progress}% · ${task.error || task.message}` : "尚未确认，不会下载")}</p><p>补齐结果：${escapeHtml(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</p><ul>${plan.items.map((item) => `<li>${escapeHtml(item.symbol)} ${escapeHtml(item.dataset)} ${escapeHtml(item.adjustment || "")}：${escapeHtml(item.start_date)} → ${escapeHtml(item.end_date)}；约 ${escapeHtml(item.estimated_partitions ?? "未知")} 分区；${escapeHtml(item.status)}；${escapeHtml(item.reason)} ${escapeHtml(item.attempts?.at(-1)?.error || "")}</li>`).join("")}</ul>`;
   $("#research-data-report").innerHTML = researchReadinessHtml(plan.report);
   updateResearchDataControls();
 }
@@ -105,8 +151,11 @@ async function researchDataAction(action) {
       const root = `/api/v1/research-data/plans/${encodeURIComponent(plan.plan_id)}`;
       if (action === "confirm" || action === "retry") {
         if (researchDataState.preflightStatus !== "checked") throw new Error("当前预检未完成或失败，请重新检查冻结参数后再确认。");
-        if (!plan.items?.length || (action === "confirm" ? plan.status !== "draft" : plan.task?.status !== "failed")) throw new Error("当前计划没有可执行的补齐项，或状态已变化，请重新查看计划。");
-        if (!window.confirm(`确认${action === "retry" ? "重试" : "执行"}上述 ${plan.plan_id} version ${plan.version} 的补齐项？将访问公网；成功项先重新检查，失败项可能重新拉取。不执行研究，不下载 PDF。`)) return;
+        if (!plan.items?.length || (action === "confirm" ? plan.status !== "draft" : plan.task?.status !== "failed" || researchDataRetryableCount(plan) < 1)) throw new Error("当前计划没有可执行的补齐项，或状态已变化，请重新查看计划。");
+        const notice = action === "retry"
+          ? `确认重试上述 ${plan.plan_id} version ${plan.version} 的 ${researchDataRetryableCount(plan)} 个真实失败或未处理项？将访问公网；已发布和已验证项目不会重新下载。`
+          : `确认执行上述 ${plan.plan_id} version ${plan.version} 的补齐项？将访问公网；不会执行研究，不下载 PDF。`;
+        if (!window.confirm(notice)) return;
         await requestJson(`${root}/${action}`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({version:plan.version,input_sha256:plan.input_sha256,confirm:true})});
         if (generation !== researchDataState.generation) return;
         await refreshResearchDataPlan();

@@ -278,6 +278,25 @@ test("button permissions follow persisted plan state; empty plan cannot confirm 
   assert.equal(h.element("#research-data-refresh").disabled,false);
 });
 
+test("completed gaps are shown as finished and cannot retry published items", async () => {
+  const h=harness(() => assert.fail("no request"));
+  h.setPlan({...plan,status:"failed",outcome:"completed_with_gaps",execution_summary:{total:1,published:1,verified:0,failed:0,pending:0,unknown:0,retryable:0},items:[{...plan.items[0],status:"published"}],task:{status:"failed",progress:95,error:"补齐已执行，但研究数据仍有缺口"}});
+  assert.equal(h.element("#research-data-retry").disabled,true);
+  assert.match(h.element("#research-data-plan").innerHTML,/同步已经完成，但最终检查仍有数据缺口/);
+  assert.match(h.element("#research-data-plan").innerHTML,/执行结束（存在问题） · 100%/);
+  assert.doesNotMatch(h.element("#research-data-plan").innerHTML,/95%/);
+});
+
+test("real failed item remains retryable while successful items are described as skipped", async () => {
+  const h=harness(() => assert.fail("cancelled before request"),false);
+  h.setPlan({...plan,status:"failed",outcome:"download_failed",execution_summary:{total:2,published:1,verified:0,failed:1,pending:0,unknown:0,retryable:1},items:[{...plan.items[0],status:"published"},{...plan.items[0],symbol:"000001",status:"failed"}],task:{status:"failed",progress:100,error:"provider timeout"}});
+  assert.equal(h.element("#research-data-retry").disabled,false);
+  assert.match(h.element("#research-data-plan").innerHTML,/存在真实同步失败/);
+  assert.match(h.element("#research-data-plan").innerHTML,/已发布或已验证项目不会重新下载/);
+  await h.context.researchDataAction("retry");
+  assert.equal(h.calls.length,0);
+});
+
 test("failed frozen recheck clears the report and blocks confirmation until a successful recheck", async () => {
   let fail = true;
   const h=harness(() => {if(fail) throw new Error("无法读取当前数据");return report;});h.setPlan();

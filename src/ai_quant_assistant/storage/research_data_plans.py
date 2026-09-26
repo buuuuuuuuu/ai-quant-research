@@ -35,6 +35,8 @@ class DataPlanConflict(RuntimeError):
 
 class ResearchDataPlans:
     dataset = "research_data_plan"
+    retryable_item_statuses = frozenset({"pending", "planned", "fetching", "failed"})
+    completed_item_statuses = frozenset({"published", "verified"})
 
     def __init__(self, database, settings: Settings | None = None, provider_factory=None):
         self.database = database
@@ -98,7 +100,72 @@ class ResearchDataPlans:
         plan["network_notice"] = (
             "确认后访问公网，仅行情/基准/必要公告元数据/财务；不下载 PDF，不运行研究。"
         )
-        return plan
+        return self._decorate(plan)
+
+    @classmethod
+    def _execution_summary(cls, items):
+        counts = {
+            "total": len(items),
+            "published": 0,
+            "verified": 0,
+            "failed": 0,
+            "pending": 0,
+            "unknown": 0,
+            "retryable": 0,
+        }
+        for item in items:
+            status = item.get("status") or "pending"
+            if status in cls.completed_item_statuses | {"failed"}:
+                counts[status] += 1
+            elif status in cls.retryable_item_statuses:
+                counts["pending"] += 1
+            else:
+                counts["unknown"] += 1
+            if status in cls.retryable_item_statuses:
+                counts["retryable"] += 1
+        counts["processed"] = counts["published"] + counts["verified"] + counts["failed"]
+        return counts
+
+    @classmethod
+    def _decorate(cls, plan):
+        summary = cls._execution_summary(plan.get("items", []))
+        report = plan.get("report") or {}
+        readiness = {
+            "ready": report.get("ready"),
+            "complete": report.get("complete"),
+            "blocker_count": len(report.get("blockers") or []),
+            "warning_count": len(report.get("warnings") or []),
+            "unresolved_check_count": sum(
+                check.get("satisfied") is not True for check in report.get("checks") or []
+            ),
+        }
+        task = plan.get("task") or {}
+        task_status = task.get("status")
+        if task_status in {"queued", "running"}:
+            outcome = task_status
+        elif task_status == "failed":
+            if summary["failed"]:
+                outcome = "download_failed"
+            elif summary["retryable"]:
+                outcome = "interrupted"
+            elif (
+                report.get("complete") is False
+                and "补齐已执行，但研究数据仍有缺口" in (task.get("error") or "")
+            ):
+                # Historical plans used failed/95% for this completed execution.
+                outcome = "completed_with_gaps"
+            else:
+                outcome = "interrupted"
+        elif task_status == "succeeded" or plan.get("status") == "succeeded":
+            outcome = "ready" if report.get("complete") is True else "completed_with_gaps"
+        else:
+            outcome = "planned"
+        return {
+            **plan,
+            "outcome": outcome,
+            "execution_summary": summary,
+            "readiness": readiness,
+        }
 
     def list(self, *, limit=50):
         with self.database.connect(read_only=True) as connection:
@@ -269,6 +336,17 @@ class ResearchDataPlans:
             self._management(connection, plan["input"])
             if plan["status"] == "failed" and not retry:
                 raise DataPlanConflict("失败计划请明确确认重试")
+            if retry:
+                retryable = [
+                    item
+                    for item in plan["items"]
+                    if item.get("status") in self.retryable_item_statuses
+                ]
+                if plan["status"] not in {"failed", "confirmed"} or not retryable:
+                    raise DataPlanConflict(
+                        "当前计划没有真实失败或未处理项；请重新检查本地数据，"
+                        "如需刷新上游数据请基于当前参数创建新计划"
+                    )
             task, created = self.tasks.create_or_get_active(
                 "sync",
                 claim_key=f"data-plan:{plan_id}:{version}",
@@ -279,8 +357,9 @@ class ResearchDataPlans:
                     "input_sha256": input_sha256,
                     "management": plan["input"]["management"],
                     "actor": actor,
+                    "retry_only": retry,
                 },
-                message="等待已确认研究数据补齐",
+                message="等待重试真实失败或未处理分区" if retry else "等待已确认研究数据补齐",
                 connection=connection,
             )
             if created:
@@ -363,8 +442,21 @@ class ResearchDataPlans:
                 self.fence(connection, task_id, owner, spec)
                 self.audit(connection, "started", plan, spec["actor"], task_id=task_id)
             items = plan["items"]
+            run_items = (
+                [
+                    item
+                    for item in items
+                    if item.get("status") in self.retryable_item_statuses
+                ]
+                if spec.get("retry_only")
+                else items
+            )
+            if not run_items:
+                raise DataPlanConflict(
+                    "当前计划没有真实失败或未处理项；不会重复下载已发布或已验证的数据"
+                )
             errors = []
-            for index, item in enumerate(items):
+            for index, item in enumerate(run_items):
                 with guarded.connect(read_only=True):
                     pass
                 current = self.readiness.check(
@@ -427,51 +519,76 @@ class ResearchDataPlans:
                     connection.execute(
                         "UPDATE operation_task SET progress=?,message=?,heartbeat_at=CURRENT_TIMESTAMP WHERE task_id=?",
                         [
-                            min(95, 5 + int(90 * (index + 1) / len(items))),
-                            f"补齐项 {index + 1}/{len(items)}",
+                            min(95, 5 + int(90 * (index + 1) / len(run_items))),
+                            f"补齐项 {index + 1}/{len(run_items)}",
                             task_id,
                         ],
                     )
             report = self.readiness.check(plan["input"])
-            success = not errors and report["complete"]
-            error = (
-                None
-                if success
-                else (
-                    "；".join(errors)
-                    or "补齐已执行，但研究数据仍有缺口；请查看逐股票诊断，不自动运行研究"
-                )
+            summary = self._execution_summary(items)
+            execution_succeeded = (
+                not errors
+                and summary["failed"] == 0
+                and summary["pending"] == 0
+                and summary["unknown"] == 0
+            )
+            outcome = (
+                "ready"
+                if execution_succeeded and report["complete"]
+                else "completed_with_gaps"
+                if execution_succeeded
+                else "download_failed"
+            )
+            error = None if execution_succeeded else (
+                "；".join(errors)
+                or "补齐任务仍有真实失败或未处理项；只会重试这些分区"
+            )
+            message = (
+                "补齐完成，数据检查通过；研究仍需单独操作"
+                if outcome == "ready"
+                else "同步完成，但最终预检仍有数据缺口；不会自动运行研究"
+                if outcome == "completed_with_gaps"
+                else "数据同步存在真实失败或未处理分区；可明确确认后重试"
             )
             with self.transaction() as connection:
                 self.fence(connection, task_id, owner, spec)
                 connection.execute(
                     "UPDATE research_data_plan SET status=?,report_json=?,updated_at=CURRENT_TIMESTAMP WHERE plan_id=?",
-                    ["succeeded" if success else "failed", encoded(report), plan["plan_id"]],
+                    [
+                        "succeeded" if execution_succeeded else "failed",
+                        encoded(report),
+                        plan["plan_id"],
+                    ],
                 )
                 connection.execute(
                     "UPDATE operation_task SET status=?,progress=?,message=?,result_json=?,error=?,"
                     "completed_at=CURRENT_TIMESTAMP,heartbeat_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,"
                     "claim_key=CASE WHEN ? THEN claim_key ELSE NULL END WHERE task_id=?",
                     [
-                        "succeeded" if success else "failed",
-                        100 if success else 95,
-                        "补齐后预检完成；研究仍需单独操作"
-                        if success
-                        else "部分补齐或失败，请查看计划诊断",
-                        encoded({"plan_id": plan["plan_id"], "report": report})
-                        if success
-                        else None,
+                        "succeeded" if execution_succeeded else "failed",
+                        100,
+                        message,
+                        encoded(
+                            {
+                                "plan_id": plan["plan_id"],
+                                "report": report,
+                                "outcome": outcome,
+                                "execution_summary": summary,
+                            }
+                        ),
                         error[:2000] if error else None,
-                        success,
+                        execution_succeeded,
                         task_id,
                     ],
                 )
                 self.audit(
                     connection,
-                    "completed" if success else "failed",
+                    "completed" if execution_succeeded else "failed",
                     plan,
                     spec["actor"],
                     task_id=task_id,
+                    outcome=outcome,
+                    execution_summary=summary,
                 )
         except Exception as exc:
             # CAS cannot overwrite a reclaimed owner. Do not write plan results
@@ -487,7 +604,7 @@ class ResearchDataPlans:
                         plan = self._get(connection, spec["plan_id"])
                         connection.execute(
                             "UPDATE operation_task SET status='failed',error=?,message='补齐中断，可安全重试',"
-                            "progress=LEAST(progress,99),result_json=NULL,claim_key=NULL,"
+                            "progress=100,result_json=NULL,claim_key=NULL,"
                             "completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE task_id=?",
                             [str(exc)[:2000], task_id],
                         )

@@ -23,6 +23,11 @@ from ai_quant_assistant.reports.daily_signal_writer import (
     daily_signal_result_view,
 )
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
+from ai_quant_assistant.research.daily_signal_audit import (
+    build_account_audit,
+    digest,
+    git_commit_sha,
+)
 
 
 def test_daily_signal_request_has_actionable_chinese_validation():
@@ -111,6 +116,79 @@ def test_close_signal_executes_at_next_open_and_writes_trace(tmp_path):
     assert result["summary"]["signal_count"] == len(signals)
     assert result["summary"]["order_attempt_count"] == len(orders)
     assert result["summary"]["executed_order_count"] == 1
+
+
+def test_new_run_records_trade_audit_account_checks_and_reproducibility(tmp_path):
+    result, _ = _run(tmp_path, _spec(commission_bps=10, slippage_bps=20))
+    orders = pd.read_csv(result["artifacts"]["orders_csv"], dtype={"symbol": str})
+    buy = orders.loc[orders.status.eq("executed")].iloc[0]
+    assert buy.signal_id == "signal-000001"
+    assert buy.cash_before == pytest.approx(100_000)
+    assert buy.cash_after == pytest.approx(buy.cash_before - buy.notional - buy.cost)
+    assert buy.position_shares_before == 0
+    assert buy.position_shares_after == buy.shares
+    assert buy.commission_cost == pytest.approx(buy.notional * 10 / 10_000)
+    assert buy.slippage_cost == pytest.approx(buy.notional * 20 / 10_000)
+    assert buy.stamp_duty_cost == 0
+    assert buy.cost == pytest.approx(buy.commission_cost + buy.slippage_cost + buy.stamp_duty_cost)
+
+    audit = pd.read_csv(result["artifacts"]["account_audit_csv"])
+    assert set(audit.status) == {"passed"}
+    assert {
+        "fee_components_equal_total_cost",
+        "trade_cash_change_matches_notional_and_cost",
+        "cash_plus_positions_equals_total_assets",
+        "positions_match_executed_orders",
+    }.issubset(set(audit["check"]))
+    audit_summary = json.loads(
+        open(result["artifacts"]["account_audit_json"], encoding="utf-8").read()
+    )
+    assert audit_summary["status"] == "passed"
+
+    reproducibility = result["reproducibility"]
+    assert reproducibility["parameter_sha256"] == digest(result["spec"])
+    assert reproducibility["frozen_symbol_count"] == 2
+    assert reproducibility["schema_version"] == 17
+    assert reproducibility["technical_warmup_start"] == "2024-01-02"
+    assert reproducibility["signal_adjustment"] == "qfq"
+    indicators = pd.read_csv(result["artifacts"]["indicator_series_csv"], dtype={"symbol": str})
+    assert set(indicators.symbol) == {"600519", "000001"}
+    assert {"signal_close", "ma_1", "ma_2", "price_adjustment"}.issubset(indicators.columns)
+
+
+def test_account_audit_detects_tampered_nav_without_repairing_input():
+    nav = pd.DataFrame(
+        [
+            {
+                "date": "2024-01-02",
+                "cash": 60.0,
+                "position_value": 40.0,
+                "portfolio_value": 101.0,
+                "portfolio_nav": 1.01,
+                "total_cost": 0.0,
+            }
+        ]
+    )
+    original = nav.copy(deep=True)
+    frame, summary = build_account_audit(
+        initial_capital=100.0,
+        nav=nav,
+        orders=pd.DataFrame(),
+        positions=pd.DataFrame(
+            [{"date": "2024-01-02", "symbol": "600519", "shares": 1, "market_value": 40.0}]
+        ),
+    )
+    assert summary["status"] == "warning"
+    assert "cash_plus_positions_equals_total_assets" in set(
+        frame.loc[frame.status.eq("failed"), "check"]
+    )
+    pd.testing.assert_frame_equal(nav, original)
+
+
+def test_git_commit_unknown_is_not_fabricated(tmp_path, monkeypatch):
+    for key in ("AI_QUANT_RELEASE_COMMIT", "GIT_COMMIT", "SOURCE_VERSION"):
+        monkeypatch.delenv(key, raising=False)
+    assert git_commit_sha(tmp_path) is None
 
 
 def test_future_prices_do_not_change_past_signals_or_orders(tmp_path):
@@ -265,6 +343,11 @@ def test_persistent_limit_retry_does_not_duplicate_sell_signal(tmp_path):
     assert attempts.reason.iloc[0] == "opening_at_lower_price_limit"
     assert attempts.signal_date.nunique() == 1
     assert attempts.next_action.tolist() == ["retry_next_trading_day", "closed"]
+    sold = attempts.loc[attempts.status.eq("executed")].iloc[0]
+    assert sold.cash_after == pytest.approx(sold.cash_before + sold.notional - sold.cost)
+    assert sold.position_shares_before == sold.shares
+    assert sold.position_shares_after == 0
+    assert sold.stamp_duty_cost == pytest.approx(sold.notional * _spec().stamp_duty_bps / 10_000)
 
 
 def test_candidate_refresh_can_create_explicit_drop_exit(tmp_path):
@@ -500,7 +583,27 @@ def test_api_history_copy_report_and_read_only_configuration(tmp_path):
         assert detail.status_code == report.status_code == copied.status_code == 200
         assert detail.json()["spec"]["candidate_factors"][0]["code"] == "return_1"
         assert detail.json()["signals"][0]["planned_execution_date"] == "2024-01-05"
+        price_signals = client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals",
+            params={"symbol": "600519", "limit": 100},
+        )
+        assert price_signals.status_code == 200
+        price_payload = price_signals.json()
+        assert price_payload["price_adjustment"] == "qfq"
+        assert {row["symbol"] for row in price_payload["series"]} == {"600519"}
+        assert all("execution_price" not in row for row in price_payload["series"])
+        assert price_payload["orders"][0]["execution_price"] is not None
+        assert (
+            client.get(
+                f"/api/v1/daily-signal-runs/{run_id}/price-signals",
+                params={"symbol": "999999"},
+            ).status_code
+            == 404
+        )
         assert "1 日涨跌幅（return_1）" in report.text
+        assert "账户审计状态" in report.text
+        assert "价格、MA 与信号" in report.text
+        assert "成交前 / 后现金" in report.text
         assert history.json()["total"] == 1
         copied_params = copied.json()["params"]
         assert copied_params["candidate_factors"] == payload["candidate_factors"]
@@ -509,6 +612,12 @@ def test_api_history_copy_report_and_read_only_configuration(tmp_path):
         assert copied.json()["source_run_id"] == run_id
         assert (
             client.get(f"/api/v1/daily-signal-runs/{run_id}/downloads/signals.csv").status_code
+            == 200
+        )
+        assert (
+            client.get(
+                f"/api/v1/daily-signal-runs/{run_id}/downloads/account_audit.csv"
+            ).status_code
             == 200
         )
         assert (

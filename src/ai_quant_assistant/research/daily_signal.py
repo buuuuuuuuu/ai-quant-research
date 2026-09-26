@@ -14,6 +14,12 @@ import pandas as pd
 from ai_quant_assistant.domain.models import DailySignalRule, DailySignalStrategySpec
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.reports.daily_signal_writer import DailySignalReportWriter
+from ai_quant_assistant.research.daily_signal_audit import (
+    EXECUTION_RULE_VERSION,
+    build_account_audit,
+    build_indicator_series,
+    build_reproducibility,
+)
 from ai_quant_assistant.storage.research_run_index import register_run
 from ai_quant_assistant.storage.snapshots import write_json
 
@@ -198,6 +204,7 @@ class DailySignalStrategyService:
         self, spec: DailySignalStrategySpec, progress_callback: ProgressCallback | None = None
     ) -> dict[str, Any]:
         started = datetime.now(UTC)
+        run_id = self._run_id()
 
         def progress(value, message):
             if progress_callback:
@@ -255,12 +262,34 @@ class DailySignalStrategyService:
         skipped_candidate_updates: list[str] = []
         signals, orders, selections, positions, nav = [], [], [], [], []
         reasons: Counter[str] = Counter()
+        signal_sequence = 0
+
+        def signal_identity() -> str:
+            nonlocal signal_sequence
+            signal_sequence += 1
+            return f"signal-{signal_sequence:06d}"
 
         def record_order(
-            order, day, status, reason="", price=None, shares=0, cost=0.0, next_action=""
+            order,
+            day,
+            status,
+            reason="",
+            price=None,
+            shares=0,
+            cost=0.0,
+            next_action="",
+            *,
+            cash_before=None,
+            cash_after=None,
+            position_before=None,
+            position_after=None,
+            commission_cost=None,
+            slippage_cost=None,
+            stamp_duty_cost=None,
         ):
             orders.append(
                 {
+                    "signal_id": order.get("signal_id"),
                     "signal_date": order["signal_date"],
                     "planned_execution_date": order["planned_execution_date"],
                     "execution_date": day,
@@ -276,6 +305,15 @@ class DailySignalStrategyService:
                     "next_action": next_action,
                     "candidate_score": order.get("candidate_score"),
                     "candidate_rank": order.get("candidate_rank"),
+                    "planned_shares": order.get("planned_shares"),
+                    "cash_before": cash_before,
+                    "cash_after": cash_after,
+                    "position_shares_before": position_before,
+                    "position_shares_after": position_after,
+                    "commission_cost": commission_cost,
+                    "slippage_cost": slippage_cost,
+                    "stamp_duty_cost": stamp_duty_cost,
+                    "retry_continues": next_action == "retry_next_trading_day",
                 }
             )
 
@@ -294,17 +332,29 @@ class DailySignalStrategyService:
                     reason = "t_plus_one"
                 if reason:
                     reasons[reason] += 1
+                    held_shares = holdings.get(symbol, {}).get("shares", 0)
                     record_order(
                         order,
                         current,
                         "blocked",
                         reason,
                         None if row is None else float(row.execution_open),
-                        holdings.get(symbol, {}).get("shares", 0),
+                        held_shares,
                         next_action="retry_next_trading_day",
+                        cash_before=cash,
+                        cash_after=cash,
+                        position_before=held_shares,
+                        position_after=held_shares,
                     )
                     continue
                 quantity, price = holdings[symbol]["shares"], float(row.execution_open)
+                cash_before = cash
+                position_before = quantity
+                notional = quantity * price
+                commission_cost = notional * commission
+                slippage_cost = notional * slippage
+                stamp_duty_cost = notional * stamp
+                # Preserve the original M12-A arithmetic expression exactly.
                 cost = quantity * price * (commission + slippage + stamp)
                 cash += quantity * price - cost
                 total_cost += cost
@@ -317,6 +367,13 @@ class DailySignalStrategyService:
                     shares=quantity,
                     cost=cost,
                     next_action="closed",
+                    cash_before=cash_before,
+                    cash_after=cash,
+                    position_before=position_before,
+                    position_after=0,
+                    commission_cost=commission_cost,
+                    slippage_cost=slippage_cost,
+                    stamp_duty_cost=stamp_duty_cost,
                 )
                 del holdings[symbol]
                 del pending_exits[symbol]
@@ -341,6 +398,7 @@ class DailySignalStrategyService:
                     reason = self._opening_block(symbol, "buy", row)
                 if reason:
                     reasons[reason] += 1
+                    held_shares = holdings.get(symbol, {}).get("shares", 0)
                     record_order(
                         order,
                         current,
@@ -349,6 +407,10 @@ class DailySignalStrategyService:
                         None if row is None else float(row.execution_open),
                         order["planned_shares"],
                         next_action="expired",
+                        cash_before=cash,
+                        cash_after=cash,
+                        position_before=held_shares,
+                        position_after=held_shares,
                     )
                     continue
                 price = float(row.execution_open)
@@ -368,8 +430,18 @@ class DailySignalStrategyService:
                         price,
                         order["planned_shares"],
                         next_action="expired",
+                        cash_before=cash,
+                        cash_after=cash,
+                        position_before=0,
+                        position_after=0,
                     )
                     continue
+                cash_before = cash
+                notional = quantity * price
+                commission_cost = notional * commission
+                slippage_cost = notional * slippage
+                stamp_duty_cost = 0.0
+                # Preserve the original M12-A arithmetic expression exactly.
                 cost = quantity * price * (commission + slippage)
                 cash -= quantity * price + cost
                 total_cost += cost
@@ -392,6 +464,13 @@ class DailySignalStrategyService:
                     shares=quantity,
                     cost=cost,
                     next_action="held",
+                    cash_before=cash_before,
+                    cash_after=cash,
+                    position_before=0,
+                    position_after=quantity,
+                    commission_cost=commission_cost,
+                    slippage_cost=slippage_cost,
+                    stamp_duty_cost=stamp_duty_cost,
                 )
             # Closing data and valuation.
             for symbol in spec.symbols:
@@ -436,11 +515,13 @@ class DailySignalStrategyService:
                                 research_days[index + 1] if index + 1 < len(research_days) else None
                             )
                             order = {
+                                "signal_id": signal_identity(),
                                 "signal_date": current,
                                 "planned_execution_date": candidate_exit_day,
                                 "symbol": symbol,
                                 "side": "sell",
                                 "signal_price": last_prices.get(symbol),
+                                "planned_shares": holdings[symbol].get("shares"),
                                 "candidate_score": holdings[symbol].get("candidate_score"),
                                 "candidate_rank": holdings[symbol].get("candidate_rank"),
                                 "rule_evidence": "candidate_drop",
@@ -470,11 +551,13 @@ class DailySignalStrategyService:
                 )
                 if matched:
                     order = {
+                        "signal_id": signal_identity(),
                         "signal_date": current,
                         "planned_execution_date": next_day,
                         "symbol": symbol,
                         "side": "sell",
                         "signal_price": last_prices.get(symbol),
+                        "planned_shares": holdings[symbol].get("shares"),
                         "candidate_score": holdings[symbol].get("candidate_score"),
                         "candidate_rank": holdings[symbol].get("candidate_rank"),
                         "rule_evidence": json.dumps(evidence, default=str, ensure_ascii=False),
@@ -508,6 +591,7 @@ class DailySignalStrategyService:
                 target_value = value / spec.max_positions
                 planned = int(target_value / signal_price / spec.lot_size) * spec.lot_size
                 order = {
+                    "signal_id": signal_identity(),
                     "signal_date": current,
                     "planned_execution_date": next_day,
                     "symbol": symbol,
@@ -605,7 +689,7 @@ class DailySignalStrategyService:
             "blocked_order_reasons": dict(reasons),
             "skipped_candidate_update_periods": skipped_candidate_updates,
             "suspension_limitation": "a missing raw opening bar blocks execution; the current daily schema has no historical auction-liquidity or explicit per-day suspension flag",
-            "rule_version": "daily-signal-v1-close-confirm-next-open",
+            "rule_version": EXECUTION_RULE_VERSION,
             "market_source_batch_ids": sorted(
                 str(value) for value in prices.source_batch_id.dropna().unique()
             ),
@@ -613,7 +697,38 @@ class DailySignalStrategyService:
                 str(value) for value in benchmark.source_batch_id.dropna().unique()
             ),
         }
-        run_id = self._run_id()
+        positions_frame = pd.DataFrame(positions)
+        indicator_frame = build_indicator_series(
+            features=features,
+            research_days=research_days,
+            windows=windows,
+            adjustment=spec.adjustment,
+        )
+        account_audit_frame, account_audit = build_account_audit(
+            initial_capital=spec.initial_capital,
+            nav=nav_frame,
+            orders=orders_frame,
+            positions=positions_frame,
+        )
+        financial_source_batch_ids = []
+        for value in pd.DataFrame(selections).get("component_sources", pd.Series(dtype=str)):
+            try:
+                financial_source_batch_ids.extend(json.loads(value or "{}").values())
+            except (AttributeError, TypeError, json.JSONDecodeError):
+                continue
+        required = max(windows, default=2) + 1
+        eligible_warmup = full_calendar[full_calendar <= pd.Timestamp(spec.start_date)]
+        warmup_start = eligible_warmup[-required] if len(eligible_warmup) >= required else None
+        reproducibility = build_reproducibility(
+            run_id=run_id,
+            spec=spec.to_dict(),
+            warmup_start=warmup_start,
+            input_read_at=started,
+            prices=prices,
+            benchmark=benchmark,
+            financial_source_batch_ids=financial_source_batch_ids,
+        )
+        diagnostics["account_audit"] = account_audit
         directory = self.artifact_dir / "daily-signals" / run_id
         artifacts = self.writer.write(
             directory,
@@ -622,9 +737,12 @@ class DailySignalStrategyService:
             nav=nav_frame,
             signals=signals_frame,
             orders=orders_frame,
-            positions=pd.DataFrame(positions),
+            positions=positions_frame,
             candidates=pd.DataFrame(selections),
             diagnostics=diagnostics,
+            account_audit=account_audit_frame,
+            reproducibility=reproducibility,
+            indicator_series=indicator_frame,
         )
         completed = datetime.now(UTC)
         payload = {
@@ -643,6 +761,7 @@ class DailySignalStrategyService:
                 "pending_exit_count": len(pending_exits),
             },
             "diagnostics": diagnostics,
+            "reproducibility": reproducibility,
             "artifacts": {k: str(v) for k, v in artifacts.items()},
         }
         manifest = directory / "run.json"

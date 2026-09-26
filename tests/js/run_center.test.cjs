@@ -823,6 +823,39 @@ test("daily result separates executions, unfilled orders, and final positions", 
   assert.match(ui.renderUnfilledOrders(view.unfilled), /t_plus_one/);
 });
 
+test("price signal chart keeps adjusted prices separate from raw execution events", () => {
+  const payload = {
+    symbol: "600519",
+    price_adjustment: "qfq",
+    series: [
+      { date: "2024-01-02", symbol: "600519", signal_close: 10, ma_2: null, price_adjustment: "qfq" },
+      { date: "2024-01-03", symbol: "600519", signal_close: null, ma_2: null, price_adjustment: "qfq" },
+      { date: "2024-01-04", symbol: "600519", signal_close: 12, ma_2: 11, price_adjustment: "qfq" },
+      { date: "2024-01-05", symbol: "600519", signal_close: 13, ma_2: 12.5, price_adjustment: "qfq" },
+    ],
+    signals: [{ signal_date: "2024-01-04", action: "buy", signal_price: 12 }],
+    orders: [{ planned_execution_date: "2024-01-05", execution_date: "2024-01-05", side: "buy", status: "executed", execution_price: 101 }],
+  };
+  const model = ui.priceChartModel(payload, 3);
+  assert.equal(model.segments.signal_close.length, 2);
+  assert.deepEqual(model.events.map((item) => item.kind), ["buy-signal", "planned", "executed"]);
+  const html = ui.renderPriceSignalChart(payload, 3);
+  assert.match(html, /价格（信号复权口径）/);
+  assert.match(html, /未复权开盘参考价 101/);
+  assert.match(html, /price-event executed/);
+  assert.doesNotMatch(html, /101\.00,[0-9.]+/);
+});
+
+test("trade audit and account audit use saved values and preserve unknowns", () => {
+  const trade = ui.renderExecutedTrades([{ symbol: "600519", side: "buy", status: "executed", shares: 100, notional: 1000, cost: 3, cash_before: 2000, cash_after: 997, position_shares_before: 0, position_shares_after: 100, commission_cost: 1, slippage_cost: 2, stamp_duty_cost: 0, signal_id: "signal-000001" }]);
+  assert.match(trade, /2,000\.00 → 997\.00/);
+  assert.match(trade, /signal-000001/);
+  const audit = ui.renderAuditSummary({ status: "warning", checked_dates: 1, check_count: 6, failure_count: 1, failures: [{ date: "2024-01-02", check: "cash_plus_positions_equals_total_assets", expected_value: 100, actual_value: 101, difference: 1, tolerance: 0.000001 }] });
+  assert.match(audit, /完成但有差异/);
+  assert.match(audit, /cash_plus_positions_equals_total_assets/);
+  assert.match(ui.renderReproducibility({ git_commit_sha: null }), /未记录/);
+});
+
 test("successful daily signal submission redirects to exact highlighted history task", async () => {
   const daily = {
     kind: "daily_signal",

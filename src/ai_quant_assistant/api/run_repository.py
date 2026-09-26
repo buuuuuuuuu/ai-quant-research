@@ -44,10 +44,20 @@ SIGNAL_RUN_ID_RE = re.compile(r"^daily-signal-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 SIGNAL_DOWNLOAD_FILES = {
     **{
         f"{item}.csv": "text/csv"
-        for item in ("daily_nav", "signals", "orders", "positions", "candidate_selections")
+        for item in (
+            "daily_nav",
+            "signals",
+            "orders",
+            "positions",
+            "candidate_selections",
+            "account_audit",
+            "indicator_series",
+        )
     },
     "metrics.json": "application/json",
     "diagnostics.json": "application/json",
+    "account_audit.json": "application/json",
+    "reproducibility.json": "application/json",
     "daily_signal_result.xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "report.html": "text/html",
     "run.json": "application/json",
@@ -225,8 +235,78 @@ class DailySignalRunRepository(BacktestRunRepository):
             "orders": self._records(directory / "orders.csv"),
             "positions": self._records(directory / "positions.csv"),
             "candidates": self._records(directory / "candidate_selections.csv"),
+            "account_audit": self._records(directory / "account_audit.csv", limit=500),
             "downloads": list(SIGNAL_DOWNLOAD_FILES),
             "report_url": f"/reports/daily-signals/{run_id}",
+        }
+
+    @staticmethod
+    def _symbol_records(path: Path, symbol: str, *, limit: int = 2_000) -> list[dict[str, Any]]:
+        if not path.is_file() or path.stat().st_size == 0:
+            return []
+        chunks = []
+        for chunk in pd.read_csv(path, dtype={"symbol": str}, chunksize=50_000):
+            selected = chunk.loc[chunk.get("symbol", pd.Series(dtype=str)).eq(symbol)]
+            if not selected.empty:
+                chunks.append(selected)
+        if not chunks:
+            return []
+        frame = pd.concat(chunks, ignore_index=True).tail(limit)
+        frame = frame.astype(object).where(pd.notna(frame), None)
+        return frame.to_dict(orient="records")
+
+    def price_signals(self, run_id: str, symbol: str, *, limit: int = 1_200) -> dict[str, Any]:
+        directory = self.run_dir(run_id)
+        manifest = self.manifest(run_id)
+        frozen = [str(value) for value in manifest.get("spec", {}).get("symbols", [])]
+        if symbol not in frozen:
+            raise KeyError(symbol)
+        path = directory / "indicator_series.csv"
+        if not path.is_file() or path.stat().st_size == 0:
+            raise KeyError("indicator_series.csv")
+        chunks = []
+        for chunk in pd.read_csv(path, dtype={"symbol": str}, chunksize=50_000):
+            selected = chunk.loc[chunk["symbol"].eq(symbol)]
+            if not selected.empty:
+                chunks.append(selected)
+        if not chunks:
+            raise KeyError(symbol)
+        frame = pd.concat(chunks, ignore_index=True)
+        signals = self._symbol_records(directory / "signals.csv", symbol)
+        orders = self._symbol_records(directory / "orders.csv", symbol)
+        key_dates = {
+            str(row.get(key))[:10]
+            for row in [*signals, *orders]
+            for key in ("signal_date", "planned_execution_date", "execution_date")
+            if row.get(key) not in (None, "", "nan")
+        }
+        if len(frame) > limit:
+            dates = frame["date"].astype(str).str[:10]
+            required = set(frame.index[dates.isin(key_dates)]) | {0, len(frame) - 1}
+            remaining = max(0, limit - len(required))
+            sampled = [
+                round(item * (len(frame) - 1) / max(remaining - 1, 1)) for item in range(remaining)
+            ]
+            optional = [index for index in sampled if index not in required][:remaining]
+            frame = frame.iloc[sorted(required | set(optional))]
+        frame = frame.astype(object).where(pd.notna(frame), None)
+        return {
+            "run_id": run_id,
+            "symbol": symbol,
+            "price_adjustment": next(
+                (
+                    row
+                    for row in frame.get("price_adjustment", pd.Series(dtype=str)).dropna().unique()
+                ),
+                manifest.get("spec", {}).get("adjustment"),
+            ),
+            "series": frame.to_dict(orient="records"),
+            "signals": signals,
+            "orders": orders,
+            "notice": (
+                "价格和 MA 使用信号复权口径；订单开盘参考价为未复权，仅按日期关联，"
+                "不绘制到同一价格轴。"
+            ),
         }
 
     def file(self, run_id: str, filename: str) -> tuple[Path, str]:

@@ -54,6 +54,11 @@ async function managedAction(asset, action) {
     await selectExplorerEntity({symbol: asset.symbol});
     return;
   }
+  if (action === "verify-gaps") {
+    const count = asset.coverage.gap_summary?.unverified_gap || 0;
+    if (!window.confirm(`确认访问公网，按缺失日期核验 ${asset.symbol} 的 ${count} 个未知缺口是否有明确停牌记录？不会下载或改写K线，不会运行研究；查不到可靠证据的日期仍会保持阻断。`)) return;
+    return managedMutation(`/api/v1/data/managed-stocks/${encodeURIComponent(asset.security_id)}/verify-gaps`, {expected_revision: asset.revision, confirm: true});
+  }
   if (action === "sync") {
     const end = managedToday();
     const includeAnnouncements = $("#managed-include-announcements").checked;
@@ -69,15 +74,25 @@ function managedRows(items) {
   return items.map((asset) => {
     const bars = asset.coverage.adjustments || {}, task = asset.task;
     const coverage = Object.entries(bars).map(([adjustment, row]) => `${adjustment}: ${row.start_date || "—"} → ${row.end_date || "—"} · ${row.rows} 行`).join("；");
-    const issues = [...(asset.coverage.issues || []), ...(task?.error ? [task.error] : [])];
+    const issues = [...new Set([...(asset.coverage.issues || []), ...(task?.error ? [task.error] : [])])];
+    const grouped = new Map();
+    Object.entries(bars).forEach(([adjustment, row]) => (row.gap_details || []).forEach((gap) => {
+      const key = `${gap.date}|${gap.classification}|${gap.source || ""}`;
+      const found = grouped.get(key) || {...gap, adjustments: []};
+      found.adjustments.push(adjustment); grouped.set(key, found);
+    }));
+    const gapLabels = {verified_suspension:"已核验停牌",missing_bar:"真实行情缺失",calendar_mismatch:"交易日历冲突",unverified_gap:"暂时无法核验"};
+    const gapRows = [...grouped.values()].slice(0, 20).map((gap) => `<li><strong>${escapeHtml(gap.date)}</strong> · ${escapeHtml([...new Set(gap.adjustments)].join("/"))} · ${escapeHtml(gapLabels[gap.classification] || `${gap.classification}（暂无中文说明）`)}<br>${escapeHtml(gap.reason || "原因未记录")}${gap.source ? `<br>证据：${escapeHtml(gap.source)}${gap.checked_at ? ` · ${escapeHtml(gap.checked_at)}` : ""}` : ""}</li>`).join("");
+    const gapMore = Object.values(bars).reduce((sum, row) => sum + (row.gap_details_truncated || 0), 0);
+    const gapDetail = gapRows ? `<details><summary>查看缺失日期、分类与证据</summary><ul>${gapRows}</ul>${gapMore ? `<p>另有 ${escapeHtml(gapMore)} 条未在本页显示。</p>` : ""}</details>` : "";
     const announcement = asset.coverage.announcement_sync;
     const announcementText = announcement ? `定期公告：${announcement.status === "published" ? "已同步" : "未完整完成"} · ${announcement.row_count ?? "—"} 条 · ${announcement.start_date} → ${announcement.end_date}` : "定期公告：尚无同步记录";
-    const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", "financial", "configure", "archive", "prices", "references"];
-    const labels = {restore: "恢复管理", financial: "财务预检 / 补齐计划", sync: "补齐 / 更新 / 重试", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
+    const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", ...(asset.coverage.requires_gap_verification ? ["verify-gaps"] : []), "financial", "configure", "archive", "prices", "references"];
+    const labels = {restore: "恢复管理", financial: "财务预检 / 补齐计划", sync: "补齐 / 更新", "verify-gaps": "核验缺失日期", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
     const progress = task && task.status !== "failed" ? ` ${escapeHtml(task.progress)}%` : "";
     const financial = asset.financial_summary;
     const financialText = financial ? `财务：${financial.reports} 份报告 / ${financial.metrics} 项指标；最近公开 ${financial.latest_published_at || "—"}（不等于研究就绪）` : "财务：尚未核验";
-    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(financialText)}<br>${escapeHtml(issues.join("；"))}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
+    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(financialText)}<br>${escapeHtml(issues.join("；"))}${gapDetail}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
   }).join("");
 }
 
@@ -106,6 +121,8 @@ async function loadManagedStocks(page = 1) {
 }
 
 function bindManagedStocks() {
+  const requestedSymbol = new URLSearchParams(window.location?.search || "").get("managed");
+  if (/^[0-9]{6}$/.test(requestedSymbol || "")) $("#managed-filter").value = requestedSymbol;
   $("#managed-end").value = managedToday();
   $("#managed-add-form").addEventListener("submit", addManagedStock);
   $("#managed-refresh").addEventListener("click", () => loadManagedStocks(managedState.page));

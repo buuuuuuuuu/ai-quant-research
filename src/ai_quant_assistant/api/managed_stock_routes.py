@@ -45,6 +45,18 @@ class ManagedStockChange(BaseModel):
         return self
 
 
+class GapVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    confirm: StrictBool
+
+    @model_validator(mode="after")
+    def validate_confirmation(self):
+        if not self.confirm:
+            raise ValueError("核验停牌状态需要明确确认访问公网")
+        return self
+
+
 def managed_stock_router(manager: ManagedStockTaskManager, actor: str) -> APIRouter:
     router = APIRouter(prefix="/api/v1/data/managed-stocks", tags=["managed-stocks"])
     service = manager.service
@@ -96,6 +108,17 @@ def managed_stock_router(manager: ManagedStockTaskManager, actor: str) -> APIRou
     @router.get("/{security_id}/references")
     def references(security_id: Annotated[str, Path(max_length=32)]):
         return invoke(service.references, security_id)
+
+    @router.post("/{security_id}/verify-gaps", status_code=202)
+    def verify_gaps(
+        security_id: Annotated[str, Path(max_length=32)], request: GapVerificationRequest
+    ):
+        return invoke(
+            manager.submit_gap_verification,
+            security_id,
+            **request.model_dump(),
+            actor=actor,
+        )
 
     @router.patch("/{security_id}")
     def change(security_id: Annotated[str, Path(max_length=32)], request: ManagedStockChange):

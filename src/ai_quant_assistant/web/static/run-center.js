@@ -258,7 +258,11 @@ const RunCenterUI = (() => {
               item.missing_count == null
                 ? ""
                 : `<small>缺口：${esc(item.missing_count)}</small>`;
-            return `<tr><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small></td></tr>`;
+            const gapLabels = {verified_suspension:"已核验停牌",missing_bar:"真实行情缺失",calendar_mismatch:"交易日历冲突",unverified_gap:"暂时无法核验"};
+            const gaps = (item.gap_details || []).slice(0, 20).map((gap) => `<li>${esc(gap.date)} · ${esc(gapLabels[gap.classification] || `${gap.classification}（暂无中文说明）`)} · ${esc(gap.reason || "原因未记录")}${gap.source ? ` · ${esc(gap.source)}` : ""}</li>`).join("");
+            const verifyLink = (item.gap_details || []).some((gap) => gap.classification === "unverified_gap") ? `<p><a href="/data?managed=${encodeURIComponent(item.symbol || "")}#managed-stock-panel">前往数据与股票池，明确确认核验停牌状态</a></p>` : "";
+            const gapDetails = gaps ? `<details><summary>查看缺失日期与分类</summary><ul>${gaps}</ul>${item.gap_details_truncated ? `<p>另有 ${esc(item.gap_details_truncated)} 条未显示。</p>` : ""}${verifyLink}</details>` : "";
+            return `<tr><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small>${gapDetails}</td></tr>`;
           })
           .join("")}</tbody></table></div>${checks.length > 100 ? "<p>仅展示前 100 项检查。</p>" : ""}</section>`
       : "";

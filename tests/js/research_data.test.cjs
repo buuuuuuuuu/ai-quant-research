@@ -78,6 +78,9 @@ test("errors are visible and untrusted dynamic text is escaped", async () => {
   const html = h.context.researchReadinessHtml({...report,checks:[{symbol:"<img onerror=bad>",dataset:"finance",reason:"<script>bad</script>"}]});
   assert.doesNotMatch(html, /<img|<script/);
   assert.match(html, /&lt;script/);
+  const gaps = h.context.researchReadinessHtml({...report,checks:[{symbol:"600036",dataset:"daily_bar",reason:"需核验",gap_details:[{date:"2015-01-01",classification:"unverified_gap",reason:"<未知>"}]}]});
+  assert.match(gaps, /暂时无法核验/);
+  assert.match(gaps, /&lt;未知&gt;/);
 });
 
 test("slow old preflight cannot replace newer parameters", async () => {

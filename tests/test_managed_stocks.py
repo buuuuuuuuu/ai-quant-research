@@ -26,6 +26,8 @@ class Provider:
         self.entered, self.release = Event(), Event()
         self.calls = []
         self.listed = date(2024, 1, 2)
+        self.suspension_dates = set()
+        self.suspension_errors = []
 
     def get_listing_date(self, symbol):
         return self.listed, "fixture:explicit-listing-date"
@@ -88,6 +90,19 @@ class Provider:
                 "symbol",
             ],
         )
+
+    def get_suspension_evidence(self, symbol, dates):
+        return {
+            "verified": [
+                {"date": str(day), "classification": "verified_suspension",
+                 "source": "fixture:suspension", "checked_at": "2024-01-12T00:00:00Z",
+                 "reason": "fixture explicit suspension"}
+                for day in dates if day in self.suspension_dates
+            ],
+            "errors": list(self.suspension_errors),
+            "requested": len(dates),
+            "source": "fixture:suspension",
+        }
 
 
 @pytest.fixture
@@ -158,7 +173,11 @@ def test_partial_data_not_ready_and_safe_retry(setup, problem):
     db, provider, service = setup
     setattr(provider, problem, True)
     task, _ = submit(service)
-    assert service.run(task["task_id"])["status"] == "failed"
+    result = service.run(task["task_id"])
+    assert result["status"] == ("succeeded" if problem == "gap" else "failed")
+    if problem == "gap":
+        assert result["progress"] == 100
+        assert "仍有日期需核验" in result["message"]
     assert service.get("SZSE.003816")["availability"] == "partial"
     with pytest.raises(ValueError, match="not ready"):
         StockPoolService(db).create("no", symbols=["003816"])
@@ -167,12 +186,58 @@ def test_partial_data_not_ready_and_safe_retry(setup, problem):
     assert created and retry["task_id"] != task["task_id"]
     assert service.run(retry["task_id"])["status"] == "succeeded"
     with db.connect(read_only=True) as c:
-        assert (
-            c.execute("SELECT COUNT(*) FROM daily_bar WHERE security_id='SZSE.003816'").fetchone()[
-                0
-            ]
-            == 8
+        rows = c.execute(
+            "SELECT COUNT(*) FROM daily_bar WHERE security_id='SZSE.003816'"
+        ).fetchone()[0]
+        assert rows == (6 if problem == "gap" else 8)
+
+
+def test_gap_verification_is_explicit_bounded_and_never_redownloads(setup):
+    _, provider, service = setup
+    provider.gap = True
+    sync, _ = submit(service)
+    assert service.run(sync["task_id"])["status"] == "succeeded"
+    asset = service.get("SZSE.003816")
+    assert asset["coverage"]["requires_gap_verification"] is True
+    assert asset["coverage"]["gap_summary"]["unverified_gap"] == 1
+    download_calls = list(provider.calls)
+    repeated, _ = submit(service, expected_revision=1, refresh=True)
+    assert service.run(repeated["task_id"])["status"] == "succeeded"
+    assert provider.calls == download_calls
+    with pytest.raises(ValueError, match="明确确认"):
+        service.request_gap_verification(
+            "SZSE.003816", expected_revision=1, confirm=False, actor="fixture"
         )
+    provider.suspension_dates = {date(2024, 1, 3)}
+    task, created = service.request_gap_verification(
+        "SZSE.003816", expected_revision=1, confirm=True, actor="fixture"
+    )
+    assert created
+    assert service.run(task["task_id"])["status"] == "succeeded"
+    verified = service.get("SZSE.003816")
+    assert verified["availability"] == "ready"
+    assert verified["coverage"]["gap_summary"]["verified_suspension"] == 1
+    assert provider.calls == download_calls
+    with pytest.raises(ManagedStockConflict, match="没有可核验"):
+        service.request_gap_verification(
+            "SZSE.003816", expected_revision=1, confirm=True, actor="fixture"
+        )
+
+
+def test_empty_suspension_result_remains_unverified_without_download_failure(setup):
+    _, provider, service = setup
+    provider.gap = True
+    sync, _ = submit(service)
+    service.run(sync["task_id"])
+    calls = list(provider.calls)
+    task, _ = service.request_gap_verification(
+        "SZSE.003816", expected_revision=1, confirm=True, actor="fixture"
+    )
+    result = service.run(task["task_id"])
+    assert result["status"] == "succeeded" and result["progress"] == 100
+    assert result["result"]["outcome"] == "verification_incomplete"
+    assert service.get("SZSE.003816")["availability"] == "partial"
+    assert provider.calls == calls
 
 
 def test_concurrent_claim_and_atomic_submission(setup, monkeypatch):

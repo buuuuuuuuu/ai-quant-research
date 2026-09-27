@@ -732,13 +732,55 @@ const RunCenterUI = (() => {
       })
       .join("");
   }
+  function dataPlanExecutionSummary(plan = {}) {
+    if (plan.execution_summary) return plan.execution_summary;
+    const summary = {total:0,published:0,verified:0,failed:0,pending:0,retryable:0,unknown:0};
+    for (const item of plan.items || []) {
+      summary.total++;
+      const status = item.status || "pending";
+      if (["published","verified","failed"].includes(status)) summary[status]++;
+      else if (["pending","planned","fetching"].includes(status)) summary.pending++;
+      else summary.unknown++;
+      if (["failed","pending","planned","fetching"].includes(status)) summary.retryable++;
+    }
+    return summary;
+  }
+  function dataPlanOutcome(plan = {}) {
+    if (plan.outcome) return plan.outcome;
+    const summary = dataPlanExecutionSummary(plan);
+    if (["queued","running"].includes(plan.task?.status)) return plan.task.status;
+    if (plan.task?.status === "failed") return summary.failed ? "download_failed" : summary.retryable ? "interrupted" : "unknown";
+    if (plan.task?.status === "succeeded" || plan.status === "succeeded") return plan.report?.complete ? "ready" : "completed_with_gaps";
+    return "planned";
+  }
+  function dataPlanOutcomeNotice(plan = {}) {
+    const outcome = dataPlanOutcome(plan), summary = dataPlanExecutionSummary(plan);
+    const counts = `同步完成 ${summary.published || 0} 项、验证完成 ${summary.verified || 0} 项、失败 ${summary.failed || 0} 项、待处理 ${summary.pending || 0} 项${summary.unknown ? `、未知 ${summary.unknown} 项` : ""}`;
+    if (outcome === "ready") return `<p class="positive"><strong>补齐完成，数据检查通过。</strong> ${esc(counts)}；策略仍需单独确认运行。</p>`;
+    if (outcome === "completed_with_gaps") {
+      const financialGaps = (plan.report?.checks || []).filter((check) => check.dataset === "financial_metric" && check.satisfied !== true);
+      const excluded = plan.input?.parameters?.missing_policy === "exclude" && financialGaps.length
+        ? "当前策略会排除缺失历史时点，不会填零；是否可运行仍由最新预检决定。"
+        : "是否可运行仍由最新预检决定。";
+      return `<p class="page-notice"><strong>同步已完成，但最终检查仍有数据缺口。</strong> ${esc(counts)}。这不是行情、公告接口或后台同步失败；重复下载相同范围通常无法解决。${esc(excluded)}请重新检查本地数据、查看受影响日期，或返回修改策略。</p>`;
+    }
+    if (["download_failed","interrupted"].includes(outcome)) return `<p class="negative"><strong>${outcome === "download_failed" ? "存在真实同步失败" : "补齐任务被中断"}。</strong> ${esc(counts)}。仅 ${esc(summary.retryable || 0)} 个失败或未处理项可重试；已发布或已验证项目不会重新下载。</p>`;
+    return `<p class="page-notice">${esc(counts)}。${outcome === "unknown" ? "无法可靠判断该历史计划的执行结果，请查看原错误和检查明细。" : "尚未开始下载。"}</p>`;
+  }
   function renderDataPlan(plan = {}) {
     const task = plan.task;
+    const outcome = dataPlanOutcome(plan);
+    const outcomeLabels = {ready:"同步完成且检查通过",completed_with_gaps:"同步完成但仍有数据缺口",download_failed:"数据同步失败",interrupted:"任务中断",queued:"等待执行",running:"正在执行",planned:"尚未执行",unknown:"结果未知"};
+    const taskStatusLabels = {queued:"等待执行",running:"正在执行",succeeded:"执行完成",failed:"执行结束（存在问题）"};
     const itemRows = (plan.items || []).map((item) => `<tr><td>${esc(item.symbol || "共享")}</td><td>${esc(enumName(item.dataset))}</td><td>${esc(item.adjustment ? enumName(item.adjustment, "adjustment") : "不适用")}</td><td>${esc(known(item.start_date))} 至 ${esc(known(item.end_date))}</td><td>${esc(known(item.estimated_partitions))}</td><td>${esc(enumName(item.status))}<small>${esc(item.attempts?.at?.(-1)?.error || item.reason || "")}</small></td></tr>`).join("");
+    const progress = task && ["succeeded","failed"].includes(task.status) ? 100 : task?.progress;
     const taskText = task
-      ? `${enumName(task.status)} · ${known(task.progress)}% · ${task.message || task.error || "等待更新"}`
+      ? `${taskStatusLabels[task.status] || `${task.status}（暂无中文说明）`} · ${known(progress)}% · ${task.message || task.error || "等待更新"}`
       : "尚未确认：不会联网或下载";
-    return `<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>`;
+    const finalReport = plan.report
+      ? `<details><summary>查看最终预检、受影响股票和日期</summary>${renderPreflight(plan.report)}</details>`
+      : "";
+    return `${dataPlanOutcomeNotice(plan)}<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>补齐结果</dt><dd>${esc(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>${finalReport}`;
   }
   function restoreDataPlanConfiguration(configuration, plan, expectedKind) {
     const input = plan?.input;
@@ -802,6 +844,9 @@ const RunCenterUI = (() => {
       strategyName,
       display,
       resultSections,
+      dataPlanExecutionSummary,
+      dataPlanOutcome,
+      dataPlanOutcomeNotice,
       renderDataPlan,
       restoreDataPlanConfiguration,
       normalizedParameterIdentity,
@@ -1546,7 +1591,7 @@ const RunCenterUI = (() => {
     const taskStatus = plan.task?.status;
     $("center-plan-create").hidden = true;
     $("center-plan-confirm").hidden = !(plan.status === "draft" && plan.items?.length);
-    $("center-plan-retry").hidden = taskStatus !== "failed";
+    $("center-plan-retry").hidden = taskStatus !== "failed" || dataPlanExecutionSummary(plan).retryable < 1;
     $("center-plan-refresh").hidden = !plan.plan_id;
     setPlanUrl(plan.plan_id);
   }
@@ -1614,7 +1659,10 @@ const RunCenterUI = (() => {
       if (action === "refresh") return await refreshPlan(own);
       const retry = action === "retry";
       const verb = retry ? "重试失败分区" : "补齐缺失数据";
-      if (!window.confirm(`确认${verb}？这会访问公网并启动后台任务，但不会运行策略或调用模型。`)) return;
+      if (retry && dataPlanExecutionSummary(dataPlan).retryable < 1)
+        throw Error("当前计划没有真实失败或未处理分区。请重新检查本地数据；如需刷新上游数据，请基于当前参数创建新计划。");
+      const detail = retry ? `仅重试 ${dataPlanExecutionSummary(dataPlan).retryable} 个真实失败或未处理项；已发布和已验证项目不会重新下载。` : "";
+      if (!window.confirm(`确认${verb}？这会访问公网并启动后台任务，但不会运行策略或调用模型。${detail}`)) return;
       await get(`/api/v1/research-data/plans/${encodeURIComponent(dataPlan.plan_id)}/${retry ? "retry" : "confirm"}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ version: dataPlan.version, input_sha256: dataPlan.input_sha256, confirm: true }),

@@ -392,15 +392,45 @@ def test_successful_finance_backfill_rechecks_and_preserves_market_data(db):
         )
 
 
-def test_empty_partial_failure_retry_and_expired_owner_fencing(db, monkeypatch):
+def test_published_partitions_with_remaining_gaps_complete_without_retry(db, monkeypatch):
     finance_gap(db)
     service = plan_service(db)
     plan = service.create("screen", SCREEN)
     task = confirm(service, plan)
     monkeypatch.setattr(service, "_download", lambda *args: {"status": "published", "row_count": 0})
     result = service.run(task["task_id"])
-    assert result["status"] == "failed" and result.get("result") is None
-    assert not service.get(plan["plan_id"])["report"]["complete"]
+    assert result["status"] == "succeeded" and result["progress"] == 100
+    after = service.get(plan["plan_id"])
+    assert after["status"] == "succeeded"
+    assert after["outcome"] == "completed_with_gaps"
+    assert after["execution_summary"] == {
+        "total": 2,
+        "published": 2,
+        "verified": 0,
+        "failed": 0,
+        "pending": 0,
+        "unknown": 0,
+        "retryable": 0,
+        "processed": 2,
+    }
+    assert not after["report"]["complete"]
+    with pytest.raises(DataPlanConflict, match="没有真实失败或未处理项"):
+        confirm(service, plan, retry=True)
+
+
+def test_real_failures_retry_and_expired_owner_fencing(db, monkeypatch):
+    finance_gap(db)
+    service = plan_service(db)
+    plan = service.create("screen", SCREEN)
+    task = confirm(service, plan)
+    monkeypatch.setattr(
+        service,
+        "_download",
+        lambda *args: {"status": "failed", "errors": [{"error": "provider timeout"}]},
+    )
+    result = service.run(task["task_id"])
+    assert result["status"] == "failed" and result["progress"] == 100
+    assert service.get(plan["plan_id"])["outcome"] == "download_failed"
     retry = confirm(service, plan, retry=True)
     assert retry["task_id"] != task["task_id"]
     assert service.tasks.start(retry["task_id"], owner_id="expired", message="fixture")
@@ -413,6 +443,64 @@ def test_empty_partial_failure_retry_and_expired_owner_fencing(db, monkeypatch):
     with db.connect(read_only=True) as c, pytest.raises(DataPlanConflict):
         service.fence(c, retry["task_id"], "expired", retry["spec"])
     assert replacement["task_id"] != retry["task_id"]
+
+
+def test_retry_only_runs_failed_or_unprocessed_items(db, monkeypatch):
+    finance_gap(db)
+    service = plan_service(db)
+    plan = service.create("screen", SCREEN)
+    item_ids = [item["item_id"] for item in plan["items"]]
+    calls = []
+
+    def first_download(_guarded, _task_id, _owner, item):
+        calls.append(item["item_id"])
+        if item["item_id"] == item_ids[0]:
+            return {"status": "published", "row_count": 1}
+        return {"status": "failed", "errors": [{"error": "fixture failure"}]}
+
+    monkeypatch.setattr(service, "_download", first_download)
+    first = confirm(service, plan)
+    assert service.run(first["task_id"])["status"] == "failed"
+    assert calls == item_ids
+    calls.clear()
+    monkeypatch.setattr(
+        service,
+        "_download",
+        lambda _guarded, _task_id, _owner, item: (
+            calls.append(item["item_id"]) or {"status": "published", "row_count": 0}
+        ),
+    )
+    retry = confirm(service, plan, retry=True)
+    assert service.run(retry["task_id"])["status"] == "succeeded"
+    assert calls == [item_ids[1]]
+    after = service.get(plan["plan_id"])
+    assert after["outcome"] == "completed_with_gaps"
+    assert after["execution_summary"]["retryable"] == 0
+
+
+def test_legacy_failed_95_percent_gap_plan_is_derived_without_rewriting(db, monkeypatch):
+    finance_gap(db)
+    service = plan_service(db)
+    plan = service.create("screen", SCREEN)
+    task = confirm(service, plan)
+    monkeypatch.setattr(service, "_download", lambda *args: {"status": "published", "row_count": 0})
+    service.run(task["task_id"])
+    with db.connect() as connection:
+        connection.execute(
+            "UPDATE research_data_plan SET status='failed' WHERE plan_id=?",
+            [plan["plan_id"]],
+        )
+        connection.execute(
+            "UPDATE operation_task SET status='failed',progress=95,message='部分补齐或失败，请查看计划诊断',"
+            "error='补齐已执行，但研究数据仍有缺口；请查看逐股票诊断，不自动运行研究' WHERE task_id=?",
+            [task["task_id"]],
+        )
+    legacy = service.get(plan["plan_id"])
+    assert legacy["task"]["progress"] == 95  # Stored history remains untouched.
+    assert legacy["outcome"] == "completed_with_gaps"
+    assert legacy["execution_summary"]["retryable"] == 0
+    with pytest.raises(DataPlanConflict, match="没有真实失败或未处理项"):
+        confirm(service, legacy, retry=True)
 
 
 def test_generation_change_during_network_and_backup_remains_valid(db, tmp_path, monkeypatch):

@@ -856,6 +856,30 @@ test("trade audit and account audit use saved values and preserve unknowns", () 
   assert.match(ui.renderReproducibility({ git_commit_sha: null }), /未记录/);
 });
 
+test("data plan separates completed gaps from real download failures", () => {
+  const completed = {
+    plan_id: "data-plan-gap", version: 1, input_sha256: "a".repeat(64), status: "failed",
+    input: { symbols_sha256: "b".repeat(64), resolved_symbols: ["600022"], parameters: { missing_policy: "exclude" } },
+    report: { complete: false, checks: [{ dataset: "financial_metric", satisfied: false }] },
+    outcome: "completed_with_gaps",
+    execution_summary: { total: 2, published: 1, verified: 1, failed: 0, pending: 0, unknown: 0, retryable: 0 },
+    items: [{ symbol: "600022", dataset: "financial_metric", status: "verified", reason: "21 个研究时点缺少已公开指标" }],
+    task: { status: "failed", progress: 95, error: "补齐已执行，但研究数据仍有缺口" },
+  };
+  const html = ui.renderDataPlan(completed);
+  assert.match(html, /同步已完成，但最终检查仍有数据缺口/);
+  assert.match(html, /排除缺失历史时点，不会填零/);
+  assert.match(html, /查看最终预检、受影响股票和日期/);
+  assert.match(html, /财务因子/);
+  assert.match(html, /执行结束（存在问题） · 100%/);
+  assert.doesNotMatch(html, /95%/);
+  assert.equal(ui.dataPlanExecutionSummary(completed).retryable, 0);
+
+  const failed = {...completed,outcome:"download_failed",execution_summary:{total:2,published:1,verified:0,failed:1,pending:0,unknown:0,retryable:1}};
+  assert.match(ui.renderDataPlan(failed),/存在真实同步失败/);
+  assert.match(ui.renderDataPlan(failed),/已发布或已验证项目不会重新下载/);
+});
+
 test("successful daily signal submission redirects to exact highlighted history task", async () => {
   const daily = {
     kind: "daily_signal",

@@ -322,6 +322,7 @@ test("blocked preflight explains problems and never calls it an unfilled trade",
         missing_count: 5,
         list_date: "2024-03-01",
         reason: "缺少行情",
+        gap_details: [{date:"2024-03-05",classification:"unverified_gap",reason:"<暂时未知>",source:"fixture"}],
       },
     ],
   });
@@ -329,6 +330,8 @@ test("blocked preflight explains problems and never calls it an unfilled trade",
   assert.match(html, /2024-03-01/);
   assert.match(html, /将开始日期调整/);
   assert.match(html, /默认检查结果/);
+  assert.match(html, /暂时无法核验/);
+  assert.match(html, /&lt;暂时未知&gt;/);
   assert.doesNotMatch(html, /未成交/);
   assert.doesNotMatch(html, /<img onerror/);
   assert.match(html, /&lt;img onerror=x&gt;/);

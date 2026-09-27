@@ -102,10 +102,15 @@ class ManagedStockService:
         result["coverage"] = json.loads(result.pop("coverage_json"))
         financial = connection.execute(
             "SELECT COUNT(DISTINCT report_id),MAX(published_at),COUNT(DISTINCT metric_code) "
-            "FROM published_financial_metric WHERE security_id=?", [security_id],
+            "FROM published_financial_metric WHERE security_id=?",
+            [security_id],
         ).fetchone()
-        result["financial_summary"] = {"reports": financial[0], "latest_published_at": financial[1],
-                                       "metrics": financial[2], "research_ready": None}
+        result["financial_summary"] = {
+            "reports": financial[0],
+            "latest_published_at": financial[1],
+            "metrics": financial[2],
+            "research_ready": None,
+        }
         result["datasets"] = ["daily_bar"]
         result["adjustments"] = list(ADJUSTMENTS)
         result["eligible"] = (
@@ -201,6 +206,66 @@ class ManagedStockService:
         with self.database.connect(read_only=True) as connection:
             return self.references_in(connection, security_id)
 
+    def request_gap_verification(
+        self,
+        security_id: str,
+        *,
+        expected_revision: int,
+        confirm: bool,
+        actor: str = "system",
+    ) -> tuple[dict[str, Any], bool]:
+        if confirm is not True:
+            raise ValueError("核验停牌状态需要明确确认访问公网")
+        with self.transaction() as connection:
+            asset = self._get(connection, security_id)
+            if asset["revision"] != expected_revision:
+                raise ManagedStockConflict(f"revision conflict: current {asset['revision']}")
+            if asset["status"] != "active":
+                raise ManagedStockConflict("已移出管理的股票不能启动缺口核验")
+            if asset["task"] and asset["task"]["status"] in {"queued", "running"}:
+                raise ManagedStockConflict("当前已有后台任务，请等待完成后再核验")
+            dates = sorted(
+                {
+                    item["date"]
+                    for row in asset["coverage"].get("adjustments", {}).values()
+                    for item in row.get("gap_details", [])
+                    if item.get("classification") == "unverified_gap" and item.get("date")
+                }
+            )[:100]
+            if not dates:
+                raise ManagedStockConflict("当前没有可核验的未知交易日缺口；不会创建联网任务")
+            spec = {
+                "dataset": "managed_stock_gap_verification",
+                "security_id": security_id,
+                "symbol": asset["symbol"],
+                "generation": asset["generation"],
+                "revision": asset["revision"],
+                "dates": dates,
+                "actor": actor,
+                "confirmed": True,
+            }
+            task, created = self.tasks.create_or_get_active(
+                "sync",
+                claim_key=f"managed-gap:{security_id}:{asset['generation']}:{'-'.join(dates)}",
+                spec=spec,
+                message=f"等待核验 {len(dates)} 个无行情日期的停牌状态",
+                connection=connection,
+            )
+            connection.execute(
+                "UPDATE managed_stock SET last_task_id=?, updated_at=CURRENT_TIMESTAMP WHERE security_id=?",
+                [task["task_id"], security_id],
+            )
+            if created:
+                self.audit(
+                    connection,
+                    "managed_stock_gap_verification_requested",
+                    security_id,
+                    actor,
+                    task_id=task["task_id"],
+                    dates=dates,
+                )
+            return task, created
+
     def request(
         self,
         symbol: str,
@@ -258,9 +323,10 @@ class ManagedStockService:
             if expected_revision is not None and expected_revision != asset["revision"]:
                 raise ManagedStockConflict(f"revision conflict: current {asset['revision']}")
             same_range = str(start) == asset["target_start"] and str(end) == asset["target_end"]
-            same_datasets = bool(
-                asset["task"] and asset["task"]["spec"].get("include_announcements", False)
-            ) == include_announcements
+            same_datasets = (
+                bool(asset["task"] and asset["task"]["spec"].get("include_announcements", False))
+                == include_announcements
+            )
             if (
                 exists
                 and (not same_range or auto_update != asset["auto_update"])
@@ -274,7 +340,9 @@ class ManagedStockService:
                     [asset["last_task_id"], datetime.now(UTC) - timedelta(seconds=LEASE_SECONDS)],
                 ).fetchone()
                 if (not same_range or not same_datasets) and live:
-                    raise ManagedStockConflict("当前有同步任务且范围或数据类型不同，请等待完成后重试")
+                    raise ManagedStockConflict(
+                        "当前有同步任务且范围或数据类型不同，请等待完成后重试"
+                    )
             elif (
                 same_range
                 and asset["availability"] == "ready"
@@ -313,13 +381,26 @@ class ManagedStockService:
                 "refresh": refresh,
                 "confirmed": True,
                 "include_announcements": include_announcements,
-                "datasets": ["daily_bar", "announcement"] if include_announcements else ["daily_bar"],
+                "datasets": ["daily_bar", "announcement"]
+                if include_announcements
+                else ["daily_bar"],
+                "preserve_classified_gaps": bool(
+                    asset.get("task")
+                    and asset["task"].get("status") == "succeeded"
+                    and (
+                        asset["task"].get("result", {}).get("outcome")
+                        in {"needs_gap_verification", "verification_incomplete", "verified"}
+                        or "仍有日期需核验" in (asset["task"].get("message") or "")
+                    )
+                ),
             }
             task, created = self.tasks.create_or_get_active(
                 "sync",
                 claim_key=f"managed-stock:{security_id}",
                 spec=spec,
-                message="等待单股行情与定期公告回填" if include_announcements else "等待单股历史行情回填",
+                message="等待单股行情与定期公告回填"
+                if include_announcements
+                else "等待单股历史行情回填",
                 connection=connection,
             )
             connection.execute(
@@ -457,6 +538,8 @@ class ManagedStockService:
     def _run_owned(self, task_id: str) -> dict[str, Any]:
         task = self.tasks.get(task_id)
         spec = task["spec"]
+        if spec.get("dataset") == "managed_stock_gap_verification":
+            return self._run_gap_verification(task_id, spec)
         if spec.get("dataset") != "managed_stock":
             raise ValueError("not a managed stock task")
         owner = f"managed-worker-{uuid4().hex}"
@@ -488,12 +571,15 @@ class ManagedStockService:
                 announcement_result = {"status": "failed", "error": str(exc)[:2000]}
             if announcement_result["status"] != "published":
                 issues = announcement_result.get("errors") or []
-                detail = (issues[0].get("error") if issues else None) or announcement_result.get("error")
+                detail = (issues[0].get("error") if issues else None) or announcement_result.get(
+                    "error"
+                )
                 if announcement_result.get("paused_after_provider_failure"):
                     detail = announcement_result.get("error") or detail
                 counts = announcement_result.get("partitions", {})
                 announcement_error = (
-                    "定期公告同步失败：" + (detail or "原因未记录")[:700]
+                    "定期公告同步失败："
+                    + (detail or "原因未记录")[:700]
                     + f"（完成 {counts.get('published', 0)}、失败 {counts.get('failed', 0)}、"
                     + f"待处理 {counts.get('planned', 0)} 个分区）。"
                     + "请排查后重新确认同步；公告失败不代表已有行情丢失。"
@@ -517,12 +603,18 @@ class ManagedStockService:
                 )
                 if announcement_result is not None:
                     report["announcement_sync"] = {
-                        **announcement_result, "task_id": task_id,
-                        "start_date": spec["start_date"], "end_date": spec["end_date"],
+                        **announcement_result,
+                        "task_id": task_id,
+                        "start_date": spec["start_date"],
+                        "end_date": spec["end_date"],
                     }
                 elif asset["coverage"].get("announcement_sync"):
                     report["announcement_sync"] = asset["coverage"]["announcement_sync"]
-                success = error is None and report["availability"] == "ready"
+                ready = error is None and report["availability"] == "ready"
+                gap_only = bool(report.get("requires_gap_verification")) and all(
+                    "交易日缺口仍需核验" in issue for issue in report.get("issues", [])
+                )
+                success = error is None and (ready or gap_only)
                 error = error or ("；".join(report["issues"]) if not success else None)
                 availability = report["availability"]
                 # A failed refresh does not revoke previously validated historical coverage.
@@ -548,7 +640,7 @@ class ManagedStockService:
                     """UPDATE managed_stock SET availability=?, coverage_json=?,
                        last_success_at=CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE last_success_at END,
                        updated_at=CURRENT_TIMESTAMP WHERE security_id=?""",
-                    [availability, encoded(report), success, spec["security_id"]],
+                    [availability, encoded(report), ready, spec["security_id"]],
                 )
                 stage = connection.execute(
                     "SELECT message FROM operation_task WHERE task_id=?", [task_id]
@@ -562,9 +654,20 @@ class ManagedStockService:
                     [
                         "succeeded" if success else "failed",
                         success,
-                        ("行情与定期公告同步完成" if spec.get("include_announcements") else "历史行情已就绪")
-                        if success else f"{stage}；同步未完成，可安全重试",
-                        encoded(report) if success else None,
+                        (
+                            "行情同步完成，但仍有日期需核验；不会重复下载已发布行情"
+                            if gap_only
+                            else "行情与定期公告同步完成"
+                            if spec.get("include_announcements")
+                            else "历史行情已就绪"
+                        )
+                        if success
+                        else f"{stage}；同步未完成，可安全重试",
+                        encoded({"outcome": "needs_gap_verification", "coverage": report})
+                        if gap_only
+                        else encoded(report)
+                        if success
+                        else None,
                         error[:2000] if error else None,
                         task_id,
                         owner,
@@ -595,6 +698,108 @@ class ManagedStockService:
         finally:
             stop.set()
             thread.join(timeout=1)
+        return self.tasks.get(task_id)
+
+    def _run_gap_verification(self, task_id: str, spec: dict[str, Any]) -> dict[str, Any]:
+        owner = f"managed-gap-worker-{uuid4().hex}"
+        if not self.tasks.start(task_id, owner_id=owner, message="正在按缺失日期核验停牌证据"):
+            return self.tasks.get(task_id)
+        try:
+            dates = tuple(date.fromisoformat(value) for value in spec["dates"])
+            provider = self.provider_factory(f"{task_id}-{owner}")
+            result = provider.get_suspension_evidence(spec["symbol"], dates)
+            with self.transaction() as connection:
+                self.fence(connection, task_id, owner, spec)
+                asset = self._get(connection, spec["security_id"])
+                old = asset["coverage"].get("gap_verification", {})
+                saved = dict(old.get("dates", {})) if isinstance(old, dict) else {}
+                checked_at = datetime.now(UTC).isoformat()
+                verified = {
+                    item["date"]: item
+                    for item in result.get("verified", [])
+                    if item.get("classification") == "verified_suspension"
+                }
+                errors = {item["date"]: item["error"] for item in result.get("errors", [])}
+                for day in spec["dates"]:
+                    saved[day] = verified.get(day) or {
+                        "classification": "unverified_gap",
+                        "source": result.get("source"),
+                        "checked_at": checked_at,
+                        "reason": errors.get(day)
+                        or "停复牌来源未返回可明确覆盖该日期的记录；空结果不作为正常交易证明",
+                    }
+                evidence = {
+                    "version": 1,
+                    "checked_at": checked_at,
+                    "source": result.get("source"),
+                    "dates": saved,
+                }
+                staged = dict(asset["coverage"])
+                staged["gap_verification"] = evidence
+                connection.execute(
+                    "UPDATE managed_stock SET coverage_json=? WHERE security_id=?",
+                    [encoded(staged), spec["security_id"]],
+                )
+                report = coverage_report(
+                    connection,
+                    spec["security_id"],
+                    date.fromisoformat(asset["target_start"]),
+                    completed_date(date.fromisoformat(asset["target_end"])),
+                    date.fromisoformat(asset["listing_date"]) if asset["listing_date"] else None,
+                )
+                if asset["coverage"].get("announcement_sync"):
+                    report["announcement_sync"] = asset["coverage"]["announcement_sync"]
+                summary = report.get("gap_summary", {})
+                outcome = (
+                    "verified"
+                    if not report.get("requires_gap_verification")
+                    else "verification_incomplete"
+                )
+                payload = {
+                    "outcome": outcome,
+                    "requested": len(spec["dates"]),
+                    "verified_suspension": summary.get("verified_suspension", 0),
+                    "unverified_gap": summary.get("unverified_gap", 0),
+                    "provider_errors": result.get("errors", []),
+                    "coverage": report,
+                }
+                connection.execute(
+                    """UPDATE managed_stock SET availability=?, coverage_json=?,
+                       updated_at=CURRENT_TIMESTAMP WHERE security_id=?""",
+                    [report["availability"], encoded(report), spec["security_id"]],
+                )
+                connection.execute(
+                    """UPDATE operation_task SET status='succeeded', progress=100, message=?,
+                       result_json=?, error=NULL, completed_at=CURRENT_TIMESTAMP,
+                       updated_at=CURRENT_TIMESTAMP, heartbeat_at=CURRENT_TIMESTAMP,
+                       claim_key=NULL WHERE task_id=? AND owner_id=?""",
+                    [
+                        "缺失日期核验完成"
+                        if outcome == "verified"
+                        else "核验已完成，仍有日期暂时无法确认；不会重复下载已发布行情",
+                        encoded(payload),
+                        task_id,
+                        owner,
+                    ],
+                )
+                self.audit(
+                    connection,
+                    "managed_stock_gap_verification_completed",
+                    spec["security_id"],
+                    spec["actor"],
+                    task_id=task_id,
+                    outcome=outcome,
+                    requested=len(spec["dates"]),
+                )
+        except ManagedStockConflict:
+            pass
+        except Exception as exc:
+            self.tasks.fail(
+                task_id,
+                owner_id=owner,
+                message="停牌证据核验任务失败；已发布行情未受影响",
+                error=str(exc)[:2000],
+            )
         return self.tasks.get(task_id)
 
     def _heartbeat(self, task_id: str, owner: str, spec: dict[str, Any]) -> None:
@@ -649,6 +854,20 @@ class ManagedStockService:
             raise ValueError("尚无完整交易日可同步")
         self._progress(task_id, owner, 10, "正在准备交易日历与行情分区")
         guarded = _FencedDatabase(self, task_id, owner, spec)
+        prior_gap_verification_completed = bool(spec.get("preserve_classified_gaps"))
+        no_redownload = {
+            (adjustment, date.fromisoformat(item["date"]))
+            for adjustment, detail in asset["coverage"].get("adjustments", {}).items()
+            for item in detail.get("gap_details", [])
+            if (
+                item.get("classification") in {"verified_suspension", "calendar_mismatch"}
+                or (
+                    item.get("classification") == "unverified_gap"
+                    and prior_gap_verification_completed
+                )
+            )
+            and item.get("date")
+        }
 
         def needed(partition):
             a, b = partition["start_date"], partition["end_date"]
@@ -672,16 +891,24 @@ class ManagedStockService:
             # qfq is mutable after corporate actions: refresh all stored qfq years
             # on an explicit refresh/new end date instead of mixing adjustment bases.
             refresh_qfq = partition["adjustment"] == "qfq" and asset["availability"] == "ready"
+            unresolved_for_download = {
+                day
+                for day in expected - observed
+                if (partition["adjustment"], day) not in no_redownload
+            }
+            known_non_download_gap = bool(expected - observed) and not unresolved_for_download
             return (
-                bool(expected - observed)
+                bool(unresolved_for_download)
                 or not expected
                 or refresh_qfq
-                or b >= end - timedelta(days=7)
+                or (b >= end - timedelta(days=7) and not known_non_download_gap)
             )
 
         def progress(index, total):
             self._progress(
-                task_id, owner, 10 + int((60 if spec.get("include_announcements") else 80) * index / total),
+                task_id,
+                owner,
+                10 + int((60 if spec.get("include_announcements") else 80) * index / total),
                 f"历史行情分区 {index}/{total}",
             )
 
@@ -706,14 +933,17 @@ class ManagedStockService:
         if result["status"] != "published":
             raise RuntimeError(encoded(result.get("errors", [])))
 
-    def _download_announcements(self, task_id: str, owner: str, spec: dict[str, Any]) -> dict[str, Any]:
+    def _download_announcements(
+        self, task_id: str, owner: str, spec: dict[str, Any]
+    ) -> dict[str, Any]:
         self._progress(task_id, owner, 75, "正在同步定期公告（不下载 PDF 或财务指标）")
         guarded = _FencedDatabase(self, task_id, owner, spec)
         with guarded.connect(read_only=True):
             pass  # Check generation before starting any independent network phase.
         provider = self.provider_factory(f"{task_id}-{owner}-announcements")
         service = ResearchDatasetSyncService(
-            database=guarded, layout=self.database.layout,
+            database=guarded,
+            layout=self.database.layout,
             provider=_FreshProvider(provider, guarded, spec["security_id"]),
             rate_limit_seconds=max(0.2, self.settings.data_sync_rate_limit_seconds),
             raw_namespace=f"{task_id}-{owner}",
@@ -721,16 +951,27 @@ class ManagedStockService:
                 task_id, owner, 75 + int(19 * index / total), f"定期公告分区 {index}/{total}"
             ),
         )
-        result = service.sync_announcements(AnnouncementSyncSpec(
-            start_date=date.fromisoformat(spec["start_date"]),
-            end_date=date.fromisoformat(spec["end_date"]),
-            symbols=(spec["symbol"],), report_types=("q1", "interim", "q3", "annual"),
-            resume=False,
-        ))
-        return {key: result.get(key) for key in (
-            "status", "batch_id", "row_count", "partitions", "errors", "error",
-            "paused_after_provider_failure",
-        )}
+        result = service.sync_announcements(
+            AnnouncementSyncSpec(
+                start_date=date.fromisoformat(spec["start_date"]),
+                end_date=date.fromisoformat(spec["end_date"]),
+                symbols=(spec["symbol"],),
+                report_types=("q1", "interim", "q3", "annual"),
+                resume=False,
+            )
+        )
+        return {
+            key: result.get(key)
+            for key in (
+                "status",
+                "batch_id",
+                "row_count",
+                "partitions",
+                "errors",
+                "error",
+                "paused_after_provider_failure",
+            )
+        }
 
 
 class _FencedDatabase:

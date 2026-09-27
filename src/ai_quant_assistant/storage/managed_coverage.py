@@ -7,6 +7,8 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps, gap_summary
+
 ADJUSTMENTS = ("none", "qfq")
 
 
@@ -59,7 +61,17 @@ def coverage_report(
         issues.append("目标期间没有可验证的交易日或尚未上市")
     if listed is None:
         issues.append("上市日期未知；应有交易日范围和缺口尚不能判定，不自动豁免上市前空区间")
+    previous = connection.execute(
+        "SELECT coverage_json FROM managed_stock WHERE security_id=?", [security_id]
+    ).fetchone()
+    try:
+        previous_coverage = json.loads(previous[0]) if previous and previous[0] else {}
+    except (TypeError, json.JSONDecodeError):
+        previous_coverage = {}
+    evidence = previous_coverage.get("gap_verification", {})
     details = {}
+    missing_by_adjustment: dict[str, set[date]] = {}
+    observed_by_adjustment: dict[str, set[date]] = {}
     for adjustment in ADJUSTMENTS:
         observed = {
             row[0]
@@ -70,9 +82,19 @@ def coverage_report(
             ).fetchall()
         }
         missing = sorted(expected - observed)
+        missing_by_adjustment[adjustment] = set(missing)
+        observed_by_adjustment[adjustment] = observed
+    classified = classify_gaps(missing_by_adjustment, evidence)
+    for adjustment in ADJUSTMENTS:
+        observed = observed_by_adjustment[adjustment]
+        missing = sorted(missing_by_adjustment[adjustment])
+        unresolved = blocking_gaps(classified[adjustment])
         unexpected = sorted(observed - expected)
-        if listed is not None and missing:
-            issues.append(f"{adjustment}: {len(missing)} 个未解释的交易日缺口（不自动假定停牌）")
+        if listed is not None and unresolved:
+            issues.append(
+                f"{adjustment}: {len(unresolved)} 个交易日缺口仍需核验"
+                "（不自动假定停牌；重复下载相同范围通常无法解决）"
+            )
         if unexpected:
             issues.append(f"{adjustment}: {len(unexpected)} 条记录不在已验证交易日历中")
         if len(observed) < 2:
@@ -84,8 +106,11 @@ def coverage_report(
             "expected_rows": len(expected) if listed is not None else None,
             "missing_count": len(missing) if listed is not None else None,
             "missing_sample": [str(day) for day in missing[:10]] if listed is not None else [],
+            "blocking_missing_count": len(unresolved) if listed is not None else None,
+            "gap_details": classified[adjustment][:20] if listed is not None else [],
+            "gap_details_truncated": max(0, len(classified[adjustment]) - 20),
         }
-    return {
+    report = {
         "availability": "ready"
         if not issues
         else "partial"
@@ -96,7 +121,16 @@ def coverage_report(
         "adjustments": details,
         "effective_start": str(start),
         "effective_end": str(end),
+        "gap_summary": gap_summary(classified),
+        "requires_gap_verification": any(
+            item.get("classification") == "unverified_gap"
+            for items in classified.values()
+            for item in items
+        ),
     }
+    if evidence:
+        report["gap_verification"] = evidence
+    return report
 
 
 def seed_managed_stocks(connection: Any) -> None:

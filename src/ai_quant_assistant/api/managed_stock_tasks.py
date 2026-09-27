@@ -30,6 +30,12 @@ class ManagedStockTaskManager:
             self.dispatch()
         return task
 
+    def submit_gap_verification(self, security_id: str, **kwargs):
+        task, _ = self.service.request_gap_verification(security_id, **kwargs)
+        if task["status"] == "queued":
+            self.dispatch()
+        return task
+
     def dispatch(self):
         if not self.service.database.path.is_file() or self.stop.is_set():
             return
@@ -39,9 +45,9 @@ class ManagedStockTaskManager:
             with self.service.database.connect(read_only=True) as connection:
                 row = connection.execute(
                     """SELECT task_id FROM operation_task WHERE status='queued'
-                       AND json_extract_string(spec_json, '$.dataset')=?
-                       ORDER BY created_at LIMIT 1""",
-                    [getattr(self.service, "dataset", "managed_stock")],
+                       AND json_extract_string(spec_json, '$.dataset') IN
+                           ('managed_stock','managed_stock_gap_verification')
+                       ORDER BY created_at LIMIT 1"""
                 ).fetchone()
             if row:
                 self.inflight.add(row[0])

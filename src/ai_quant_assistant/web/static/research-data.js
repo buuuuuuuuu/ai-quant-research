@@ -88,7 +88,12 @@ function validateResearchDataSymbols(researchType, parameters) {
 
 function researchReadinessHtml(report) {
   const checks = report.checks || [];
-  const rows = checks.map((check) => `<tr><td>${escapeHtml(check.symbol || "共享/范围")}</td><td>${escapeHtml(check.dataset)} ${escapeHtml(check.metric || check.adjustment || "")}</td><td>${escapeHtml(check.status)}</td><td>${escapeHtml(check.required_start || "—")} → ${escapeHtml(check.required_end || "—")}</td><td>${escapeHtml(check.reason || "")}<br>${escapeHtml(check.cannot_backfill_reason || "")}</td></tr>`).join("");
+  const gapLabels = {verified_suspension:"已核验停牌",missing_bar:"真实行情缺失",calendar_mismatch:"交易日历冲突",unverified_gap:"暂时无法核验"};
+  const rows = checks.map((check) => {
+    const gaps = (check.gap_details || []).slice(0, 20).map((gap) => `<li>${escapeHtml(gap.date)} · ${escapeHtml(gapLabels[gap.classification] || `${gap.classification}（暂无中文说明）`)} · ${escapeHtml(gap.reason || "原因未记录")}${gap.source ? ` · ${escapeHtml(gap.source)}` : ""}</li>`).join("");
+    const verifyLink = (check.gap_details || []).some((gap) => gap.classification === "unverified_gap") ? `<p><a href="/data?managed=${encodeURIComponent(check.symbol || "")}#managed-stock-panel">前往数据与股票池，明确确认核验停牌状态</a></p>` : "";
+    return `<tr><td>${escapeHtml(check.symbol || "共享/范围")}</td><td>${escapeHtml(check.dataset)} ${escapeHtml(check.metric || check.adjustment || "")}</td><td>${escapeHtml(check.status)}</td><td>${escapeHtml(check.required_start || "—")} → ${escapeHtml(check.required_end || "—")}</td><td>${escapeHtml(check.reason || "")}<br>${escapeHtml(check.cannot_backfill_reason || "")}${gaps ? `<details><summary>查看缺失日期与分类</summary><ul>${gaps}</ul>${verifyLink}</details>` : ""}</td></tr>`;
+  }).join("");
   return `<p>${report.ready ? "可按已列明缺失策略研究" : "研究预检有阻断项"}；${report.complete ? "所查数据完整" : "仍有缺口/未知项"}。受影响：${escapeHtml((report.affected_symbols || []).join("、") || "无")}</p><p>${escapeHtml((report.blockers || []).join("；"))}</p><p>${escapeHtml((report.warnings || []).join("；"))}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据类型</th><th>状态</th><th>所需范围</th><th>诊断</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 

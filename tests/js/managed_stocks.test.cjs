@@ -151,3 +151,20 @@ test("rows escape names, task errors and coverage; older list responses cannot w
   await old;
   assert.match(race.element("#managed-list").innerHTML, /尚无匹配/);
 });
+
+test("unknown gaps are grouped by date, escaped and require explicit verification", async () => {
+  const h = harness((url, options) => options.method ? {task_id:"task-verify",status:"queued"} : empty());
+  const gap = {date:"2024-01-03",classification:"unverified_gap",reason:"<未知>",source:"fixture"};
+  const asset = {security_id:"SZSE.003816",symbol:"003816",name:"fixture",status:"active",availability:"partial",revision:3,auto_update:false,target_start:"2012-01-01",coverage:{requires_gap_verification:true,gap_summary:{unverified_gap:1},issues:["同一问题","同一问题"],adjustments:{none:{rows:2,gap_details:[gap]},qfq:{rows:2,gap_details:[gap]}}}};
+  const html = h.context.managedRows([asset]);
+  assert.match(html, /none\/qfq/);
+  assert.equal((html.match(/2024-01-03/g) || []).length, 1);
+  assert.match(html, /暂时无法核验/);
+  assert.match(html, /&lt;未知&gt;/);
+  assert.equal((html.match(/同一问题/g) || []).length, 1);
+  await h.context.managedAction(asset, "verify-gaps");
+  assert.match(h.confirmations[0], /访问公网/);
+  assert.match(h.confirmations[0], /不会下载或改写K线/);
+  assert.match(h.calls[0].url, /verify-gaps$/);
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), {expected_revision:3,confirm:true});
+});

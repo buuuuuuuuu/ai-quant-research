@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -339,19 +339,27 @@ class AkShareProvider:
     def get_listing_date(self, symbol: str) -> tuple[date, str]:
         """Fetch explicit listing-date evidence, never infer it from first price."""
         self._exchange_symbol(symbol)
-        sources = [(
-            "listing_date_v2", "akshare:stock_individual_info_em:上市时间",
-            lambda: self._akshare().stock_individual_info_em(
-                symbol=symbol, timeout=self.timeout_seconds,
-            ),
-        )]
+        sources = [
+            (
+                "listing_date_v2",
+                "akshare:stock_individual_info_em:上市时间",
+                lambda: self._akshare().stock_individual_info_em(
+                    symbol=symbol,
+                    timeout=self.timeout_seconds,
+                ),
+            )
+        ]
         if symbol.startswith("6"):
-            sources.append((
-                "listing_date_sse_v1", SSE_LISTING_SOURCE,
-                lambda: sse_listing_frame(symbol, self.timeout_seconds),
-            ))
+            sources.append(
+                (
+                    "listing_date_sse_v1",
+                    SSE_LISTING_SOURCE,
+                    lambda: sse_listing_frame(symbol, self.timeout_seconds),
+                )
+            )
         failures = []
         for namespace, source, fetch in sources:
+
             def validated_fetch(fetch=fetch):
                 result = fetch()
                 listed = validate_listing_frame(result, symbol)
@@ -361,13 +369,20 @@ class AkShareProvider:
 
             try:
                 frame = load_or_fetch(
-                    cache=self.cache, namespace=namespace, params={"symbol": symbol},
-                    fetcher=validated_fetch, retries=self.retries, refresh=self.refresh,
+                    cache=self.cache,
+                    namespace=namespace,
+                    params={"symbol": symbol},
+                    fetcher=validated_fetch,
+                    retries=self.retries,
+                    refresh=self.refresh,
                 )
                 if frame.attrs.get("cache_status") == "stale_fallback":
                     raise ProviderError("listing date refresh failed; stale evidence rejected")
-                if (len(frame) != 1 or not {"symbol", "listing_date"}.issubset(frame.columns)
-                        or str(frame.iloc[0]["symbol"]) != symbol):
+                if (
+                    len(frame) != 1
+                    or not {"symbol", "listing_date"}.issubset(frame.columns)
+                    or str(frame.iloc[0]["symbol"]) != symbol
+                ):
                     raise ProviderError("invalid cached listing-date identity")
                 return explicit_listing_date(frame.iloc[0]["listing_date"]), source
             except Exception as exc:  # noqa: BLE001 - independent public provider boundary
@@ -395,6 +410,68 @@ class AkShareProvider:
             retries=self.retries,
             refresh=self.refresh,
         )
+
+    def get_suspension_evidence(self, symbol: str, dates: tuple[date, ...]) -> dict[str, object]:
+        """Query explicit historical suspension records for at most 100 dates.
+
+        An empty provider result is intentionally not treated as proof that the
+        stock traded. Callers retain those dates as unverified gaps.
+        """
+        if not dates or len(dates) > 100 or any(day > date.today() for day in dates):
+            raise ProviderError("停牌核验要求1至100个非未来日期")
+        if len(symbol) != 6 or not symbol.isdigit():
+            raise ProviderError("停牌核验股票代码无效")
+        verified: list[dict[str, object]] = []
+        errors: list[dict[str, str]] = []
+        ak = self._akshare()
+        for day in sorted(set(dates)):
+            params = {"date": self._compact(day)}
+
+            def fetch(day=day) -> pd.DataFrame:
+                frame = ak.stock_tfp_em(date=self._compact(day))
+                required = {"代码", "停牌时间"}
+                if not isinstance(frame, pd.DataFrame) or not required.issubset(frame.columns):
+                    raise ProviderError("停复牌接口返回结构不完整")
+                result = frame.copy()
+                result["代码"] = result["代码"].astype(str).str.extract(r"(\d{6})", expand=False)
+                result["停牌时间"] = pd.to_datetime(result["停牌时间"], errors="coerce").dt.date
+                return result.loc[(result["代码"] == symbol) & (result["停牌时间"] <= day)]
+
+            try:
+                frame = load_or_fetch(
+                    cache=self.cache,
+                    namespace="suspension_evidence_v1",
+                    params={"symbol": symbol, **params},
+                    fetcher=fetch,
+                    retries=self.retries,
+                    refresh=self.refresh,
+                )
+                if frame.attrs.get("cache_status") == "stale_fallback":
+                    raise ProviderError("停牌证据刷新失败，拒绝使用过期回退结果")
+                for _, row in frame.iterrows():
+                    end_value = row.get("停牌截止时间")
+                    end_day = pd.to_datetime(end_value, errors="coerce")
+                    if pd.isna(end_day) or day <= end_day.date():
+                        verified.append(
+                            {
+                                "date": str(day),
+                                "classification": "verified_suspension",
+                                "source": "akshare:stock_tfp_em:eastmoney",
+                                "checked_at": datetime.now(UTC).isoformat(),
+                                "reason": str(row.get("停牌原因") or "供应商明确记录该日停牌")[
+                                    :300
+                                ],
+                            }
+                        )
+                        break
+            except Exception as exc:  # noqa: BLE001 - external provider boundary
+                errors.append({"date": str(day), "error": f"{type(exc).__name__}: {exc}"[:500]})
+        return {
+            "verified": verified,
+            "errors": errors,
+            "requested": len(set(dates)),
+            "source": "akshare:stock_tfp_em:eastmoney",
+        }
 
     def get_daily_bars(
         self, symbol: str, start_date: date, end_date: date, adjustment: str

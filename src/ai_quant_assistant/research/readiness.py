@@ -16,6 +16,7 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.managed_coverage import completed_date, market_today
 from ai_quant_assistant.storage.stock_pools import StockPoolService
+from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps
 
 
 def encoded(value: Any) -> str:
@@ -188,6 +189,29 @@ class ResearchReadiness:
             ).fetchall()
         observed = {row[0] for row in rows}
         missing = sorted(set(days) - observed)
+        gap_details: list[dict[str, Any]] = []
+        unresolved = missing
+        if not benchmark and listed is not None:
+            by_adjustment: dict[str, set[date]] = {}
+            for name in ("none", "qfq"):
+                present = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT trade_date FROM published_daily_bar WHERE security_id=? "
+                        "AND adjustment=? AND trade_date BETWEEN ? AND ?",
+                        [security_id, name, start, end],
+                    ).fetchall()
+                }
+                by_adjustment[name] = set(days) - present
+            raw = connection.execute(
+                "SELECT coverage_json FROM managed_stock WHERE security_id=?", [security_id]
+            ).fetchone()
+            try:
+                evidence = json.loads(raw[0]).get("gap_verification", {}) if raw and raw[0] else {}
+            except (TypeError, json.JSONDecodeError):
+                evidence = {}
+            gap_details = classify_gaps(by_adjustment, evidence).get(adjustment, [])
+            unresolved = [date.fromisoformat(item["date"]) for item in blocking_gaps(gap_details)]
         unknown = not known or (not benchmark and listed is None) or end > completed_date(end)
         enough = len(observed) >= (screen_rows or 2)
         outside_lifetime = listed is not None and start > end
@@ -196,14 +220,18 @@ class ResearchReadiness:
             if outside_lifetime
             else "unknown"
             if unknown
-            else ("ready" if not missing and enough else "missing")
+            else ("ready" if not unresolved and enough else "missing")
         )
         reason = (
             "研究区间在证券生命周期之外"
             if outside_lifetime
             else "日历边界、上市日期或最新完整交易日无法验证"
             if unknown
-            else f"{len(missing)} 个未解释交易日缺口；实际 {len(observed)} 行，所需至少 {screen_rows or 2} 行"
+            else (
+                f"{len(unresolved)} 个交易日缺口仍需核验；"
+                f"{sum(1 for item in gap_details if item.get('classification') == 'verified_suspension')} "
+                f"个日期已核验为停牌；实际 {len(observed)} 行，所需至少 {screen_rows or 2} 行"
+            )
         )
         return {
             "symbol": symbol,
@@ -218,8 +246,10 @@ class ResearchReadiness:
             "rows": len(observed),
             "actual_start": str(min(observed)) if observed else None,
             "actual_end": str(max(observed)) if observed else None,
-            "missing_count": len(missing) if known else None,
-            "missing_dates": [str(day) for day in missing[:20]],
+            "missing_count": len(unresolved) if known else None,
+            "missing_dates": [str(day) for day in unresolved[:20]],
+            "gap_details": gap_details[:20],
+            "gap_details_truncated": max(0, len(gap_details) - 20),
             "reason": reason,
             "can_backfill": not outside_lifetime,
             "cannot_backfill_reason": None,

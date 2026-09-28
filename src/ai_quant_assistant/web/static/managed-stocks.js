@@ -1,6 +1,8 @@
 // Local data enrollment is explicit; reading/searching never starts a download.
 const managedState = {busy: false, page: 1, generation: 0, timer: null, items: [], tasks: new Map()};
 const managedLabels = {ready: "可用", partial: "部分完成", unavailable: "待补齐", active: "纳入管理", archived: "已移出", queued: "等待同步", running: "同步中", succeeded: "同步完成", failed: "同步失败"};
+const managedStageLabels = {listing_date:"上市日期核验", daily_bar:"行情同步", announcement:"定期公告同步"};
+const managedStageStatusLabels = {pending:"等待开始", running:"进行中", succeeded:"已完成", failed:"失败", skipped:"已跳过", not_started:"尚未开始", not_requested:"未请求"};
 const managedToday = () => new Intl.DateTimeFormat("en-CA", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
 function managedMessage(text, error = false) {
@@ -61,13 +63,34 @@ async function managedAction(asset, action) {
   }
   if (action === "sync") {
     const end = managedToday();
-    const includeAnnouncements = $("#managed-include-announcements").checked;
+    const retry = asset.task?.status === "failed" && asset.task?.result?.stages;
+    const includeAnnouncements = retry ? Boolean(asset.task.spec?.include_announcements) : $("#managed-include-announcements").checked;
     if (!window.confirm(`确认更新 ${asset.symbol}，补齐 ${asset.target_start} 至 ${end} 的不复权/前复权行情${includeAnnouncements ? "及一季报、中报、三季报、年报公告元数据" : "（不含公告）"}？此操作会访问公网，不下载财务指标或 PDF，不进行 OCR。`)) return;
     return managedMutation("/api/v1/data/managed-stocks", {symbol: asset.symbol, start: asset.target_start, end, expected_revision: asset.revision, confirm: true, refresh: true, auto_update: asset.auto_update, include_announcements: includeAnnouncements});
   }
   const text = action === "archive" ? "确认移出管理并停止自动更新？保留历史数据；存在活动股票池引用时将拒绝操作。" : action === "restore" ? "确认恢复管理？不会自动下载或开启定时更新；需要补齐时请单独确认。" : `确认${asset.auto_update ? "关闭" : "开启"}日常自动行情更新？`;
   if (!window.confirm(text)) return;
   return managedMutation(`/api/v1/data/managed-stocks/${encodeURIComponent(asset.security_id)}`, {action, expected_revision: asset.revision, confirm: true, ...(action === "configure" ? {auto_update: !asset.auto_update} : {})}, "PATCH");
+}
+
+function managedStageSummary(task) {
+  const stages = task?.result?.stages;
+  if (!stages) return "";
+  return `<div class="managed-stage-list">${Object.entries(managedStageLabels).map(([key, label]) => {
+    const stage = stages[key] || {status:"unknown", message:"历史任务未保存阶段信息"};
+    const counts = stage.total_partitions == null ? "" : ` · 分区 ${stage.completed_partitions ?? 0}/${stage.total_partitions}`;
+    const evidence = key === "listing_date" && stage.listing_date ? `<br>${escapeHtml(stage.listing_date)} · ${escapeHtml(stage.source || "来源未记录")}` : "";
+    return `<div><strong>${label}</strong>：${escapeHtml(managedStageStatusLabels[stage.status] || `${stage.status || "unknown"}（暂无中文说明）`)}${escapeHtml(counts)}<br>${escapeHtml(stage.message || "说明未记录")}${evidence}</div>`;
+  }).join("")}</div>`;
+}
+
+function managedSyncLabel(asset) {
+  const stages = asset.task?.result?.stages;
+  if (asset.task?.status !== "failed" || !stages) return "补齐 / 更新";
+  if (stages.listing_date?.status === "failed" || stages.daily_bar?.status === "not_started") return "重试上市日期并继续行情";
+  if (stages.daily_bar?.status === "failed") return "重试行情失败分区";
+  if (stages.announcement?.status === "failed") return "重试公告失败分区";
+  return "补齐 / 更新";
 }
 
 function managedRows(items) {
@@ -88,11 +111,13 @@ function managedRows(items) {
     const announcement = asset.coverage.announcement_sync;
     const announcementText = announcement ? `定期公告：${announcement.status === "published" ? "已同步" : "未完整完成"} · ${announcement.row_count ?? "—"} 条 · ${announcement.start_date} → ${announcement.end_date}` : "定期公告：尚无同步记录";
     const actions = asset.status === "archived" ? ["restore", "prices", "references"] : ["sync", ...(asset.coverage.requires_gap_verification ? ["verify-gaps"] : []), "financial", "configure", "archive", "prices", "references"];
-    const labels = {restore: "恢复管理", financial: "财务预检 / 补齐计划", sync: "补齐 / 更新", "verify-gaps": "核验缺失日期", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
-    const progress = task && task.status !== "failed" ? ` ${escapeHtml(task.progress)}%` : "";
+    const labels = {restore: "恢复管理", financial: "财务预检 / 补齐计划", sync: managedSyncLabel(asset), "verify-gaps": "核验缺失日期", configure: asset.auto_update ? "停止自动更新" : "开启自动更新", archive: "移出管理", prices: "查看明细", references: "关联股票池"};
+    const progress = task ? ` ${escapeHtml(task.progress)}%` : "";
+    const listing = asset.coverage.listing_evidence;
+    const listingText = asset.listing_date ? `上市日期：${asset.listing_date} · ${asset.listing_source || "来源未记录"}${listing?.fallback_used ? "（使用备用来源）" : ""}` : "上市日期：尚未核验（不会根据第一根K线推断）";
     const financial = asset.financial_summary;
     const financialText = financial ? `财务：${financial.reports} 份报告 / ${financial.metrics} 项指标；最近公开 ${financial.latest_published_at || "—"}（不等于研究就绪）` : "财务：尚未核验";
-    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(financialText)}<br>${escapeHtml(issues.join("；"))}${gapDetail}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
+    return `<tr data-managed-id="${escapeHtml(asset.security_id)}"><td>${escapeHtml(asset.symbol || asset.security_id)} · ${escapeHtml(asset.name || "目录待更新")}</td><td>${escapeHtml(managedLabels[asset.status])} / ${escapeHtml(managedLabels[asset.availability])}<br>revision ${escapeHtml(asset.revision)}</td><td>${escapeHtml(listingText)}${listing?.checked_at ? `<br>核验时间：${escapeHtml(listing.checked_at)}` : ""}<br>${escapeHtml(coverage || "暂无行情")}<br>${escapeHtml(announcementText)}<br>${escapeHtml(financialText)}<br>${escapeHtml(issues.join("；"))}${gapDetail}</td><td>${task ? `${escapeHtml(managedLabels[task.status])}${progress}<br>${escapeHtml(task.message || "")}${managedStageSummary(task)}<br>${escapeHtml(task.task_id)}` : "无任务"}</td><td>${actions.map((action) => `<button type="button" data-managed-action="${action}">${labels[action]}</button>`).join(" ")}</td></tr>`;
   }).join("");
 }
 

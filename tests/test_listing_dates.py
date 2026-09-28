@@ -15,14 +15,23 @@ from ai_quant_assistant.providers import listing_dates
 from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.providers.listing_dates import (
     SSE_LISTING_SOURCE,
+    SZSE_LISTING_SOURCE,
     explicit_listing_date,
     sse_listing_frame,
+    szse_listing_directory_frame,
     validate_listing_frame,
+    validate_szse_listing_directory,
 )
 
 
 def evidence(symbol="688111", listed="20191118"):
     return pd.DataFrame({"item": ["股票代码", "上市时间"], "value": [symbol, listed]})
+
+
+def szse_xlsx(symbol="003816", listed="2019-08-26"):
+    payload = BytesIO()
+    pd.DataFrame({"A股代码": [symbol], "A股简称": ["受控深市股票"], "A股上市日期": [listed]}).to_excel(payload, index=False)
+    return payload.getvalue()
 
 
 @pytest.fixture
@@ -34,7 +43,10 @@ def endpoints(tmp_path, monkeypatch):
         raise RemoteDisconnected("controlled disconnect; never use real internet")
 
     def secondary(request, timeout):
-        calls.append(("sse", request, timeout))
+        exchange = "szse" if "szse.cn" in request.full_url else "sse"
+        calls.append((exchange, request, timeout))
+        if exchange == "szse":
+            return BytesIO(szse_xlsx())
         return BytesIO(json.dumps({"result": [{
             "A_STOCK_CODE": "688111", "LIST_DATE": "2019-11-18",
         }]}).encode())
@@ -61,15 +73,14 @@ def test_disconnected_primary_uses_bounded_single_stock_exchange_evidence(endpoi
     assert all(call[1]["timeout"] == 2 for call in calls[:3])
 
 
-def test_primary_success_does_not_call_secondary_and_cache_keeps_leading_zero(endpoints):
+def test_szse_official_success_is_cached_and_keeps_leading_zero(endpoints):
     provider, ak, _, calls = endpoints
     provider.refresh = False
-    ak.stock_individual_info_em = lambda **kwargs: evidence("003816", "20190826")
+    ak.stock_individual_info_em = lambda **kwargs: pytest.fail("official source should win")
     first = provider.get_listing_date("003816")
-    assert first[0] == date(2019, 8, 26)
-    ak.stock_individual_info_em = lambda **kwargs: pytest.fail("use validated cache")
+    assert first == (date(2019, 8, 26), SZSE_LISTING_SOURCE)
     assert provider.get_listing_date("003816") == first
-    assert calls == []
+    assert [call[0] for call in calls] == ["szse"]
 
 
 @pytest.mark.parametrize("frame", [
@@ -124,11 +135,37 @@ def test_all_sources_fail_with_bounded_retries_and_safe_diagnostics(endpoints):
     assert [c[0] for c in calls].count("sse_failure") == 3
 
 
-def test_non_shanghai_never_uses_wrong_exchange_fallback(endpoints):
+def test_non_shanghai_uses_szse_not_wrong_exchange_fallback(endpoints):
     provider, _, _, calls = endpoints
-    with pytest.raises(ProviderError):
-        provider.get_listing_date("003816")
-    assert {call[0] for call in calls} == {"em"}
+    assert provider.get_listing_date("003816")[1] == SZSE_LISTING_SOURCE
+    assert {call[0] for call in calls} == {"szse"}
+
+
+def test_szse_failure_can_fall_back_to_exact_em_identity(endpoints):
+    provider, ak, opener, _ = endpoints
+    opener.open = lambda *args, **kwargs: BytesIO(b"not-an-xlsx")
+    ak.stock_individual_info_em = lambda **kwargs: evidence("003816", "20190826")
+    assert provider.get_listing_date("003816") == (
+        date(2019, 8, 26),
+        "akshare:stock_individual_info_em:上市时间",
+    )
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pd.DataFrame({"symbol": ["000333"], "listing_date": ["2013-09-18"]}),
+        pd.DataFrame({"symbol": ["000333", "000333"], "listing_date": ["2013-09-18", "2013-09-19"]}),
+        pd.DataFrame({"symbol": ["600519"], "listing_date": ["2013-09-18"]}),
+        pd.DataFrame({"symbol": ["000333"], "listing_date": ["2099-01-01"]}),
+    ],
+)
+def test_szse_directory_requires_exact_unique_current_identity(frame):
+    if len(frame) == 1 and frame.iloc[0]["symbol"] == "000333" and frame.iloc[0]["listing_date"] == "2013-09-18":
+        assert validate_szse_listing_directory(frame, "000333") == date(2013, 9, 18)
+    else:
+        with pytest.raises(ProviderError):
+            validate_szse_listing_directory(frame, "000333")
 
 
 def test_refresh_does_not_trust_stale_listing_cache(endpoints):
@@ -148,6 +185,28 @@ def test_response_size_and_redirects_are_bounded(endpoints):
         sse_listing_frame("688111", 2)
     with pytest.raises(ProviderError, match="redirected"):
         listing_dates._NoRedirect().redirect_request(None, None, 302, "", {}, "http://127.0.0.1")
+
+
+@pytest.mark.parametrize(
+    ("payload", "content_type", "message"),
+    [
+        (b"<html>blocked</html>", "text/html", "content type"),
+        (b"not-an-xlsx", "application/octet-stream", "not an XLSX"),
+        (b"PK\x03\x04" + b"x" * (4 * 1024 * 1024), "application/octet-stream", "size limit"),
+    ],
+)
+def test_szse_response_type_format_and_size_are_bounded(monkeypatch, payload, content_type, message):
+    class Headers:
+        def get_content_type(self):
+            return content_type
+
+    class Response(BytesIO):
+        headers = Headers()
+
+    opener = SimpleNamespace(open=lambda *args, **kwargs: Response(payload))
+    monkeypatch.setattr(listing_dates, "build_opener", lambda *args: opener)
+    with pytest.raises(ProviderError, match=message):
+        szse_listing_directory_frame(2)
 
 
 @pytest.mark.parametrize("value", ["20191118", "20191118.0", "2019-11-18", date(2019, 11, 18)])

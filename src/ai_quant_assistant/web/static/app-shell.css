@@ -605,3 +605,46 @@ summary {
     transition: none !important;
   }
 }
+
+/* M12-E: guided daily-signal configuration and action-local feedback. */
+.daily-progress {
+  position: sticky;
+  top: 76px;
+  z-index: 8;
+  display: flex;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 247, .96);
+}
+.daily-progress a { flex: 0 0 auto; padding: 7px 10px; border-radius: 999px; background: #edf4ef; color: var(--green); font-size: 12px; }
+.daily-mode { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.daily-mode button[aria-pressed="true"] { border-color: var(--green); background: var(--green); color: white; }
+.daily-mode small { flex-basis: 100%; color: var(--muted); }
+#center-copy-form fieldset,
+#center-copy-form details,
+#center-daily-actions { scroll-margin-top: 150px; }
+.section-feedback:empty,
+.action-feedback:empty,
+.field-error:empty { display: none; }
+.section-feedback,
+.action-feedback { margin: 10px 0; overflow-wrap: anywhere; }
+.field-error { display: block; margin-top: 5px; color: var(--red); font-weight: 600; }
+[aria-invalid="true"] { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(170, 68, 53, .12); }
+.field-errors button,
+.problem-actions button { margin: 5px 4px 0 0; border: 1px solid currentColor; border-radius: 5px; background: white; padding: 6px 9px; cursor: pointer; }
+#center-daily-errors button { border: 0; background: transparent; color: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.preflight-problem { border-left: 4px solid #b27b24; }
+.problem-actions { margin-top: 8px; }
+.daily-action-bar { position: sticky; bottom: 0; z-index: 9; margin-top: 16px; padding: 12px; border: 1px solid var(--line); background: rgba(255, 253, 247, .97); box-shadow: 0 -8px 28px rgba(28, 48, 37, .09); }
+.daily-action-bar .center-actions { margin: 0; }
+.daily-action-bar p { margin: 7px 0 0; font-size: 12px; }
+.research-data-return { position: sticky; top: 78px; z-index: 7; }
+@media (max-width: 600px) {
+  .daily-progress { top: 62px; margin-inline: -8px; }
+  .daily-action-bar { margin-inline: -8px; padding: 10px; }
+  .daily-action-bar .center-actions { display: grid; grid-template-columns: 1fr; }
+  .daily-action-bar button { width: 100%; min-height: 44px; }
+}

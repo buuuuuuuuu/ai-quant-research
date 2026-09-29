@@ -254,6 +254,9 @@ def test_daily_signal_calendar_and_benchmark_gaps_are_explained_separately(db):
     recommendations = {item["code"]: item for item in result["recommendations"]}
     assert recommendations["calendar_coverage"]["title"] == "交易日历覆盖不足"
     assert recommendations["benchmark_coverage"]["title"] == "基准日线覆盖不足"
+    assert recommendations["calendar_coverage"]["action_kind"] == "data_plan"
+    assert recommendations["calendar_coverage"]["network_required_for_resolution"] is True
+    assert recommendations["benchmark_coverage"]["affected_symbols"] == ["csi000300"]
     calendar = next(item for item in result["checks"] if item["dataset"] == "trading_calendar")
     assert calendar["status"] == "missing"
     assert calendar["actual_end"] == "2024-01-09"
@@ -278,6 +281,10 @@ def test_daily_signal_preflight_explains_listing_boundary_and_next_action(db):
     assert "300750" in recommendation["explanation"]
     assert "2024-03-01" in recommendation["explanation"]
     assert "研究区间" in recommendation["action"]
+    assert recommendation["field"] == "start_date"
+    assert recommendation["suggested_value"] == "2024-03-01"
+    assert recommendation["affected_symbols"] == ["300750"]
+    assert recommendation["action_kind"] == "update_field"
     price = next(item for item in result["checks"] if item["dataset"] == "daily_bar")
     assert price["list_date"] == "2024-03-01"
     assert price["latest_complete_date"]

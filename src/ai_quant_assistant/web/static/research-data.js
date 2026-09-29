@@ -233,6 +233,19 @@ async function openResearchDataPlan(planId) {
 }
 
 function bindResearchData() {
+  const query = typeof URLSearchParams !== "undefined" && typeof location !== "undefined"
+    ? new URLSearchParams(location.search)
+    : {get: () => null};
+  const returnTo = query.get("return_to");
+  if (returnTo && /^\/backtests\/daily-signals\?data_plan=[A-Za-z0-9_-]+$/.test(returnTo)) {
+    const banner = document.createElement("p");
+    banner.className = "page-notice research-data-return";
+    const link = document.createElement("a");
+    link.href = returnTo;
+    link.textContent = "返回日线策略配置并恢复冻结参数";
+    banner.append("数据核验完成后，", link, "。返回只会重新检查本地数据，不会自动下载或运行回测。");
+    $("research-data-panel").prepend(banner);
+  }
   for (const [selector, kind, payload] of [["#backtest-form","factor_backtest",() => formPayload()],["#factor-lab-form","factor_lab",() => labPayload()],["#screen-form","screen",() => screenPayload()]]) {
     const form = $(selector);
     if (!form) continue;
@@ -255,5 +268,7 @@ function bindResearchData() {
     } catch(error) {if (generation === researchDataState.generation) researchDataError(error);}
   });
   updateResearchDataControls();
+  const planId = query.get("research_data_plan");
+  if (planId && /^[A-Za-z0-9_-]+$/.test(planId)) openResearchDataPlan(planId);
 }
 if ($("#research-data-panel")) bindResearchData();

@@ -12,17 +12,17 @@ function harness(responder, confirmed = true) {
   let timerId = 0;
   function element(selector) {
     if (!elements.has(selector)) elements.set(selector, {textContent:"",innerHTML:"",value:"",dataset:{},disabled:false,hidden:false,listeners:{},children:[],scrollIntoView(){},
-      addEventListener(name, fn){this.listeners[name] = fn;}, appendChild(child){this.children.push(child);}, querySelectorAll(){return [];}});
+      addEventListener(name, fn){this.listeners[name] = fn;}, appendChild(child){this.children.push(child);}, append(...children){this.children.push(...children);}, prepend(child){this.children.unshift(child);}, querySelectorAll(){return [];}});
     return elements.get(selector);
   }
-  const context = vm.createContext({$:element,window:{confirm:() => confirmed},clearTimeout(id){timers.delete(id);},setTimeout(fn){timers.set(++timerId,fn);return timerId;},state:{},
+  const context = vm.createContext({$:element,window:{confirm:() => confirmed},location:{search:""},URLSearchParams,clearTimeout(id){timers.delete(id);},setTimeout(fn){timers.set(++timerId,fn);return timerId;},state:{},
     document:{createElement:() => element(`created-${elements.size}`)},
     formPayload:() => ({symbols:[]}),labPayload:() => ({symbols:[]}),screenPayload:() => ({symbols:[]}),
     escapeHtml:value => String(value ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;"),
     requestJson:async (url, options = {}) => {calls.push({url,options}); return responder(url, options);},
   });
   vm.runInContext(source, context);
-  return {context,element,calls,timers,setPlan:(value=plan) => context.renderResearchDataPlan(JSON.parse(JSON.stringify(value)))};
+  return {context,element,elements,calls,timers,setPlan:(value=plan) => context.renderResearchDataPlan(JSON.parse(JSON.stringify(value)))};
 }
 
 function deferred() {
@@ -44,6 +44,18 @@ test("stock navigation can invalidate a plan without scrolling away from the ove
   h.context.beginResearchDataContext();
   assert.equal(scrolls,1);
   assertDisabled(h);
+});
+
+test("data page restores a frozen plan and offers only a safe return link", async () => {
+  const h = harness(() => ({...plan,status:"succeeded",task:{status:"succeeded",progress:100}}));
+  h.context.location.search = "?research_data_plan=data-plan-fixture&return_to=%2Fbacktests%2Fdaily-signals%3Fdata_plan%3Ddata-plan-fixture";
+  h.context.bindResearchData();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.calls[0].url, "/api/v1/research-data/plans/data-plan-fixture");
+  const returnLink = [...h.elements.values()].find((item) => item.href?.startsWith("/backtests/daily-signals"));
+  assert.equal(returnLink.href, "/backtests/daily-signals?data_plan=data-plan-fixture");
+  assert.match(returnLink.textContent, /恢复冻结参数/);
+  assert.equal(h.calls.some((call) => call.options.method === "POST"), false);
 });
 
 test("preflight and plan preview never confirm or start research", async () => {

@@ -576,7 +576,11 @@ def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch, 
     from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 
     _, provider, service = setup
-    manager = ManagedStockTaskManager(service)
+    manager = ManagedStockTaskManager(
+        service,
+        datasets=("managed_stock", "managed_stock_gap_verification"),
+        worker_name="managed-stock-test",
+    )
     monkeypatch.setattr(manager, "dispatch", lambda: None)
     app = FastAPI()
     app.include_router(managed_stock_router(manager, "fixture-api"))

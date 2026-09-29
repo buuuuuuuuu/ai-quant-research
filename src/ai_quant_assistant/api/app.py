@@ -165,8 +165,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
 
     research_dashboard = ResearchDashboardBrief(database)
-    managed_stock_tasks = ManagedStockTaskManager(ManagedStockService(database, resolved_settings))
-    research_data_tasks = ManagedStockTaskManager(ResearchDataPlans(database, resolved_settings))
+    managed_stock_tasks = ManagedStockTaskManager(
+        ManagedStockService(database, resolved_settings),
+        datasets=("managed_stock", "managed_stock_gap_verification"),
+        worker_name="managed-stock",
+    )
+    research_data_tasks = ManagedStockTaskManager(
+        ResearchDataPlans(database, resolved_settings),
+        datasets=(ResearchDataPlans.dataset,),
+        worker_name="research-data",
+    )
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,

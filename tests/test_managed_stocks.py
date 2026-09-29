@@ -138,7 +138,7 @@ def test_enroll_backfill_and_pool_admission(setup):
     with pytest.raises(ValueError, match="not ready"):
         pools.create("blocked", symbols=["003816"])
     result = service.run(task["task_id"])
-    assert result["status"] == "succeeded", result
+    assert result["status"] == "succeeded", result.get("error")
     assert {call[1] for call in provider.calls} == {date(2024, 1, 2)}
     assert {call[3] for call in provider.calls} == {"none", "qfq"}
     asset = service.get("SZSE.003816")
@@ -671,9 +671,11 @@ def test_listing_failure_preserves_stage_and_unknown_gaps_then_retry_succeeds(se
     monkeypatch.setattr(provider, "get_listing_date", unavailable)
     task, _ = submit(service)
     failed = service.run(task["task_id"])
-    assert failed["status"] == "failed" and failed["progress"] == 1
-    assert failed["completed_at"] and failed.get("result") is None
-    assert "行情下载尚未开始" in failed["message"]
+    assert failed["status"] == "failed" and failed["progress"] == 100
+    assert failed["completed_at"] and failed["result"]["outcome"] == "listing_date_failed"
+    assert failed["result"]["stages"]["listing_date"]["status"] == "failed"
+    assert failed["result"]["stages"]["daily_bar"]["status"] == "not_started"
+    assert "行情同步尚未开始" in failed["message"]
     assert "上市日期查询失败" in failed["error"]
     assert provider.calls == []
     asset = service.get("SZSE.003816")
@@ -698,6 +700,70 @@ def test_listing_failure_preserves_stage_and_unknown_gaps_then_retry_succeeds(se
     assert service.tasks.get(task["task_id"]) == failed
     ready = service.get("SZSE.003816")
     assert ready["eligible"] and ready["listing_source"] == "fixture:explicit-listing-date"
+
+
+def test_listing_retry_skips_already_completed_announcements(setup, monkeypatch):
+    _, provider, service = setup
+    original_listing = provider.get_listing_date
+    announcement_calls = []
+
+    def unavailable(_symbol):
+        raise RuntimeError("controlled listing source failure")
+
+    def announcements(*args):
+        announcement_calls.append(args)
+        return announcement_fixture(*args)
+
+    monkeypatch.setattr(provider, "get_listing_date", unavailable)
+    monkeypatch.setattr(provider, "get_report_announcements", announcements, raising=False)
+    task, _ = submit(service, include_announcements=True)
+    failed = service.run(task["task_id"])
+    assert failed["status"] == "failed" and failed["progress"] == 100
+    assert failed["result"]["stages"]["listing_date"]["status"] == "failed"
+    assert failed["result"]["stages"]["daily_bar"]["status"] == "not_started"
+    assert failed["result"]["stages"]["announcement"]["status"] == "succeeded"
+    initial_announcement_calls = len(announcement_calls)
+    assert initial_announcement_calls > 0
+
+    asset = service.get("SZSE.003816")
+    monkeypatch.setattr(provider, "get_listing_date", original_listing)
+    monkeypatch.setattr(
+        provider,
+        "get_report_announcements",
+        lambda *args: pytest.fail("completed announcement stage must be skipped"),
+        raising=False,
+    )
+    retry, created = submit(
+        service,
+        expected_revision=asset["revision"],
+        refresh=True,
+        include_announcements=True,
+    )
+    assert created and retry["spec"]["requested_stages"] == ["listing_date", "daily_bar"]
+    completed = service.run(retry["task_id"])
+    assert completed["status"] == "succeeded"
+    assert completed["result"]["stages"]["announcement"]["status"] == "skipped"
+    assert len(announcement_calls) == initial_announcement_calls
+
+
+def test_conflicting_persisted_listing_sources_block_without_overwrite(setup):
+    db, provider, service = setup
+    task, _ = submit(service)
+    with db.connect() as connection:
+        connection.execute(
+            "UPDATE managed_stock SET listing_date='2024-01-02', listing_source='fixture:a'"
+        )
+        connection.execute(
+            "UPDATE security_master SET list_date='2024-01-03' WHERE security_id='SZSE.003816'"
+        )
+    result = service.run(task["task_id"])
+    assert result["status"] == "failed" and result["progress"] == 100
+    listing_stage = result["result"]["stages"]["listing_date"]
+    assert listing_stage["status"] == "failed"
+    assert listing_stage["managed_stock_date"] == "2024-01-02"
+    assert listing_stage["security_master_date"] == "2024-01-03"
+    assert provider.calls == []
+    assert service.get("SZSE.003816")["listing_date"] == "2024-01-02"
 
 
 def test_heartbeat_preserves_progress_stage_and_rejects_old_owner_generation(setup):
@@ -756,6 +822,62 @@ def test_exchange_fallback_backfills_and_reuses_persisted_evidence(setup, monkey
     retry, _ = service.request("688111", start=date(2012, 1, 1), end=date(2024, 1, 5), confirm=True,
                                refresh=True, expected_revision=asset["revision"])
     assert service.run(retry["task_id"])["status"] == "succeeded"
+
+
+def test_szse_official_listing_evidence_is_saved_and_allows_prices(setup, monkeypatch, tmp_path):
+    from ai_quant_assistant.providers.listing_dates import SZSE_LISTING_SOURCE
+
+    db, controlled, service = setup
+    with db.connect() as connection:
+        connection.execute("DELETE FROM managed_stock WHERE security_id='SZSE.000333'")
+        connection.execute(
+            """INSERT INTO security_master
+               (security_id,symbol,exchange,name,status,source,source_batch_id)
+               VALUES ('SZSE.000333','000333','SZSE','测试美的集团','active','fixture','fixture')"""
+        )
+    monkeypatch.setattr(
+        "ai_quant_assistant.providers.akshare_provider.szse_listing_directory_frame",
+        lambda *_: pd.DataFrame(
+            {"symbol": ["000333"], "listing_date": ["2013-09-18"]}
+        ),
+    )
+    controlled.listed = date(2013, 9, 18)
+
+    def calendar():
+        days = pd.bdate_range("2013-09-18", "2024-01-05")
+        return pd.DataFrame(
+            [
+                {
+                    "exchange": exchange,
+                    "trade_date": day,
+                    "is_open": True,
+                    "previous_open_date": None,
+                    "next_open_date": None,
+                    "session_no": index + 1,
+                    "source": "fixture:calendar",
+                }
+                for exchange in ("SSE", "SZSE")
+                for index, day in enumerate(days)
+            ]
+        )
+
+    provider = AkShareProvider(tmp_path / "listing", retries=1)
+    monkeypatch.setattr(provider, "get_trading_calendar", calendar)
+    monkeypatch.setattr(provider, "get_daily_bars", controlled.get_daily_bars)
+    service.provider_factory = lambda _: provider
+    task, _ = service.request(
+        "000333", start=date(2012, 1, 1), end=date(2024, 1, 5), confirm=True
+    )
+    result = service.run(task["task_id"])
+    assert result["status"] == "succeeded", result.get("error")
+    asset = service.get("SZSE.000333")
+    assert asset["listing_date"] == "2013-09-18"
+    assert asset["listing_source"] == SZSE_LISTING_SOURCE
+    evidence = asset["coverage"]["listing_evidence"]
+    assert evidence["symbol"] == "000333"
+    assert evidence["source"] == SZSE_LISTING_SOURCE
+    assert evidence["fallback_used"] is False
+    assert result["result"]["stages"]["listing_date"]["status"] == "succeeded"
 
 
 def announcement_fixture(symbol, start, end, report_type):
@@ -822,8 +944,10 @@ def test_confirmed_combined_sync_publishes_announcements_without_pdf_and_preserv
 
 def test_announcement_failure_does_not_revoke_ready_prices_and_can_retry(setup, monkeypatch):
     _, provider, service = setup
+    announcement_calls = []
 
     def failure(*args):
+        announcement_calls.append(args[-1])
         if args[-1] == "annual":
             raise RuntimeError("controlled annual source failure")
         return announcement_fixture(*args)
@@ -836,13 +960,28 @@ def test_announcement_failure_does_not_revoke_ready_prices_and_can_retry(setup, 
     assert failed["status"] == "failed" and "定期公告同步失败" in failed["error"]
     assert "controlled annual source failure" in failed["error"]
     assert len(failed["error"]) < 1000
+    assert failed["result"]["stages"]["daily_bar"]["status"] == "succeeded"
+    assert failed["result"]["stages"]["announcement"]["status"] == "failed"
     assert asset["availability"] == "ready" and asset["eligible"]
     assert asset["coverage"]["announcement_sync"]["row_count"] == 3
-    monkeypatch.setattr(provider, "get_report_announcements", announcement_fixture)
+    price_calls = len(provider.calls)
+    first_announcement_calls = list(announcement_calls)
+
+    def recovered(*args):
+        announcement_calls.append(args[-1])
+        return announcement_fixture(*args)
+
+    monkeypatch.setattr(provider, "get_report_announcements", recovered)
     retry, _ = service.request("003816", start=date(2024, 1, 1), end=date(2024, 1, 5),
                                confirm=True, include_announcements=True, expected_revision=asset["revision"])
     assert retry["task_id"] != task["task_id"]
-    assert service.run(retry["task_id"])["status"] == "succeeded"
+    assert retry["spec"]["requested_stages"] == ["announcement"]
+    retried = service.run(retry["task_id"])
+    assert retried["status"] == "succeeded"
+    assert retried["result"]["stages"]["daily_bar"]["status"] == "skipped"
+    assert len(provider.calls) == price_calls
+    assert sorted(first_announcement_calls) == ["annual", "interim", "q1", "q3"]
+    assert announcement_calls[len(first_announcement_calls) :] == ["annual"]
 
 
 def test_announcement_outage_keeps_ready_prices_and_explains_paused_partitions(setup, monkeypatch):

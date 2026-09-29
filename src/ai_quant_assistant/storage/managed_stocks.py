@@ -34,6 +34,25 @@ def encoded(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _announcement_covers(
+    coverage: dict[str, Any], start: date, end: date
+) -> bool:
+    """Return true only for a previously published result covering this request."""
+    saved = coverage.get("announcement_sync") or {}
+    try:
+        return bool(
+            saved.get("status") == "published"
+            and date.fromisoformat(str(saved["start_date"])) <= start
+            and date.fromisoformat(str(saved["end_date"])) >= end
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _stage(status: str, message: str, **details: Any) -> dict[str, Any]:
+    return {"status": status, "message": message, **details}
+
+
 class ManagedStockService:
     """Management state is distinct from task state and historical research inputs.
 
@@ -56,6 +75,10 @@ class ManagedStockService:
                 retries=self.settings.akshare_retries,
                 timeout_seconds=self.settings.akshare_timeout_seconds,
                 refresh=True,
+                reference_cache_dir=database.layout.root
+                / "cache"
+                / "managed-stock"
+                / "reference",
             )
         )
 
@@ -369,6 +392,44 @@ class ManagedStockService:
                        revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE security_id=?""",
                     [start, end, auto_update, security_id],
                 )
+            retrying_failed = bool(
+                exists
+                and same_range
+                and same_datasets
+                and asset.get("task")
+                and asset["task"].get("status") == "failed"
+            )
+            announcement_already_complete = bool(
+                include_announcements
+                and retrying_failed
+                and _announcement_covers(asset["coverage"], start, completed_date(end))
+            )
+            previous_stages = (
+                asset.get("task", {}).get("result", {}).get("stages", {})
+                if retrying_failed
+                else {}
+            )
+            previous_outcome = (
+                asset.get("task", {}).get("result", {}).get("outcome")
+                if retrying_failed
+                else None
+            )
+            price_retry_needed = not retrying_failed or (
+                previous_outcome == "coverage_incomplete"
+                or previous_stages.get("listing_date", {}).get("status") == "failed"
+                or previous_stages.get("daily_bar", {}).get("status")
+                in {"failed", "not_started", "pending", "running"}
+                or not previous_stages
+            )
+            requested_stages = (
+                ["listing_date", "daily_bar"] if price_retry_needed else []
+            )
+            if include_announcements and not announcement_already_complete:
+                requested_stages.append("announcement")
+            if retrying_failed and not requested_stages:
+                raise ManagedStockConflict(
+                    "没有可重试的失败或未完成阶段；已完成的数据不会重复同步"
+                )
             spec = {
                 "dataset": "managed_stock",
                 "security_id": security_id,
@@ -384,6 +445,9 @@ class ManagedStockService:
                 "datasets": ["daily_bar", "announcement"]
                 if include_announcements
                 else ["daily_bar"],
+                "requested_stages": requested_stages,
+                "resume_completed_announcement": announcement_already_complete,
+                "resume_failed_stages": retrying_failed,
                 "preserve_classified_gaps": bool(
                     asset.get("task")
                     and asset["task"].get("status") == "succeeded"
@@ -542,9 +606,47 @@ class ManagedStockService:
             return self._run_gap_verification(task_id, spec)
         if spec.get("dataset") != "managed_stock":
             raise ValueError("not a managed stock task")
+        requested = set(
+            spec.get("requested_stages")
+            or [
+                "listing_date",
+                "daily_bar",
+                *(["announcement"] if spec.get("include_announcements", False) else []),
+            ]
+        )
+        stages = {
+            "listing_date": _stage(
+                "pending" if "listing_date" in requested else "skipped",
+                "等待核验上市日期" if "listing_date" in requested else "本次未请求",
+            ),
+            "daily_bar": _stage(
+                "pending" if "daily_bar" in requested else "skipped",
+                "等待同步行情" if "daily_bar" in requested else "本次未请求",
+            ),
+            "announcement": _stage(
+                "pending" if "announcement" in requested else "not_requested",
+                "等待同步定期公告"
+                if "announcement" in requested
+                else "本次未请求定期公告",
+            ),
+        }
+        if spec.get("resume_completed_announcement"):
+            saved = self.get(spec["security_id"])["coverage"].get("announcement_sync", {})
+            counts = saved.get("partitions") or {}
+            stages["announcement"] = _stage(
+                "skipped",
+                "已有完整公告结果，本次重试跳过",
+                completed_partitions=counts.get("published"),
+                total_partitions=sum(counts.values()) or None,
+            )
         owner = f"managed-worker-{uuid4().hex}"
+        start_message = (
+            "正在查询上市日期（行情下载尚未开始）"
+            if "daily_bar" in requested
+            else "正在恢复公告失败分区（已完成行情不会重复同步）"
+        )
         if not self.tasks.start(
-            task_id, owner_id=owner, message="正在查询上市日期（行情下载尚未开始）"
+            task_id, owner_id=owner, message=start_message
         ):
             return self.tasks.get(task_id)
         stop = Event()
@@ -560,23 +662,51 @@ class ManagedStockService:
         thread.start()
         error = None
         announcement_result = None
-        try:
-            self._download(task_id, owner, spec)
-        except Exception as exc:
-            error = str(exc)[:2000]
-        if spec.get("include_announcements", False):
+        if "daily_bar" in requested:
+            try:
+                self._download(task_id, owner, spec, stages)
+            except Exception as exc:
+                error = str(exc)[:2000]
+                if stages["listing_date"]["status"] not in {
+                    "failed",
+                    "pending",
+                    "running",
+                } and stages["daily_bar"]["status"] in {"pending", "running"}:
+                    stages["daily_bar"] = _stage("failed", "行情同步未完成", error=error)
+        else:
+            stages["listing_date"] = _stage("skipped", "此前上市日期核验已完成")
+            stages["daily_bar"] = _stage("skipped", "此前行情同步已完成")
+        if "announcement" in requested:
             try:
                 announcement_result = self._download_announcements(task_id, owner, spec)
             except Exception as exc:
                 announcement_result = {"status": "failed", "error": str(exc)[:2000]}
-            if announcement_result["status"] != "published":
+            counts = announcement_result.get("partitions", {}) or {}
+            if announcement_result["status"] == "published":
+                stages["announcement"] = _stage(
+                    "succeeded",
+                    "定期公告同步完成",
+                    completed_partitions=counts.get("published", 0),
+                    failed_partitions=counts.get("failed", 0),
+                    pending_partitions=counts.get("planned", 0),
+                    total_partitions=sum(counts.values()),
+                )
+            else:
                 issues = announcement_result.get("errors") or []
                 detail = (issues[0].get("error") if issues else None) or announcement_result.get(
                     "error"
                 )
                 if announcement_result.get("paused_after_provider_failure"):
                     detail = announcement_result.get("error") or detail
-                counts = announcement_result.get("partitions", {})
+                stages["announcement"] = _stage(
+                    "failed",
+                    "定期公告同步未完成",
+                    completed_partitions=counts.get("published", 0),
+                    failed_partitions=counts.get("failed", 0),
+                    pending_partitions=counts.get("planned", 0),
+                    total_partitions=sum(counts.values()),
+                    error=(detail or "原因未记录")[:700],
+                )
                 announcement_error = (
                     "定期公告同步失败："
                     + (detail or "原因未记录")[:700]
@@ -610,6 +740,8 @@ class ManagedStockService:
                     }
                 elif asset["coverage"].get("announcement_sync"):
                     report["announcement_sync"] = asset["coverage"]["announcement_sync"]
+                if asset["coverage"].get("listing_evidence"):
+                    report["listing_evidence"] = asset["coverage"]["listing_evidence"]
                 ready = error is None and report["availability"] == "ready"
                 gap_only = bool(report.get("requires_gap_verification")) and all(
                     "交易日缺口仍需核验" in issue for issue in report.get("issues", [])
@@ -645,29 +777,50 @@ class ManagedStockService:
                 stage = connection.execute(
                     "SELECT message FROM operation_task WHERE task_id=?", [task_id]
                 ).fetchone()[0]
+                if success:
+                    outcome = "needs_gap_verification" if gap_only else "ready"
+                    message = (
+                        "行情同步完成，但仍有日期需核验；不会重复下载已发布行情"
+                        if gap_only
+                        else "行情与定期公告同步完成"
+                        if spec.get("include_announcements")
+                        else "历史行情已就绪"
+                    )
+                elif stages["listing_date"]["status"] == "failed":
+                    outcome = "listing_date_failed"
+                    suffix = (
+                        "定期公告已经完成。可以重试上市日期核验，已完成的公告不会重复同步"
+                        if stages["announcement"]["status"] in {"succeeded", "skipped"}
+                        else "请重试上市日期核验；行情尚未开始"
+                    )
+                    message = f"上市日期核验失败，行情同步尚未开始；{suffix}"
+                elif stages["daily_bar"]["status"] == "failed":
+                    outcome = "daily_bar_failed"
+                    message = "行情同步失败；只需重试行情未完成阶段"
+                elif stages["announcement"]["status"] == "failed":
+                    outcome = "announcement_failed"
+                    message = "行情已完成，定期公告同步失败；只需重试公告失败分区"
+                else:
+                    outcome = "coverage_incomplete"
+                    message = f"{stage}；同步阶段已结束，但覆盖检查未通过"
+                # Keep the historical successful result fields at the top level;
+                # stages/outcome/coverage are additive so older clients can ignore them.
+                result_payload = {
+                    **report,
+                    "outcome": outcome,
+                    "stages": stages,
+                    "coverage": report,
+                }
                 connection.execute(
                     """UPDATE operation_task SET status=?,
-                       progress=CASE WHEN ? THEN 100 ELSE LEAST(progress,99) END,
+                       progress=100,
                        message=?, result_json=?, error=?,
                        completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP,
                        heartbeat_at=CURRENT_TIMESTAMP, claim_key=NULL WHERE task_id=? AND owner_id=?""",
                     [
                         "succeeded" if success else "failed",
-                        success,
-                        (
-                            "行情同步完成，但仍有日期需核验；不会重复下载已发布行情"
-                            if gap_only
-                            else "行情与定期公告同步完成"
-                            if spec.get("include_announcements")
-                            else "历史行情已就绪"
-                        )
-                        if success
-                        else f"{stage}；同步未完成，可安全重试",
-                        encoded({"outcome": "needs_gap_verification", "coverage": report})
-                        if gap_only
-                        else encoded(report)
-                        if success
-                        else None,
+                        message,
+                        encoded(result_payload),
                         error[:2000] if error else None,
                         task_id,
                         owner,
@@ -817,41 +970,136 @@ class ManagedStockService:
         if not self.tasks.progress(task_id, owner_id=owner, progress=value, message=message):
             raise ManagedStockConflict("worker no longer owns the task")
 
-    def _download(self, task_id: str, owner: str, spec: dict[str, Any]) -> None:
+    def _download(
+        self,
+        task_id: str,
+        owner: str,
+        spec: dict[str, Any],
+        stages: dict[str, dict[str, Any]],
+    ) -> None:
         provider = self.provider_factory(f"{task_id}-{owner}")
         start = date.fromisoformat(spec["start_date"])
         end = completed_date(date.fromisoformat(spec["end_date"]))
         asset = self.get(spec["security_id"])
         listed = date.fromisoformat(asset["listing_date"]) if asset["listing_date"] else None
+        source = asset.get("listing_source")
+        security_listed = None
+        with self.database.connect(read_only=True) as connection:
+            security_listed = connection.execute(
+                "SELECT list_date FROM security_master WHERE security_id=?",
+                [spec["security_id"]],
+            ).fetchone()[0]
+        if listed and security_listed and listed != security_listed:
+            stages["listing_date"] = _stage(
+                "failed",
+                "上市日期来源冲突",
+                managed_stock_date=str(listed),
+                managed_stock_source=source or "未记录",
+                security_master_date=str(security_listed),
+                security_master_source="security_master",
+            )
+            stages["daily_bar"] = _stage("not_started", "上市日期冲突，行情尚未开始")
+            raise RuntimeError(
+                f"上市日期来源冲突：{source or 'managed_stock'}={listed}，"
+                f"security_master={security_listed}；未自动覆盖"
+            )
+        evidence: dict[str, Any] | None = None
+        if listed and source:
+            evidence = asset["coverage"].get("listing_evidence") or {
+                "source": source,
+                "symbol": spec["symbol"],
+                "listing_date": str(listed),
+                "checked_at": None,
+                "cache_status": "persisted",
+                "fallback_used": False,
+            }
+            stages["listing_date"] = _stage(
+                "skipped",
+                "已有可靠上市日期，本次跳过联网查询",
+                **evidence,
+            )
         if listed is None:
             with self.transaction() as connection:
                 self.fence(connection, task_id, owner, spec)
-                listed = connection.execute(
-                    "SELECT list_date FROM security_master WHERE security_id=?",
-                    [spec["security_id"]],
-                ).fetchone()[0]
+                listed = security_listed
                 if listed:
+                    evidence = {
+                        "source": "security_master",
+                        "symbol": spec["symbol"],
+                        "listing_date": str(listed),
+                        "checked_at": datetime.now(UTC).isoformat(),
+                        "cache_status": "persisted",
+                        "fallback_used": False,
+                    }
+                    coverage = asset["coverage"]
+                    coverage["listing_evidence"] = evidence
                     connection.execute(
-                        "UPDATE managed_stock SET listing_date=?, listing_source='security_master' WHERE security_id=?",
-                        [listed, spec["security_id"]],
+                        """UPDATE managed_stock SET listing_date=?, listing_source='security_master',
+                           coverage_json=? WHERE security_id=?""",
+                        [listed, encoded(coverage), spec["security_id"]],
+                    )
+                    stages["listing_date"] = _stage(
+                        "skipped", "证券主数据已有可靠上市日期", **evidence
                     )
         if listed is None and hasattr(provider, "get_listing_date"):
+            stages["listing_date"] = _stage("running", "正在查询可靠上市日期来源")
             try:
                 listed, source = provider.get_listing_date(spec["symbol"])
                 if not isinstance(listed, date) or listed > market_today() or not source:
                     raise ValueError("invalid provider listing-date evidence")
             except Exception as exc:
+                stages["listing_date"] = _stage(
+                    "failed",
+                    "所有可靠上市日期来源均不可用或证据无效",
+                    error=str(exc)[:1200],
+                )
+                stages["daily_bar"] = _stage(
+                    "not_started", "上市日期尚未核验，行情下载尚未开始"
+                )
                 raise RuntimeError(f"上市日期查询失败，行情下载尚未开始：{exc}") from exc
+            evidence = dict(getattr(provider, "last_listing_evidence", {}) or {})
+            evidence.update(
+                {
+                    "source": source,
+                    "symbol": spec["symbol"],
+                    "listing_date": str(listed),
+                    "checked_at": evidence.get("checked_at") or datetime.now(UTC).isoformat(),
+                    "cache_status": evidence.get("cache_status", "unknown"),
+                    "fallback_used": bool(evidence.get("fallback_used", False)),
+                }
+            )
             with self.transaction() as connection:
                 self.fence(connection, task_id, owner, spec)
+                coverage = self._get(connection, spec["security_id"])["coverage"]
+                coverage["listing_evidence"] = evidence
                 connection.execute(
-                    "UPDATE managed_stock SET listing_date=?, listing_source=? WHERE security_id=?",
-                    [listed, source, spec["security_id"]],
+                    """UPDATE managed_stock SET listing_date=?, listing_source=?, coverage_json=?
+                       WHERE security_id=?""",
+                    [listed, source, encoded(coverage), spec["security_id"]],
                 )
+                self.audit(
+                    connection,
+                    "managed_stock_listing_date_verified",
+                    spec["security_id"],
+                    spec["actor"],
+                    task_id=task_id,
+                    **evidence,
+                )
+            stages["listing_date"] = _stage(
+                "succeeded", "上市日期核验完成", **evidence
+            )
+        elif listed is None:
+            stages["listing_date"] = _stage(
+                "failed", "当前数据提供方不支持可靠上市日期查询"
+            )
+            stages["daily_bar"] = _stage("not_started", "上市日期未知，行情尚未开始")
+            raise RuntimeError("上市日期查询失败，行情下载尚未开始：提供方不支持可靠来源")
         if listed:
             start = max(start, listed)
         if start > end:
+            stages["daily_bar"] = _stage("failed", "目标范围内尚无完整交易日")
             raise ValueError("尚无完整交易日可同步")
+        stages["daily_bar"] = _stage("running", "正在同步不复权和前复权日线")
         self._progress(task_id, owner, 10, "正在准备交易日历与行情分区")
         guarded = _FencedDatabase(self, task_id, owner, spec)
         prior_gap_verification_completed = bool(spec.get("preserve_classified_gaps"))
@@ -921,17 +1169,37 @@ class ManagedStockService:
             raw_namespace=f"{task_id}-{owner}",
             progress_callback=progress,
         )
-        result = market.run(
-            DataSyncSpec(
-                start_date=start,
-                end_date=end,
-                symbols=(spec["symbol"],),
-                adjustments=ADJUSTMENTS,
-                resume=False,
+        try:
+            result = market.run(
+                DataSyncSpec(
+                    start_date=start,
+                    end_date=end,
+                    symbols=(spec["symbol"],),
+                    adjustments=ADJUSTMENTS,
+                    resume=False,
+                )
             )
-        )
+        except Exception as exc:
+            stages["daily_bar"] = _stage(
+                "failed", "行情同步失败", error=str(exc)[:1200]
+            )
+            raise
         if result["status"] != "published":
+            stages["daily_bar"] = _stage(
+                "failed",
+                "行情分区未全部发布",
+                errors=result.get("errors", [])[:10],
+            )
             raise RuntimeError(encoded(result.get("errors", [])))
+        counts = result.get("partitions", {}) or {}
+        stages["daily_bar"] = _stage(
+            "succeeded",
+            "不复权和前复权日线同步完成",
+            completed_partitions=counts.get("published"),
+            failed_partitions=counts.get("failed", 0),
+            pending_partitions=counts.get("planned", 0),
+            total_partitions=sum(counts.values()) or None,
+        )
 
     def _download_announcements(
         self, task_id: str, owner: str, spec: dict[str, Any]
@@ -957,7 +1225,7 @@ class ManagedStockService:
                 end_date=date.fromisoformat(spec["end_date"]),
                 symbols=(spec["symbol"],),
                 report_types=("q1", "interim", "q3", "annual"),
-                resume=False,
+                resume=bool(spec.get("resume_failed_stages")),
             )
         )
         return {

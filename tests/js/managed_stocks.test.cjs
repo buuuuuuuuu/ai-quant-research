@@ -31,7 +31,7 @@ function harness(responder, confirmed = true) {
 }
 const empty = () => ({items:[], pagination:{page:1,page_size:30,total:0}});
 
-test("failed tasks show escaped stage without a misleading completion percentage", () => {
+test("failed tasks show escaped stage and the stored terminal progress", () => {
   const h = harness(empty);
   const asset = {security_id:"SSE.688111",symbol:"688111",name:"金山办公",status:"active",availability:"unavailable",revision:2,coverage:{adjustments:{},issues:[]}};
   for (const progress of [1,99]) {
@@ -39,12 +39,29 @@ test("failed tasks show escaped stage without a misleading completion percentage
     assert.match(html, /同步失败/);
     assert.match(html, /行情下载尚未开始/);
     assert.match(html, /task-failed/);
-    assert.doesNotMatch(html, /\d+%|<svg/);
+    assert.match(html, new RegExp(`${progress}%`));
+    assert.doesNotMatch(html, /<svg/);
     assert.match(html, /&lt;svg/);
   }
   const running = h.context.managedRows([{...asset,task:{task_id:"task-running",status:"running",progress:40,message:"历史行情分区 3\/8"}}]);
   assert.match(running, /40%/);
   assert.match(running, /历史行情分区 3\/8/);
+});
+
+test("staged listing failure explains completed announcements and scopes retry", async () => {
+  const h = harness((url, options) => options.method ? {task_id:"task-retry",status:"queued"} : empty());
+  const asset = {security_id:"SZSE.000333",symbol:"000333",name:"美的集团",status:"active",availability:"partial",revision:19,auto_update:true,target_start:"2012-01-01",listing_date:null,listing_source:null,coverage:{adjustments:{},issues:[],announcement_sync:{status:"published",row_count:52,start_date:"2012-01-01",end_date:"2026-09-27"}},task:{task_id:"task-old",status:"failed",progress:100,message:"上市日期核验失败",spec:{include_announcements:true},result:{stages:{listing_date:{status:"failed",message:"官方和备用来源均不可用",error:"<remote>"},daily_bar:{status:"not_started",message:"行情尚未开始"},announcement:{status:"succeeded",message:"定期公告同步完成",completed_partitions:56,total_partitions:56}}}}};
+  const html = h.context.managedRows([asset]);
+  assert.match(html, /上市日期核验/);
+  assert.match(html, /行情同步.*尚未开始/);
+  assert.match(html, /定期公告同步.*已完成/);
+  assert.match(html, /分区 56\/56/);
+  assert.match(html, /重试上市日期并继续行情/);
+  assert.doesNotMatch(html, /<remote>/);
+  await h.context.managedAction(asset, "sync");
+  const body = JSON.parse(h.calls[0].options.body);
+  assert.equal(body.include_announcements, true);
+  assert.match(h.confirmations[0], /访问公网/);
 });
 
 test("cancelled add/archive/restore never sends a network request", async () => {

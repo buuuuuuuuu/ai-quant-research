@@ -130,6 +130,8 @@ def coverage_report(
     }
     if evidence:
         report["gap_verification"] = evidence
+    if previous_coverage.get("listing_evidence"):
+        report["listing_evidence"] = previous_coverage["listing_evidence"]
     return report
 
 

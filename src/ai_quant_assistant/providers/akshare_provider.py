@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -11,9 +13,12 @@ from ai_quant_assistant.providers.cache import DataFrameCache, load_or_fetch
 from ai_quant_assistant.providers.cninfo import CninfoAnnouncements
 from ai_quant_assistant.providers.listing_dates import (
     SSE_LISTING_SOURCE,
+    SZSE_LISTING_SOURCE,
     explicit_listing_date,
     sse_listing_frame,
+    szse_listing_directory_frame,
     validate_listing_frame,
+    validate_szse_listing_directory,
 )
 from ai_quant_assistant.providers.normalization import (
     clip_dates,
@@ -38,8 +43,10 @@ class AkShareProvider:
         retries: int = 3,
         timeout_seconds: float = 30.0,
         refresh: bool = False,
+        reference_cache_dir: Path | None = None,
     ) -> None:
         self.cache = DataFrameCache(cache_dir)
+        self.reference_cache = DataFrameCache(reference_cache_dir or cache_dir)
         self.retries = retries
         self.timeout_seconds = timeout_seconds
         self.refresh = refresh
@@ -339,6 +346,47 @@ class AkShareProvider:
     def get_listing_date(self, symbol: str) -> tuple[date, str]:
         """Fetch explicit listing-date evidence, never infer it from first price."""
         self._exchange_symbol(symbol)
+        failures: list[str] = []
+
+        def failure(source: str, exc: Exception) -> None:
+            # Endpoint names/types are useful diagnostics; never persist arbitrary
+            # upstream response bodies, proxy credentials or authentication data.
+            causes, cause = [], exc
+            for _ in range(5):
+                causes.append(type(cause).__name__)
+                cause = cause.__cause__ or cause.__context__
+                if cause is None:
+                    break
+            failures.append(f"{source}: {' → '.join(causes)}")
+
+        if re.fullmatch(r"(?:0|2|3)\d{5}", symbol):
+            try:
+                market_day = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+                directory = load_or_fetch(
+                    cache=self.reference_cache,
+                    namespace="listing_date_szse_a_v1",
+                    params={"market": "SZSE", "board": "A", "as_of": str(market_day)},
+                    fetcher=lambda: szse_listing_directory_frame(self.timeout_seconds),
+                    retries=self.retries,
+                    # A market-date key shares one validated directory between
+                    # managed-stock tasks without trusting a previous day's file.
+                    refresh=False,
+                )
+                if directory.attrs.get("cache_status") == "stale_fallback":
+                    raise ProviderError("SZSE listing refresh failed; stale evidence rejected")
+                listed = validate_szse_listing_directory(directory, symbol)
+                self.last_listing_evidence = {
+                    "source": SZSE_LISTING_SOURCE,
+                    "symbol": symbol,
+                    "listing_date": str(listed),
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "cache_status": directory.attrs.get("cache_status", "unknown"),
+                    "fallback_used": False,
+                }
+                return listed, SZSE_LISTING_SOURCE
+            except Exception as exc:  # noqa: BLE001 - independent official source boundary
+                failure(SZSE_LISTING_SOURCE, exc)
+
         sources = [
             (
                 "listing_date_v2",
@@ -357,7 +405,6 @@ class AkShareProvider:
                     lambda: sse_listing_frame(symbol, self.timeout_seconds),
                 )
             )
-        failures = []
         for namespace, source, fetch in sources:
 
             def validated_fetch(fetch=fetch):
@@ -384,17 +431,21 @@ class AkShareProvider:
                     or str(frame.iloc[0]["symbol"]) != symbol
                 ):
                     raise ProviderError("invalid cached listing-date identity")
-                return explicit_listing_date(frame.iloc[0]["listing_date"]), source
+                listed = explicit_listing_date(frame.iloc[0]["listing_date"])
+                self.last_listing_evidence = {
+                    "source": source,
+                    "symbol": symbol,
+                    "listing_date": str(listed),
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "cache_status": frame.attrs.get("cache_status", "unknown"),
+                    "fallback_used": bool(
+                        re.fullmatch(r"(?:0|2|3)\d{5}", symbol)
+                        and source != SZSE_LISTING_SOURCE
+                    ),
+                }
+                return listed, source
             except Exception as exc:  # noqa: BLE001 - independent public provider boundary
-                # Endpoint names/types are useful diagnostics; never persist arbitrary
-                # upstream response bodies, proxy credentials or authentication data.
-                causes, cause = [], exc
-                for _ in range(5):
-                    causes.append(type(cause).__name__)
-                    cause = cause.__cause__ or cause.__context__
-                    if cause is None:
-                        break
-                failures.append(f"{source}: {' → '.join(causes)}")
+                failure(source, exc)
         raise ProviderError("上市日期来源均不可用或证据无效；" + "；".join(failures))
 
     def get_trading_calendar(self) -> pd.DataFrame:

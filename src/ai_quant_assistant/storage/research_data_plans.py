@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -18,7 +19,10 @@ from ai_quant_assistant.domain.models import (
 from ai_quant_assistant.research.readiness import ResearchReadiness, digest, encoded
 from ai_quant_assistant.storage.financial_sync_service import FinancialDataSyncService
 from ai_quant_assistant.storage.locks import InterProcessFileLock
-from ai_quant_assistant.storage.managed_coverage import completed_date
+from ai_quant_assistant.storage.managed_coverage import (
+    classified_daily_bar_gaps,
+    completed_date,
+)
 from ai_quant_assistant.storage.managed_stocks import (
     ManagedStockService,
     _FencedDatabase,
@@ -26,7 +30,7 @@ from ai_quant_assistant.storage.managed_stocks import (
 )
 from ai_quant_assistant.storage.research_sync_service import ResearchDatasetSyncService
 from ai_quant_assistant.storage.sync_service import MarketDataSyncService
-from ai_quant_assistant.storage.task_repository import OperationTaskRepository
+from ai_quant_assistant.storage.task_repository import TASK_COLUMNS, OperationTaskRepository
 
 
 class DataPlanConflict(RuntimeError):
@@ -98,9 +102,260 @@ class ResearchDataPlans:
             plan = self._get(connection, plan_id)
         plan["task"] = self.tasks.get(plan["last_task_id"]) if plan["last_task_id"] else None
         plan["network_notice"] = (
-            "确认后访问公网，仅行情/基准/必要公告元数据/财务；不下载 PDF，不运行研究。"
+            "确认补齐后访问公网同步行情/基准/必要公告元数据/财务；"
+            "确认缺口核验后仅查询停牌或交易状态证据。两种操作都不下载 PDF，"
+            "也不运行研究。"
         )
-        return self._decorate(plan)
+        decorated = self._decorate(plan)
+        decorated["gap_verification"] = self._gap_verification_state(plan)
+        return decorated
+
+    def _linked_gap_tasks(self, plan_id: str) -> list[dict[str, object]]:
+        with self.database.connect(read_only=True) as connection:
+            rows = connection.execute(
+                f"SELECT {', '.join(TASK_COLUMNS)} FROM operation_task "
+                "WHERE json_extract_string(spec_json, '$.dataset')="
+                "'managed_stock_gap_verification' "
+                "AND json_extract_string(spec_json, '$.source_plan_id')=? "
+                "ORDER BY created_at DESC LIMIT 100",
+                [plan_id],
+            ).fetchall()
+        return [OperationTaskRepository._decode(row) for row in rows]
+
+    def _gap_verification_state(self, plan: dict[str, object]) -> dict[str, object]:
+        empty = {
+            "status": "not_available",
+            "total_dates": 0,
+            "verified_suspension": 0,
+            "missing_bar": 0,
+            "calendar_mismatch": 0,
+            "unverified_gap": 0,
+            "requires_confirmation": False,
+            "targets": [],
+            "tasks": [],
+        }
+        if plan.get("status") != "succeeded" or plan.get("input", {}).get(
+            "research_type"
+        ) != "daily_signal":
+            return empty
+        report = self.readiness.check(plan["input"])
+        price_checks = [
+            check
+            for check in report.get("checks", [])
+            if check.get("dataset") == "daily_bar" and check.get("security_id")
+        ]
+        if not price_checks:
+            return empty
+        grouped: dict[str, dict[str, object]] = {}
+        classified_cache: dict[tuple[str, str, str], dict[str, list[dict[str, object]]]] = {}
+        with self.database.connect(read_only=True) as connection:
+            for check in price_checks:
+                security_id = check["security_id"]
+                target = grouped.get(security_id)
+                if target is None:
+                    asset = connection.execute(
+                        "SELECT revision,generation,status FROM managed_stock WHERE security_id=?",
+                        [security_id],
+                    ).fetchone()
+                    if not asset or asset[2] != "active":
+                        continue
+                    target = {
+                        "security_id": security_id,
+                        "symbol": check.get("symbol"),
+                        "revision": asset[0],
+                        "generation": asset[1],
+                        "required_start": check.get("required_start"),
+                        "required_end": check.get("required_end"),
+                        "adjustments": set(),
+                        "details": {},
+                    }
+                    grouped[security_id] = target
+                target["adjustments"].add(check.get("adjustment"))
+                cache_key = (
+                    security_id,
+                    check["required_start"],
+                    check["required_end"],
+                )
+                classified = classified_cache.get(cache_key)
+                if classified is None:
+                    classified = classified_daily_bar_gaps(
+                        connection,
+                        security_id,
+                        date.fromisoformat(check["required_start"]),
+                        date.fromisoformat(check["required_end"]),
+                    )
+                    classified_cache[cache_key] = classified
+                for item in classified.get(check.get("adjustment"), []):
+                    identity = (item["date"], item["classification"])
+                    merged = target["details"].setdefault(identity, {**item, "adjustments": set()})
+                    merged["adjustments"].add(check.get("adjustment"))
+        targets: list[dict[str, object]] = []
+        totals = {
+            "verified_suspension": 0,
+            "missing_bar": 0,
+            "calendar_mismatch": 0,
+            "unverified_gap": 0,
+        }
+        for target in sorted(grouped.values(), key=lambda item: str(item["symbol"])):
+            details = []
+            for item in sorted(
+                target.pop("details").values(),
+                key=lambda value: (value["date"], value["classification"]),
+            ):
+                normalized = {**item, "adjustments": sorted(item["adjustments"])}
+                details.append(normalized)
+                totals[normalized["classification"]] += 1
+            if not details:
+                continue
+            classifications = {
+                kind: sum(1 for item in details if item["classification"] == kind)
+                for kind in (
+                    "verified_suspension",
+                    "missing_bar",
+                    "calendar_mismatch",
+                    "unverified_gap",
+                )
+            }
+            checked = sorted(
+                str(item["checked_at"])
+                for item in details
+                if item.get("checked_at")
+            )
+            unverified_dates = sorted(
+                {item["date"] for item in details if item["classification"] == "unverified_gap"}
+            )
+            targets.append(
+                {
+                    **target,
+                    "adjustments": sorted(value for value in target["adjustments"] if value),
+                    "unverified_dates": unverified_dates[:100],
+                    "unverified_count": len(unverified_dates),
+                    "classification_counts": classifications,
+                    "blocking_count": sum(
+                        classifications[kind]
+                        for kind in ("missing_bar", "calendar_mismatch", "unverified_gap")
+                    ),
+                    "evidence_sources": sorted(
+                        {str(item["source"]) for item in details if item.get("source")}
+                    ),
+                    "last_checked_at": checked[-1] if checked else None,
+                    "details": details[:20],
+                    "details_truncated": max(0, len(details) - 20),
+                }
+            )
+        linked_tasks = self._linked_gap_tasks(plan["plan_id"])
+        latest_by_security: dict[str, dict[str, object]] = {}
+        for task in linked_tasks:
+            security_id = str((task.get("spec") or {}).get("security_id") or task["task_id"])
+            latest_by_security.setdefault(security_id, task)
+        tasks = list(latest_by_security.values())
+        task_rows = [
+            {
+                key: task.get(key)
+                for key in (
+                    "task_id",
+                    "status",
+                    "progress",
+                    "message",
+                    "error",
+                    "created_at",
+                    "completed_at",
+                    "result",
+                )
+            }
+            | {
+                "security_id": (task.get("spec") or {}).get("security_id"),
+                "symbol": (task.get("spec") or {}).get("symbol"),
+            }
+            for task in tasks
+        ]
+        active = any(task.get("status") in {"queued", "running"} for task in tasks)
+        failed = any(task.get("status") == "failed" for task in tasks)
+        if active:
+            status = "running"
+        elif failed:
+            status = "failed"
+        elif totals["unverified_gap"]:
+            status = "verification_incomplete" if tasks else "available"
+        elif totals["missing_bar"] or totals["calendar_mismatch"]:
+            status = "classified_blockers"
+        elif any(totals.values()):
+            status = "verified"
+        else:
+            status = "not_required"
+        return {
+            "status": status,
+            "total_dates": sum(totals.values()),
+            **totals,
+            "requires_confirmation": bool(totals["unverified_gap"]) and not active,
+            "current_readiness": {
+                "checked_at": report.get("checked_at"),
+                "ready": report.get("ready"),
+                "complete": report.get("complete"),
+                "blocker_count": len(report.get("blockers") or []),
+                "warning_count": len(report.get("warnings") or []),
+            },
+            "targets": targets,
+            "tasks": task_rows,
+        }
+
+    def prepare_gap_verification(
+        self,
+        plan_id: str,
+        *,
+        version: int,
+        input_sha256: str,
+        confirm: bool,
+    ) -> list[dict[str, object]]:
+        if confirm is not True:
+            raise ValueError("核验缺失日期需要明确确认访问公网")
+        plan = self.get(plan_id)
+        if (
+            version != plan["version"]
+            or input_sha256 != plan["input_sha256"]
+            or digest(plan["input"]) != input_sha256
+        ):
+            raise DataPlanConflict("计划版本或摘要不符，请重新查看计划")
+        if plan["input"].get("research_type") != "daily_signal":
+            raise DataPlanConflict("当前入口只支持日线信号策略缺口核验")
+        if plan.get("status") != "succeeded":
+            raise DataPlanConflict("请先完成已确认的数据补齐，再核验剩余交易日缺口")
+        gap_state = plan["gap_verification"]
+        if any(task.get("status") in {"queued", "running"} for task in gap_state["tasks"]):
+            raise DataPlanConflict("当前缺口核验任务正在执行，请刷新任务状态")
+        requests = []
+        for target in gap_state["targets"]:
+            dates = list(target.get("unverified_dates") or [])
+            if not dates:
+                continue
+            requests.append(
+                {
+                    "security_id": target["security_id"],
+                    "expected_revision": target["revision"],
+                    "dates": dates,
+                    "source_context": {
+                        "source_plan_id": plan_id,
+                        "source_plan_version": version,
+                        "source_input_sha256": input_sha256,
+                        "source_symbols_sha256": plan["input"]["symbols_sha256"],
+                        "source_stock_pool_id": (
+                            plan["input"].get("stock_pool") or {}
+                        ).get("pool_id"),
+                        "source_stock_pool_revision": (
+                            plan["input"].get("stock_pool") or {}
+                        ).get("pool_revision"),
+                        "source_gap_dates_sha256": hashlib.sha256(
+                            "|".join(dates).encode()
+                        ).hexdigest(),
+                        "source": "daily_signal_research_data_plan",
+                    },
+                }
+            )
+        if not requests:
+            raise DataPlanConflict(
+                "当前计划没有可核验的未知交易日缺口；请重新检查本地数据"
+            )
+        return requests
 
     @classmethod
     def _execution_summary(cls, items):

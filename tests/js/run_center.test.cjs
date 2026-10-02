@@ -932,7 +932,7 @@ test("data plan separates completed gaps from real download failures", () => {
   const html = ui.renderDataPlan(completed);
   assert.match(html, /同步已完成，但最终检查仍有数据缺口/);
   assert.match(html, /排除缺失历史时点，不会填零/);
-  assert.match(html, /查看最终预检、受影响股票和日期/);
+  assert.match(html, /查看补齐任务结束时预检、受影响股票和日期/);
   assert.match(html, /财务因子/);
   assert.match(html, /执行结束（存在问题） · 100%/);
   assert.doesNotMatch(html, /95%/);
@@ -941,6 +941,161 @@ test("data plan separates completed gaps from real download failures", () => {
   const failed = {...completed,outcome:"download_failed",execution_summary:{total:2,published:1,verified:0,failed:1,pending:0,unknown:0,retryable:1}};
   assert.match(ui.renderDataPlan(failed),/存在真实同步失败/);
   assert.match(ui.renderDataPlan(failed),/已发布或已验证项目不会重新下载/);
+});
+
+test("completed data plan exposes explicit bounded gap verification separately", () => {
+  const plan = {
+    plan_id: "data-plan-gaps",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      symbols_sha256: "b".repeat(64),
+      resolved_symbols: ["000333"],
+      parameters: {},
+    },
+    report: { complete: false, checks: [] },
+    outcome: "completed_with_gaps",
+    execution_summary: {
+      total: 1, published: 1, verified: 0, failed: 0, pending: 0,
+    },
+    items: [{
+      symbol: "000333", dataset: "daily_bar", adjustment: "qfq",
+      start_date: "2024-01-01", end_date: "2024-12-31", status: "published",
+    }],
+    gap_verification: {
+      status: "available",
+      total_dates: 2,
+      verified_suspension: 0,
+      missing_bar: 0,
+      calendar_mismatch: 0,
+      unverified_gap: 2,
+      requires_confirmation: true,
+      targets: [{
+        symbol: "000333",
+        security_id: "SZSE.000333",
+        adjustments: ["none", "qfq"],
+        required_start: "2024-01-01",
+        required_end: "2024-12-31",
+        unverified_count: 2,
+        details: [{
+          date: "2024-02-01",
+          classification: "unverified_gap",
+          adjustments: ["none", "qfq"],
+          reason: "尚无停牌证据",
+        }],
+        details_truncated: 1,
+      }],
+      tasks: [],
+    },
+  };
+  const html = ui.renderDataPlan(plan);
+  assert.match(html, /交易日缺口核验/);
+  assert.match(html, /暂时无法核验 2/);
+  assert.match(html, /2024-02-01/);
+  assert.match(html, /不生成K线/);
+  assert.ok(html.indexOf("</table></div>") < html.indexOf("gap-verification-panel"));
+  assert.ok(html.indexOf("gap-verification-panel") < html.indexOf("data-plan-final-report"));
+  assert.equal(ui.gapVerificationActive(plan), false);
+  plan.gap_verification.tasks = [{ status: "queued" }];
+  assert.equal(ui.gapVerificationActive(plan), true);
+});
+
+test("gap evidence lookup starts only after an explicit confirmation click", async () => {
+  const params = {
+    symbols: ["000333"],
+    start_date: "2024-01-01",
+    end_date: "2024-12-31",
+    candidate_factors: [{ code: "return_1", weight: 1, direction: "desc" }],
+    candidate_count: 1,
+    candidate_refresh: "daily",
+    buy_rules: [{ kind: "close_vs_ma", operator: "above", window: 2 }],
+    sell_rules: [{ kind: "close_vs_ma", operator: "below", window: 2 }],
+    buy_rule_mode: "all",
+    sell_rule_mode: "any",
+    exit_on_candidate_drop: false,
+    max_positions: 1,
+  };
+  const configuration = {
+    kind: "daily_signal",
+    label: "日线信号策略",
+    source_run_id: null,
+    params: { symbols: [] },
+    scope: [],
+    schema: {
+      properties: Object.fromEntries(Object.keys(params).map((key) => [key, {}])),
+    },
+    warnings: [],
+    missing_fields: [],
+    endpoint: "/api/v1/daily-signal-strategies",
+  };
+  const gap = {
+    status: "available",
+    total_dates: 1,
+    verified_suspension: 0,
+    missing_bar: 0,
+    calendar_mismatch: 0,
+    unverified_gap: 1,
+    requires_confirmation: true,
+    targets: [{
+      symbol: "000333", security_id: "SZSE.000333", adjustments: ["none", "qfq"],
+      required_start: "2024-01-01", required_end: "2024-12-31",
+      unverified_count: 1, details: [], tasks: [],
+    }],
+    tasks: [],
+  };
+  const plan = {
+    plan_id: "data-plan-confirm-gap",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      research_type: "daily_signal", parameters: params,
+      resolved_symbols: ["000333"], symbols_sha256: "b".repeat(64),
+    },
+    items: [{ symbol: "000333", dataset: "daily_bar", status: "published" }],
+    task: { status: "succeeded", progress: 100 },
+    gap_verification: gap,
+  };
+  const h = harness(
+    "/backtests/daily-signals",
+    async (url, options) => {
+      if (url.includes("/configuration?")) return structuredClone(configuration);
+      if (url.includes("/stock-pools?")) return [];
+      if (url.endsWith("/plans/data-plan-confirm-gap/preflight"))
+        return { ready: false, status: "blocked", complete: false };
+      if (url.endsWith("/plans/data-plan-confirm-gap/verify-gaps")) {
+        assert.equal(options.method, "POST");
+        assert.equal(JSON.parse(options.body).confirm, true);
+        return {
+          ...structuredClone(plan),
+          gap_verification: {
+            ...structuredClone(gap),
+            status: "running",
+            requires_confirmation: false,
+            tasks: [{ task_id: "task-gap", status: "queued", progress: 0 }],
+          },
+        };
+      }
+      if (url.endsWith("/plans/data-plan-confirm-gap")) return structuredClone(plan);
+      throw Error("unexpected request " + url);
+    },
+    { search: "?data_plan=data-plan-confirm-gap" },
+  );
+  await tick();
+  await tick();
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/verify-gaps")).length,
+    0,
+  );
+  assert.equal(h.element("center-plan-verify-gaps").hidden, false);
+  await h.element("center-plan-verify-gaps").listeners.click();
+  await tick();
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/verify-gaps")).length,
+    1,
+  );
+  assert.match(h.element("center-plan-status").innerHTML, /task-gap/);
 });
 
 test("successful daily signal submission redirects to exact highlighted history task", async () => {

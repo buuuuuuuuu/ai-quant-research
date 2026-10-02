@@ -400,6 +400,32 @@ main .table-shell {
   margin-top: 4px;
   color: #6a746c;
 }
+.gap-verification-panel {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #cbd9cc;
+  border-radius: 8px;
+  background: #f7faf6;
+  overflow-wrap: anywhere;
+}
+.gap-verification-panel h4,
+.gap-verification-target h5 {
+  margin-top: 0;
+}
+.gap-verification-target {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid #dce3db;
+  border-radius: 6px;
+  background: #fff;
+  min-width: 0;
+}
+.gap-verification-panel code,
+.data-plan-panel td,
+.data-plan-panel small {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 main dialog,
 dialog {
   max-width: calc(100vw - 24px);

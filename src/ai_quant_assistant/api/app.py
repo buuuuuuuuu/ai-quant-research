@@ -309,7 +309,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.stock_pools = stock_pools
     app.state.managed_stock_tasks = managed_stock_tasks
     app.state.research_data_tasks = research_data_tasks
-    app.include_router(research_data_router(research_data_tasks, resolved_settings.web_username, copilot_repository))
+    app.include_router(
+        research_data_router(
+            research_data_tasks,
+            resolved_settings.web_username,
+            copilot_repository,
+            gap_verification_manager=managed_stock_tasks,
+        )
+    )
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router

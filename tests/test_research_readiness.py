@@ -12,18 +12,21 @@ from threading import Barrier, Event
 
 import pandas as pd
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from test_factor_backtest import _database
 from test_financial_platform import FakeFinancialProvider, _services
 from test_web_workbench import _settings
 
 from ai_quant_assistant.api.app import create_app
+from ai_quant_assistant.api.research_data_routes import research_data_router
 from ai_quant_assistant.cli import main
 from ai_quant_assistant.domain.models import FinancialSyncSpec
 from ai_quant_assistant.research.readiness import ResearchReadiness
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.locks import InterProcessFileLock
+from ai_quant_assistant.storage.managed_stocks import ManagedStockService
 from ai_quant_assistant.storage.operations import DatabaseBackupService, ExclusiveOperationLock
 from ai_quant_assistant.storage.research_data_plans import DataPlanConflict, ResearchDataPlans
 from ai_quant_assistant.storage.schema import MIGRATIONS, apply_migrations
@@ -423,6 +426,166 @@ def test_published_partitions_with_remaining_gaps_complete_without_retry(db, mon
     assert not after["report"]["complete"]
     with pytest.raises(DataPlanConflict, match="没有真实失败或未处理项"):
         confirm(service, plan, retry=True)
+
+
+def test_daily_plan_freezes_and_links_explicit_gap_verification(db, monkeypatch):
+    missing_day = date(2024, 1, 5)
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM daily_bar WHERE security_id='SSE.600519' AND trade_date=?",
+            [missing_day],
+        )
+    plan_service_instance = plan_service(db)
+    plan = plan_service_instance.create("daily_signal", DAILY_SIGNAL)
+    task = confirm(plan_service_instance, plan)
+    monkeypatch.setattr(
+        plan_service_instance,
+        "_download",
+        lambda *args: {"status": "published", "row_count": 0},
+    )
+    assert plan_service_instance.run(task["task_id"])["status"] == "succeeded"
+    after = plan_service_instance.get(plan["plan_id"])
+    gap = after["gap_verification"]
+    assert gap["status"] == "available"
+    assert gap["unverified_gap"] == 1
+    assert gap["targets"][0]["unverified_dates"] == [str(missing_day)]
+    with pytest.raises(ValueError, match="明确确认"):
+        plan_service_instance.prepare_gap_verification(
+            plan["plan_id"],
+            version=plan["version"],
+            input_sha256=plan["input_sha256"],
+            confirm=False,
+        )
+    prepared = plan_service_instance.prepare_gap_verification(
+        plan["plan_id"],
+        version=plan["version"],
+        input_sha256=plan["input_sha256"],
+        confirm=True,
+    )
+    assert prepared[0]["dates"] == [str(missing_day)]
+    assert prepared[0]["source_context"] == {
+        "source_plan_id": plan["plan_id"],
+        "source_plan_version": plan["version"],
+        "source_input_sha256": plan["input_sha256"],
+        "source_symbols_sha256": plan["input"]["symbols_sha256"],
+        "source_stock_pool_id": None,
+        "source_stock_pool_revision": None,
+        "source_gap_dates_sha256": hashlib.sha256(str(missing_day).encode()).hexdigest(),
+        "source": "daily_signal_research_data_plan",
+    }
+
+    class SuspensionProvider:
+        @staticmethod
+        def get_suspension_evidence(symbol, dates):
+            assert symbol == "600519" and dates == (missing_day,)
+            return {
+                "verified": [
+                    {
+                        "date": str(missing_day),
+                        "classification": "verified_suspension",
+                        "source": "fixture:official",
+                        "reason": "fixture suspension",
+                    }
+                ],
+                "errors": [],
+                "source": "fixture:official",
+            }
+
+    managed = ManagedStockService(db, provider_factory=lambda _: SuspensionProvider())
+    request = prepared[0]
+    verification, created = managed.request_gap_verification(
+        request["security_id"],
+        expected_revision=request["expected_revision"],
+        confirm=True,
+        dates=request["dates"],
+        source_context=request["source_context"],
+        actor="fixture",
+    )
+    assert created
+    duplicate, duplicate_created = managed.request_gap_verification(
+        request["security_id"],
+        expected_revision=request["expected_revision"],
+        confirm=True,
+        dates=request["dates"],
+        source_context=request["source_context"],
+        actor="fixture",
+    )
+    assert duplicate["task_id"] == verification["task_id"]
+    assert duplicate_created is False
+    linked = plan_service_instance.get(plan["plan_id"])["gap_verification"]
+    assert linked["status"] == "running"
+    assert linked["tasks"][0]["task_id"] == verification["task_id"]
+    assert managed.run(verification["task_id"])["status"] == "succeeded"
+    completed = plan_service_instance.get(plan["plan_id"])["gap_verification"]
+    assert completed["status"] == "verified"
+    assert completed["verified_suspension"] == 1
+    assert completed["unverified_gap"] == 0
+    assert all(
+        item["status"] == "published"
+        for item in plan_service_instance.get(plan["plan_id"])["items"]
+    )
+    assert plan_service_instance.recheck(plan["plan_id"])["ready"] is True
+
+
+def test_gap_verification_api_requires_confirmation_and_submits_exact_targets():
+    calls = []
+
+    class PlanService:
+        @staticmethod
+        def prepare_gap_verification(plan_id, *, version, input_sha256, confirm):
+            if confirm is not True:
+                raise ValueError("核验缺失日期需要明确确认访问公网")
+            assert (plan_id, version, input_sha256) == ("data-plan-fixture", 1, "a" * 64)
+            return [
+                {
+                    "security_id": "SZSE.000333",
+                    "expected_revision": 7,
+                    "dates": ["2024-02-01"],
+                    "source_context": {"source_plan_id": plan_id},
+                }
+            ]
+
+        @staticmethod
+        def get(plan_id):
+            return {"plan_id": plan_id, "gap_verification": {"status": "running"}}
+
+    class PlanManager:
+        service = PlanService()
+
+    class GapManager:
+        @staticmethod
+        def submit_gap_verification(security_id, **kwargs):
+            calls.append((security_id, kwargs))
+            return {"task_id": "task-gap"}
+
+    app = FastAPI()
+    app.include_router(
+        research_data_router(PlanManager(), "fixture", object(), GapManager())
+    )
+    body = {"version": 1, "input_sha256": "a" * 64, "confirm": False}
+    with TestClient(app) as client:
+        denied = client.post(
+            "/api/v1/research-data/plans/data-plan-fixture/verify-gaps", json=body
+        )
+        assert denied.status_code == 422
+        accepted = client.post(
+            "/api/v1/research-data/plans/data-plan-fixture/verify-gaps",
+            json={**body, "confirm": True},
+        )
+    assert accepted.status_code == 202
+    assert accepted.json()["gap_verification"]["status"] == "running"
+    assert calls == [
+        (
+            "SZSE.000333",
+            {
+                "expected_revision": 7,
+                "dates": ["2024-02-01"],
+                "source_context": {"source_plan_id": "data-plan-fixture"},
+                "confirm": True,
+                "actor": "fixture",
+            },
+        )
+    ]
 
 
 def test_real_failures_retry_and_expired_owner_fencing(db, monkeypatch):

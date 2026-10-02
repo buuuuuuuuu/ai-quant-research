@@ -16,7 +16,7 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.managed_coverage import completed_date, market_today
 from ai_quant_assistant.storage.stock_pools import StockPoolService
-from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps
+from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps, gap_summary
 
 
 def encoded(value: Any) -> str:
@@ -250,6 +250,7 @@ class ResearchReadiness:
             "missing_dates": [str(day) for day in unresolved[:20]],
             "gap_details": gap_details[:20],
             "gap_details_truncated": max(0, len(gap_details) - 20),
+            "gap_summary": gap_summary({adjustment: gap_details}),
             "reason": reason,
             "can_backfill": not outside_lifetime,
             "cannot_backfill_reason": None,
@@ -662,13 +663,53 @@ class ResearchReadiness:
                         {str(item.get("adjustment") or "none") for item in price_gaps}
                     )
                 )
+                gap_counts = {
+                    kind: sum(
+                        int((item.get("gap_summary") or {}).get(kind) or 0)
+                        for item in price_gaps
+                    )
+                    for kind in (
+                        "verified_suspension",
+                        "missing_bar",
+                        "calendar_mismatch",
+                        "unverified_gap",
+                    )
+                }
+                if gap_counts["missing_bar"]:
+                    title = "股票日线存在真实缺失"
+                    action = (
+                        "查看处理计划并明确确认后，仅同步真实缺失日期所在的行情分区；"
+                        "已发布且只需证据核验的行情不会重复下载。"
+                    )
+                    action_kind = "data_plan"
+                elif gap_counts["calendar_mismatch"]:
+                    title = "交易日历与行情记录存在冲突"
+                    action = (
+                        "查看缺失日期和证据来源；该问题不能通过重复下载股票行情解决。"
+                    )
+                    action_kind = "inspect_price_gaps"
+                elif gap_counts["unverified_gap"]:
+                    title = "股票行情已同步，缺失日期待核验"
+                    action = (
+                        "查看处理计划并明确确认核验停牌或交易状态证据；"
+                        "重复下载相同行情分区通常无法解决。"
+                    )
+                    action_kind = "verify_price_gaps"
+                else:
+                    title = "股票日线覆盖不足"
+                    action = (
+                        "查看处理计划并明确确认后同步必要的前复权信号数据和"
+                        "未复权开盘/记账数据。"
+                    )
+                    action_kind = "data_plan"
                 recommend(
                     "price_coverage",
-                    "股票日线覆盖不足",
+                    title,
                     f"受影响股票：{names}；所需复权口径：{adjustments}。",
-                    "同步前复权信号数据和未复权开盘/记账数据，并保留最长均线及交叉前值的预热区间。",
+                    action,
                     affected_symbols=sorted({item["symbol"] for item in price_gaps}),
-                    action_kind="inspect_price_gaps",
+                    action_kind=action_kind,
+                    gap_counts=gap_counts,
                     network_required_for_resolution=True,
                 )
             financial_gaps = [

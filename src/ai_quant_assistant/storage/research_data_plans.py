@@ -108,7 +108,57 @@ class ResearchDataPlans:
         )
         decorated = self._decorate(plan)
         decorated["gap_verification"] = self._gap_verification_state(plan)
+        if not decorated.get("items") and plan.get("input", {}).get(
+            "research_type"
+        ) == "daily_signal":
+            gap = decorated["gap_verification"]
+            current = gap.get("current_readiness") or {}
+            if current.get("ready") is True:
+                decorated["outcome"] = "ready"
+            elif gap.get("unverified_gap"):
+                decorated["outcome"] = "verification_required"
+            elif gap.get("missing_bar") or gap.get("calendar_mismatch"):
+                decorated["outcome"] = "blocked_unresolved"
+        decorated["available_actions"] = {
+            "sync_required": bool(
+                plan.get("status") == "draft" and decorated.get("items")
+            ),
+            "verification_required": bool(
+                decorated["gap_verification"].get("requires_confirmation")
+            ),
+            "calendar_attention": bool(
+                decorated["gap_verification"].get("calendar_mismatch")
+            ),
+            "ready": decorated.get("outcome") == "ready",
+        }
         return decorated
+
+    @staticmethod
+    def _published_price_range(
+        connection, security_id: str, adjustment: str, start: date, end: date
+    ) -> bool:
+        """Prove that successful sync partitions cover a requested range.
+
+        Missing rows alone are not proof of suspension or proof that a provider
+        was queried.  This method only permits the evidence-verification path
+        after persisted, published partition intervals cover the whole range.
+        """
+        rows = connection.execute(
+            "SELECT start_date,end_date FROM sync_partition "
+            "WHERE security_id=? AND adjustment=? AND status='published' "
+            "AND end_date>=? AND start_date<=? ORDER BY start_date,end_date",
+            [security_id, adjustment, start, end],
+        ).fetchall()
+        cursor = start
+        for range_start, range_end in rows:
+            if range_end < cursor:
+                continue
+            if range_start > cursor:
+                return False
+            cursor = max(cursor, range_end + timedelta(days=1))
+            if cursor > end:
+                return True
+        return cursor > end
 
     def _linked_gap_tasks(self, plan_id: str) -> list[dict[str, object]]:
         with self.database.connect(read_only=True) as connection:
@@ -134,9 +184,10 @@ class ResearchDataPlans:
             "targets": [],
             "tasks": [],
         }
-        if plan.get("status") != "succeeded" or plan.get("input", {}).get(
-            "research_type"
-        ) != "daily_signal":
+        if plan.get("input", {}).get("research_type") != "daily_signal":
+            return empty
+        sync_complete = plan.get("status") == "succeeded" or not plan.get("items")
+        if not sync_complete:
             return empty
         report = self.readiness.check(plan["input"])
         price_checks = [
@@ -318,7 +369,7 @@ class ResearchDataPlans:
             raise DataPlanConflict("计划版本或摘要不符，请重新查看计划")
         if plan["input"].get("research_type") != "daily_signal":
             raise DataPlanConflict("当前入口只支持日线信号策略缺口核验")
-        if plan.get("status") != "succeeded":
+        if plan.get("status") != "succeeded" and plan.get("items"):
             raise DataPlanConflict("请先完成已确认的数据补齐，再核验剩余交易日缺口")
         gap_state = plan["gap_verification"]
         if any(task.get("status") in {"queued", "running"} for task in gap_state["tasks"]):
@@ -447,6 +498,7 @@ class ResearchDataPlans:
             raise ValueError("单次补齐最多 20 只股票，请明确分批；不会自动提交后续批次")
         report = self.readiness.check(frozen)
         items = {}
+        gap_cache: dict[tuple[str, str, str], dict[str, list[dict[str, object]]]] = {}
         for check in report["checks"]:
             if check["satisfied"] or not check.get("can_backfill"):
                 continue
@@ -457,6 +509,54 @@ class ResearchDataPlans:
                 key: check.get(key) for key in ("symbol", "security_id", "dataset", "adjustment")
             }
             item.update(start_date=check["required_start"], end_date=check["required_end"])
+            if (
+                frozen["research_type"] == "daily_signal"
+                and dataset == "daily_bar"
+                and check.get("security_id")
+                and check.get("list_date")
+            ):
+                cache_key = (
+                    check["security_id"],
+                    check["required_start"],
+                    check["required_end"],
+                )
+                classified = gap_cache.get(cache_key)
+                if classified is None:
+                    with self.database.connect(read_only=True) as connection:
+                        classified = classified_daily_bar_gaps(
+                            connection,
+                            check["security_id"],
+                            date.fromisoformat(check["required_start"]),
+                            date.fromisoformat(check["required_end"]),
+                        )
+                    gap_cache[cache_key] = classified
+                adjustment = check.get("adjustment")
+                classified_items = classified.get(adjustment, [])
+                missing_bar_dates = [
+                    date.fromisoformat(value["date"])
+                    for value in classified_items
+                    if value.get("classification") == "missing_bar"
+                ]
+                with self.database.connect(read_only=True) as connection:
+                    published_range = self._published_price_range(
+                        connection,
+                        check["security_id"],
+                        adjustment,
+                        date.fromisoformat(check["required_start"]),
+                        completed_date(date.fromisoformat(check["required_end"])),
+                    )
+                if classified_items and not missing_bar_dates and published_range:
+                    # Published bars with only evidence/calendar questions are
+                    # not a download job.  The existing explicit verification
+                    # path handles unverified dates without inventing prices.
+                    continue
+                if missing_bar_dates:
+                    item["start_date"] = str(min(missing_bar_dates))
+                    item["end_date"] = str(max(missing_bar_dates))
+                    item["reason"] = (
+                        f"{len(missing_bar_dates)} 个日期已分类为真实行情缺失；"
+                        "仅同步相关年份分区，未知停牌日期不重复下载"
+                    )
             if dataset in {"daily_bar", "benchmark_daily_bar"}:
                 item["end_date"] = str(completed_date(date.fromisoformat(item["end_date"])))
             if item["start_date"] > item["end_date"]:
@@ -464,7 +564,7 @@ class ResearchDataPlans:
             item_id = digest(item)[:24]
             item.update(
                 item_id=item_id,
-                reason=check["reason"],
+                reason=item.get("reason") or check["reason"],
                 estimated_partitions=date.fromisoformat(item["end_date"]).year
                 - date.fromisoformat(item["start_date"]).year
                 + 1,

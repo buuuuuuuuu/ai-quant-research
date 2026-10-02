@@ -203,8 +203,8 @@ const RunCenterUI = (() => {
       return `<button type="button" data-preflight-action="update-field" data-field="${esc(item.field)}" data-value="${esc(item.suggested_value)}">采用建议值：${esc(item.suggested_value)}</button>`;
     if (item.action_kind === "edit_field" && item.field)
       return `<button type="button" data-preflight-action="focus-field" data-field="${esc(item.field)}">修改${esc(titles[item.field] || item.field)}</button>`;
-    if (["data_plan", "inspect_price_gaps"].includes(item.action_kind))
-      return '<button type="button" data-preflight-action="show-plan">查看补齐计划（不联网）</button>';
+    if (["data_plan", "inspect_price_gaps", "verify_price_gaps"].includes(item.action_kind))
+      return '<button type="button" data-preflight-action="show-plan">查看处理计划（只生成计划、不联网）</button>';
     if (item.action_kind === "edit_candidate_factors")
       return '<button type="button" data-preflight-action="focus-section" data-target="center-daily-candidates">修改候选因子</button>';
     return "";
@@ -291,8 +291,9 @@ const RunCenterUI = (() => {
           })
           .join("")}</tbody></table></div>${checks.length > 100 ? "<p>仅展示前 100 项检查。</p>" : ""}</section>`
       : "";
-    const blockerDetails = blockers.length
-      ? `<details ${recommendations.length ? "" : "open"}><summary>查看阻断明细（${blockers.length}）</summary><ul>${blockers.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details>`
+    const blockerGroups = preflightBlockingGroups(report);
+    const blockerDetails = blockerGroups.length
+      ? `<details ${recommendations.length ? "" : "open"}><summary>查看用户可处理问题（${blockerGroups.length} 组；底层 ${blockers.length} 项）</summary><ul>${blockerGroups.map((item) => `<li>${esc(item.text)}</li>`).join("")}</ul></details>`
       : "";
     const warningDetails = warnings.length
       ? `<details><summary>查看风险提示（${warnings.length}）</summary><ul>${warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details>`
@@ -312,6 +313,45 @@ const RunCenterUI = (() => {
       checks,
     };
     return `<section class="preflight-summary ${tone}" aria-live="polite"><header><div><p class="preflight-kicker">${esc(report.status_label || (ready ? "可以运行" : "预检阻断"))}</p><h2>${heading}</h2></div><strong class="preflight-count">${esc(summary)}</strong></header><p>${explanation}</p>${advice}${checkTable}${blockerDetails}${warningDetails}<details><summary>查看冻结参数与完整诊断</summary>${renderValue(diagnostic)}</details></section>`;
+  }
+  function preflightBlockingGroups(report = {}) {
+    const checks = Array.isArray(report.checks) ? report.checks : [];
+    const raw = Array.isArray(report.blockers) ? report.blockers : [];
+    const handled = new Set();
+    const groups = new Map();
+    for (const check of checks) {
+      if (check.satisfied === true || check.severity !== "blocking") continue;
+      const original = `${check.symbol || ""} ${check.dataset}: ${check.reason || ""}`;
+      const gapIdentity = (check.gap_details || [])
+        .map((item) => `${item.date}:${item.classification}`)
+        .sort()
+        .join("|");
+      const mergeAdjustments = check.dataset === "daily_bar" && gapIdentity;
+      const identity = mergeAdjustments
+        ? [check.symbol || check.security_id, check.dataset, check.required_start, check.required_end, check.reason, gapIdentity].join("|")
+        : [check.symbol || check.security_id, check.dataset, check.adjustment, check.metric, check.reason].join("|");
+      const existing = groups.get(identity) || {
+        symbol: check.symbol || check.security_id || "未知对象",
+        dataset: check.dataset || "未知检查",
+        reason: check.reason || "原因未记录",
+        adjustments: new Set(),
+      };
+      if (check.adjustment) existing.adjustments.add(check.adjustment);
+      groups.set(identity, existing);
+      handled.add(original);
+    }
+    const result = [...groups.values()].map((item) => {
+      const adjustments = [...item.adjustments].sort();
+      const scope = adjustments.length > 1 ? `（${adjustments.join("/")}共同）` : adjustments.length ? `（${adjustments[0]}）` : "";
+      return { text: `${item.symbol} ${item.dataset}${scope}: ${item.reason}` };
+    });
+    const seen = new Set(result.map((item) => item.text));
+    for (const item of raw) {
+      if (handled.has(item) || seen.has(item)) continue;
+      seen.add(item);
+      result.push({ text: item });
+    }
+    return result;
   }
   function factorRow(item = { code: "roe", weight: 1, direction: "desc" }) {
     const options = { ...catalog.factors };
@@ -791,6 +831,8 @@ const RunCenterUI = (() => {
     const outcome = dataPlanOutcome(plan), summary = dataPlanExecutionSummary(plan);
     const counts = `同步完成 ${summary.published || 0} 项、验证完成 ${summary.verified || 0} 项、失败 ${summary.failed || 0} 项、待处理 ${summary.pending || 0} 项${summary.unknown ? `、未知 ${summary.unknown} 项` : ""}`;
     if (outcome === "ready") return `<p class="positive"><strong>补齐完成，数据检查通过。</strong> ${esc(counts)}；策略仍需单独确认运行。</p>`;
+    if (outcome === "verification_required") return `<p class="page-notice"><strong>行情已经发布，当前只需核验无行情日期。</strong> 没有需要重复下载的行情分区。请明确确认“核验缺失日期”；该操作只查询停牌或交易状态证据，不生成K线，也不运行回测。</p>`;
+    if (outcome === "blocked_unresolved") return `<p class="negative"><strong>行情同步已完成，但核验发现仍有阻断项。</strong> 请查看真实行情缺失或交易日历冲突；重复下载相同行情通常无法解决。</p>`;
     if (outcome === "completed_with_gaps") {
       const financialGaps = (plan.report?.checks || []).filter((check) => check.dataset === "financial_metric" && check.satisfied !== true);
       const excluded = plan.input?.parameters?.missing_policy === "exclude" && financialGaps.length
@@ -847,17 +889,18 @@ const RunCenterUI = (() => {
   function renderDataPlan(plan = {}) {
     const task = plan.task;
     const outcome = dataPlanOutcome(plan);
-    const outcomeLabels = {ready:"同步完成且检查通过",completed_with_gaps:"同步完成但仍有数据缺口",download_failed:"数据同步失败",interrupted:"任务中断",queued:"等待执行",running:"正在执行",planned:"尚未执行",unknown:"结果未知"};
+    const outcomeLabels = {ready:"当前数据检查通过",verification_required:"行情已同步，等待核验证据",blocked_unresolved:"同步完成但仍有分类阻断",completed_with_gaps:"同步完成但仍有数据缺口",download_failed:"数据同步失败",interrupted:"任务中断",queued:"等待执行",running:"正在执行",planned:"尚未执行",unknown:"结果未知"};
     const taskStatusLabels = {queued:"等待执行",running:"正在执行",succeeded:"执行完成",failed:"执行结束（存在问题）"};
     const itemRows = (plan.items || []).map((item) => `<tr><td>${esc(item.symbol || "共享")}</td><td>${esc(enumName(item.dataset))}</td><td>${esc(item.adjustment ? enumName(item.adjustment, "adjustment") : "不适用")}</td><td>${esc(known(item.start_date))} 至 ${esc(known(item.end_date))}</td><td>${esc(known(item.estimated_partitions))}</td><td>${esc(enumName(item.status))}<small>${esc(item.attempts?.at?.(-1)?.error || item.reason || "")}</small></td></tr>`).join("");
     const progress = task && ["succeeded","failed"].includes(task.status) ? 100 : task?.progress;
     const taskText = task
       ? `${taskStatusLabels[task.status] || `${task.status}（暂无中文说明）`} · ${known(progress)}% · ${task.message || task.error || "等待更新"}`
       : "尚未确认：不会联网或下载";
-    const finalReport = plan.report
-      ? `<section class="data-plan-final-report" aria-label="补齐任务结束时预检"><details><summary>查看补齐任务结束时预检、受影响股票和日期</summary>${renderPreflight(plan.report)}</details></section>`
-      : "";
-    return `${dataPlanOutcomeNotice(plan)}<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>补齐结果</dt><dd>${esc(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || '<tr><td colspan="6">没有可自动补齐项目；请查看预检中的不可补齐原因。</td></tr>'}</tbody></table></div>${renderGapVerification(plan)}${finalReport}`;
+    const historical = plan.report ? `<section class="data-plan-final-report" aria-label="计划保存的历史预检快照"><h4>计划保存的历史预检快照</h4><p>这是该计划创建或补齐任务结束时保存的检查快照，不代表当前页面参数的最新结果。</p><p class="muted" data-plan-snapshot-identity>打开当前页面后核对参数身份。</p><dl class="center-meta"><div><dt>检查时间</dt><dd>${esc(known(plan.report.checked_at))}</dd></div><div><dt>当时参数哈希</dt><dd><code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>阻断数量</dt><dd>${esc(known((plan.report.blockers || []).length))}</dd></div><div><dt>受影响股票</dt><dd>${esc((plan.report.affected_symbols || []).join("、") || "无")}</dd></div></dl><button type="button" data-plan-report-toggle>按需查看完整历史快照</button><div data-plan-report-target hidden></div></section>` : "";
+    const emptyItems = outcome === "verification_required"
+      ? "行情分区已发布，没有需要下载的项目；当前等待明确确认核验缺失日期。"
+      : "没有可自动补齐项目；请查看预检中的不可补齐原因。";
+    return `${dataPlanOutcomeNotice(plan)}<dl class="center-meta"><div><dt>计划 ID</dt><dd><code>${esc(plan.plan_id || "未记录")}</code></dd></div><div><dt>版本 / 参数哈希</dt><dd>${esc(known(plan.version))} / <code>${esc(known(plan.input_sha256))}</code></dd></div><div><dt>冻结范围</dt><dd>${esc(known(plan.input?.symbols_sha256))} · ${esc(plan.input?.resolved_symbols?.length ?? "未知")} 只</dd></div><div><dt>处理结果</dt><dd>${esc(outcomeLabels[outcome] || `${outcome}（暂无中文说明）`)}</dd></div><div><dt>计划状态</dt><dd>${esc(enumName(plan.status))}</dd></div><div><dt>后台任务</dt><dd>${esc(taskText)}</dd></div></dl><p>${esc(plan.network_notice || "只有明确确认后才会访问公网；不会运行策略。")}</p><div class="table-shell"><table><thead><tr><th>股票</th><th>数据集</th><th>口径</th><th>日期范围</th><th>预计分区</th><th>状态 / 原因</th></tr></thead><tbody>${itemRows || `<tr><td colspan="6">${esc(emptyItems)}</td></tr>`}</tbody></table></div>${renderGapVerification(plan)}${historical}`;
   }
   function restoreDataPlanConfiguration(configuration, plan, expectedKind) {
     const input = plan?.input;
@@ -894,6 +937,7 @@ const RunCenterUI = (() => {
       renderValue,
       renderPreflight,
       preflightProblems,
+      preflightBlockingGroups,
       field,
       readParams,
       factorRow,
@@ -931,6 +975,7 @@ const RunCenterUI = (() => {
       renderDataPlan,
       restoreDataPlanConfiguration,
       normalizedParameterIdentity,
+      parameterDifferences,
     };
   if (typeof document === "undefined") return {};
   const $ = (id) => document.getElementById(id);
@@ -1393,6 +1438,22 @@ const RunCenterUI = (() => {
     }
   }
   function invalidate() {
+    let changeNotice = "参数有变化，请重新预检。";
+    if (dataPlan?.input?.parameters && $("center-copy-form")) {
+      try {
+        const current = readParams($("center-copy-form"), copy?.params || {});
+        if (current.stock_pool_id) delete current.symbols;
+        const differences = parameterDifferences(current, dataPlan.input.parameters);
+        const detail = differences.length
+          ? differences.map((item) => `${item.label} ${known(item.previous)} → ${known(item.current)}`).join("；")
+          : "规则或冻结范围已经变化";
+        changeNotice = `${detail}。旧计划仍保留，但不能代替当前参数；请重新预检。`;
+        setPlanUrl(null);
+        freezeCheckedDates(current);
+      } catch (_error) {
+        setPlanUrl(null);
+      }
+    }
     checked = null;
     dataPlan = null;
     planSequence++;
@@ -1401,7 +1462,7 @@ const RunCenterUI = (() => {
     if ($("center-review")) $("center-review").hidden = true;
     if ($("center-action-feedback")) $("center-action-feedback").textContent = "";
     if ($("center-preflight-result"))
-      $("center-preflight-result").textContent = "参数有变化，请重新预检。";
+      $("center-preflight-result").textContent = changeNotice;
     if ($("center-data-plan")) $("center-data-plan").hidden = true;
     if ($("center-plan-status")) $("center-plan-status").textContent = "";
     refreshDailyUX();
@@ -1437,7 +1498,7 @@ const RunCenterUI = (() => {
       return;
     }
     if (own !== sequence) return;
-    if (freshKind) {
+    if (freshKind && !restoredPlan) {
       if (query.has("stock")) {
         if (!/^[0-9]{6}$/.test(query.get("stock")))
           throw Error("旧链接股票代码无效，请明确选择范围");
@@ -1480,6 +1541,15 @@ const RunCenterUI = (() => {
           );
         }
       }
+    }
+    if (restoredPlan) {
+      const ignored = ["stock", "start_date", "end_date", "factor", "adjustment", "benchmark", "screen_source"]
+        .filter((key) => query.has(key));
+      if (ignored.length)
+        data.warnings.push(
+          `已按补齐计划 ${restoredPlan.plan_id} 恢复冻结参数；URL 中的 ${ignored.join("、")} 未覆盖该计划。`,
+        );
+      freezeCheckedDates(data.params);
     }
     copy = data;
     $("center-title").textContent =
@@ -1803,6 +1873,19 @@ const RunCenterUI = (() => {
     else query.delete("data_plan");
     window.history.replaceState(null, "", location.pathname + (query.size ? "?" + query : ""));
   }
+  function freezeCheckedDates(params) {
+    if (!params?.start_date || !params?.end_date) return;
+    const query = new URLSearchParams(location.search);
+    query.set("start_date", params.start_date);
+    query.set("end_date", params.end_date);
+    window.history.replaceState(null, "", location.pathname + "?" + query.toString());
+  }
+  function parameterDifferences(current = {}, frozen = {}) {
+    const labels = { start_date: "开始日期", end_date: "结束日期", stock_pool_id: "股票池", stock_pool_revision: "股票池 revision", adjustment: "复权口径" };
+    return Object.keys(labels)
+      .filter((key) => JSON.stringify(current?.[key] ?? null) !== JSON.stringify(frozen?.[key] ?? null))
+      .map((key) => ({ field: key, label: labels[key], previous: frozen?.[key] ?? "未记录", current: current?.[key] ?? "未记录" }));
+  }
   function showDataPlan(plan) {
     const status = $("center-plan-status");
     const openSummaries = status?.querySelectorAll
@@ -1811,6 +1894,30 @@ const RunCenterUI = (() => {
     dataPlan = plan;
     $("center-data-plan").hidden = false;
     status.innerHTML = renderDataPlan(plan);
+    const snapshotIdentity = status.querySelector?.("[data-plan-snapshot-identity]");
+    try {
+      const current = currentParams();
+      const differences = parameterDifferences(current, plan.input?.parameters || {});
+      if (snapshotIdentity)
+        snapshotIdentity.textContent = differences.length
+          ? `与当前参数不同：${differences.map((item) => `${item.label} ${known(item.previous)} → ${known(item.current)}`).join("；")}。旧计划不能解锁当前参数。`
+          : "与当前页面参数一致。";
+      if (differences.length)
+        status.insertAdjacentHTML(
+          "afterbegin",
+          `<p class="page-notice">这是另一个参数范围的计划：${esc(differences.map((item) => `${item.label} ${known(item.previous)} → ${known(item.current)}`).join("；"))}。计划本身仍保留，但当前参数必须重新预检。</p>`,
+        );
+    } catch (_error) {
+      if (snapshotIdentity) snapshotIdentity.textContent = "当前页面参数暂时无法比较。";
+    }
+    const reportButton = status.querySelector?.("[data-plan-report-toggle]");
+    if (reportButton) reportButton.addEventListener("click", () => {
+      const target = status.querySelector("[data-plan-report-target]");
+      const opening = target.hidden;
+      target.hidden = !opening;
+      if (opening && !target.innerHTML) target.innerHTML = renderPreflight(plan.report || {});
+      reportButton.textContent = opening ? "收起完整历史快照" : "按需查看完整历史快照";
+    });
     if (openSummaries.length && status.querySelectorAll)
       for (const summary of status.querySelectorAll("details > summary"))
         if (openSummaries.includes(summary.textContent)) summary.parentElement.open = true;
@@ -1838,7 +1945,11 @@ const RunCenterUI = (() => {
     const current = currentParams();
     const frozen = plan.input?.parameters;
     if (paramsKey(current) !== paramsKey(frozen)) {
-      $("center-plan-status").insertAdjacentHTML("afterbegin", '<p class="negative">计划已完成，但当前参数已经变化。旧结果不会覆盖当前页面，请重新检查本地数据。</p>');
+      const differences = parameterDifferences(current, frozen);
+      const detail = differences.length
+        ? differences.map((item) => `${item.label}：${known(item.previous)} → ${known(item.current)}`).join("；")
+        : "规则或冻结范围已经变化";
+      $("center-plan-status").insertAdjacentHTML("afterbegin", `<p class="negative">计划已完成，但当前参数已经变化：${esc(detail)}。旧结果不会覆盖当前页面，请重新检查本地数据。</p>`);
       return;
     }
     checked = { params: paramsKey(current), report };
@@ -1916,11 +2027,19 @@ const RunCenterUI = (() => {
         return;
       }
       const retry = action === "retry";
-      const verb = retry ? "重试失败分区" : "补齐缺失数据";
+      const verb = retry ? "重试失败分区" : "补齐缺失行情";
       if (retry && dataPlanExecutionSummary(dataPlan).retryable < 1)
         throw Error("当前计划没有真实失败或未处理分区。请重新检查本地数据；如需刷新上游数据，请基于当前参数创建新计划。");
       const detail = retry ? `仅重试 ${dataPlanExecutionSummary(dataPlan).retryable} 个真实失败或未处理项；已发布和已验证项目不会重新下载。` : "";
-      if (!window.confirm(`确认${verb}？这会访问公网并启动后台任务，但不会运行策略或调用模型。${detail}`)) return;
+      const items = dataPlan.items || [];
+      const rangeStart = items.map((item) => item.start_date).filter(Boolean).sort()[0] || "未记录";
+      const rangeEnd = items.map((item) => item.end_date).filter(Boolean).sort().at(-1) || "未记录";
+      const spanDays = items.reduce((total, item) => {
+        const start = Date.parse(item.start_date), end = Date.parse(item.end_date);
+        return total + (Number.isFinite(start) && Number.isFinite(end) ? Math.floor((end - start) / 86400000) + 1 : 0);
+      }, 0);
+      const notice = `确认${verb}？操作类型：${retry ? "恢复真实失败或未处理项" : "下载缺失行情"}；计划 ${dataPlan.plan_id}；参数哈希 ${dataPlan.input_sha256}；冻结范围哈希 ${dataPlan.input?.symbols_sha256 || "未记录"}；股票数 ${dataPlan.input?.resolved_symbols?.length ?? "未知"}；日期范围 ${rangeStart} 至 ${rangeEnd}（各项目日期跨度合计 ${spanDays || "未记录"} 日）。将联网下载行情；不会执行缺口证据核验、回测或调用模型。${detail}`;
+      if (!window.confirm(notice)) return;
       await get(`/api/v1/research-data/plans/${encodeURIComponent(dataPlan.plan_id)}/${retry ? "retry" : "confirm"}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ version: dataPlan.version, input_sha256: dataPlan.input_sha256, confirm: true }),
@@ -1949,6 +2068,7 @@ const RunCenterUI = (() => {
     $("center-submit").disabled = true;
     try {
       const params = currentParams();
+      freezeCheckedDates(params);
       const p = await get("/api/v1/research-data/preflight", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1969,7 +2089,7 @@ const RunCenterUI = (() => {
         $("center-plan-confirm").hidden = true;
         $("center-plan-retry").hidden = true;
         $("center-plan-refresh").hidden = true;
-        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“查看补齐计划”只会冻结计划，不联网下载。</p>';
+        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“查看处理计划”只会冻结参数并判断下一步是补行情还是核验证据，不会联网。</p>';
       }
     } catch (e) {
       if (own === planSequence) fail(e, { target: "center-action-feedback", focus: true, scroll: true });

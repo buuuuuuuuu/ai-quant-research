@@ -428,22 +428,36 @@ def test_published_partitions_with_remaining_gaps_complete_without_retry(db, mon
         confirm(service, plan, retry=True)
 
 
-def test_daily_plan_freezes_and_links_explicit_gap_verification(db, monkeypatch):
+def test_daily_plan_freezes_and_links_explicit_gap_verification(db):
     missing_day = date(2024, 1, 5)
     with db.connect() as connection:
         connection.execute(
             "DELETE FROM daily_bar WHERE security_id='SSE.600519' AND trade_date=?",
             [missing_day],
         )
+        for adjustment in ("none", "qfq"):
+            connection.execute(
+                "INSERT INTO sync_partition(batch_id,partition_key,security_id,adjustment,"
+                "start_date,end_date,status,row_count) VALUES (?,?,?,?,?,?,'published',1)",
+                [
+                    "daily-bar-e3-fixture",
+                    f"SSE.600519:{adjustment}:2024",
+                    "SSE.600519",
+                    adjustment,
+                    date(2024, 1, 1),
+                    date(2024, 12, 31),
+                ],
+            )
     plan_service_instance = plan_service(db)
     plan = plan_service_instance.create("daily_signal", DAILY_SIGNAL)
-    task = confirm(plan_service_instance, plan)
-    monkeypatch.setattr(
-        plan_service_instance,
-        "_download",
-        lambda *args: {"status": "published", "row_count": 0},
-    )
-    assert plan_service_instance.run(task["task_id"])["status"] == "succeeded"
+    assert plan["items"] == []
+    assert plan["outcome"] == "verification_required"
+    assert plan["available_actions"] == {
+        "sync_required": False,
+        "verification_required": True,
+        "calendar_attention": False,
+        "ready": False,
+    }
     after = plan_service_instance.get(plan["plan_id"])
     gap = after["gap_verification"]
     assert gap["status"] == "available"
@@ -525,6 +539,37 @@ def test_daily_plan_freezes_and_links_explicit_gap_verification(db, monkeypatch)
         for item in plan_service_instance.get(plan["plan_id"])["items"]
     )
     assert plan_service_instance.recheck(plan["plan_id"])["ready"] is True
+
+
+def test_daily_plan_only_resyncs_a_real_one_sided_gap(db):
+    missing_day = date(2024, 1, 5)
+    with db.connect() as connection:
+        connection.execute(
+            "DELETE FROM daily_bar WHERE security_id='SSE.600519' "
+            "AND adjustment='qfq' AND trade_date=?",
+            [missing_day],
+        )
+        for adjustment in ("none", "qfq"):
+            connection.execute(
+                "INSERT INTO sync_partition(batch_id,partition_key,security_id,adjustment,"
+                "start_date,end_date,status,row_count) VALUES (?,?,?,?,?,?,'published',1)",
+                [
+                    "daily-bar-e3-one-sided",
+                    f"SSE.600519:{adjustment}:2024",
+                    "SSE.600519",
+                    adjustment,
+                    date(2024, 1, 1),
+                    date(2024, 12, 31),
+                ],
+            )
+    service = plan_service(db)
+    first = service.create("daily_signal", DAILY_SIGNAL)
+    assert len(first["items"]) == 1
+    assert first["items"][0]["dataset"] == "daily_bar"
+    assert first["items"][0]["adjustment"] == "qfq"
+    assert first["items"][0]["start_date"] == str(missing_day)
+    assert first["items"][0]["end_date"] == str(missing_day)
+    assert "真实行情缺失" in first["items"][0]["reason"]
 
 
 def test_gap_verification_api_requires_confirmation_and_submits_exact_targets():

@@ -700,7 +700,7 @@ test("preflight groups duplicate root causes and renders typed actions", () => {
   const html = ui.renderPreflight(report);
   assert.match(html, /2 类问题 · 23 项原始检查未通过/);
   assert.match(html, /data-field="end_date"/);
-  assert.match(html, /查看补齐计划（不联网）/);
+  assert.match(html, /查看处理计划（只生成计划、不联网）/);
   assert.doesNotMatch(html, /重复项/);
 });
 
@@ -799,15 +799,17 @@ test("completed data plan restores its frozen pool before automatic recheck", as
         return { pool_id: "pool-frozen", revision: 2, symbols: ["688111"] };
       throw Error("unexpected request " + url);
     },
-    { search: "?data_plan=data-plan-frozen" },
+    { search: "?data_plan=data-plan-frozen&end_date=2026-10-01" },
   );
   await tick();
   await tick();
   assert.equal(h.element("center-error").textContent, "");
   assert.equal(h.ui.currentParams().stock_pool_id, "pool-frozen");
   assert.equal(h.ui.currentParams().stock_pool_revision, 2);
+  assert.equal(h.ui.currentParams().end_date, "2025-12-31");
   assert.equal(h.ui.currentParams().symbols, undefined);
   assert.match(h.element("center-pool-preview").textContent, /r2 · 1 只：688111/);
+  assert.match(h.element("center-copy-warning").textContent, /URL 中的 end_date 未覆盖该计划/);
   assert.equal(h.element("center-submit").disabled, false);
   assert.equal(
     h.calls.filter((call) => call.url.endsWith("/plans/data-plan-frozen")).length,
@@ -817,6 +819,13 @@ test("completed data plan restores its frozen pool before automatic recheck", as
     h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies").length,
     0,
   );
+  h.element("center-copy-form").inputs = [
+    { dataset: { param: "end_date", type: "string" }, value: "2026-10-01" },
+  ];
+  h.element("center-copy-form").listeners.input();
+  assert.match(h.element("center-preflight-result").textContent, /结束日期 2025-12-31 → 2026-10-01/);
+  assert.match(h.element("center-preflight-result").textContent, /旧计划仍保留，但不能代替当前参数/);
+  assert.equal(h.element("center-data-plan").hidden, true);
 });
 
 test("data plan restore rejects missing or mismatched frozen identity", () => {
@@ -932,8 +941,10 @@ test("data plan separates completed gaps from real download failures", () => {
   const html = ui.renderDataPlan(completed);
   assert.match(html, /同步已完成，但最终检查仍有数据缺口/);
   assert.match(html, /排除缺失历史时点，不会填零/);
-  assert.match(html, /查看补齐任务结束时预检、受影响股票和日期/);
-  assert.match(html, /财务因子/);
+  assert.match(html, /计划保存的历史预检快照/);
+  assert.match(html, /按需查看完整历史快照/);
+  assert.doesNotMatch(html, /研究数据预检：暂不能提交/);
+  assert.match(html, /financial_metric/);
   assert.match(html, /执行结束（存在问题） · 100%/);
   assert.doesNotMatch(html, /95%/);
   assert.equal(ui.dataPlanExecutionSummary(completed).retryable, 0);
@@ -941,6 +952,41 @@ test("data plan separates completed gaps from real download failures", () => {
   const failed = {...completed,outcome:"download_failed",execution_summary:{total:2,published:1,verified:0,failed:1,pending:0,unknown:0,retryable:1}};
   assert.match(ui.renderDataPlan(failed),/存在真实同步失败/);
   assert.match(ui.renderDataPlan(failed),/已发布或已验证项目不会重新下载/);
+});
+
+test("preflight merges identical none and qfq gaps only in the display layer", () => {
+  const details = [
+    { date: "2026-01-02", classification: "unverified_gap" },
+    { date: "2026-01-05", classification: "verified_suspension" },
+  ];
+  const checks = ["none", "qfq"].map((adjustment) => ({
+    symbol: "000333", security_id: "SZSE.000333", dataset: "daily_bar",
+    adjustment, required_start: "2025-01-01", required_end: "2026-01-31",
+    satisfied: false, severity: "blocking", reason: "1 个交易日缺口仍需核验；1 个日期已核验为停牌",
+    gap_details: details,
+  }));
+  const report = {
+    ready: false, status: "blocked", checks,
+    blockers: checks.map((check) => `${check.symbol} ${check.dataset}: ${check.reason}`),
+  };
+  const groups = ui.preflightBlockingGroups(report);
+  assert.equal(groups.length, 1);
+  assert.match(groups[0].text, /none\/qfq共同/);
+  const html = ui.renderPreflight(report);
+  assert.match(html, /1 组；底层 2 项/);
+});
+
+test("parameter differences name date and pool identity changes", () => {
+  assert.deepEqual(
+    ui.parameterDifferences(
+      { start_date: "2025-01-01", end_date: "2026-10-01", stock_pool_revision: 20 },
+      { start_date: "2025-01-01", end_date: "2026-09-30", stock_pool_revision: 19 },
+    ),
+    [
+      { field: "end_date", label: "结束日期", previous: "2026-09-30", current: "2026-10-01" },
+      { field: "stock_pool_revision", label: "股票池 revision", previous: 19, current: 20 },
+    ],
+  );
 });
 
 test("completed data plan exposes explicit bounded gap verification separately", () => {
@@ -999,6 +1045,28 @@ test("completed data plan exposes explicit bounded gap verification separately",
   assert.equal(ui.gapVerificationActive(plan), false);
   plan.gap_verification.tasks = [{ status: "queued" }];
   assert.equal(ui.gapVerificationActive(plan), true);
+});
+
+test("verification-only draft plan never offers another price download", () => {
+  const plan = {
+    plan_id: "data-plan-verify-only", version: 1,
+    input_sha256: "a".repeat(64), status: "draft", outcome: "verification_required",
+    input: { symbols_sha256: "b".repeat(64), resolved_symbols: ["000333", "600022"], parameters: {} },
+    report: { checked_at: "2026-10-01T00:00:00Z", blockers: ["one", "two", "three", "four"], affected_symbols: ["000333", "600022"] },
+    items: [],
+    available_actions: { sync_required: false, verification_required: true, calendar_attention: false, ready: false },
+    gap_verification: {
+      status: "available", total_dates: 107, verified_suspension: 10,
+      missing_bar: 0, calendar_mismatch: 0, unverified_gap: 97,
+      requires_confirmation: true, targets: [], tasks: [],
+    },
+  };
+  const html = ui.renderDataPlan(plan);
+  assert.match(html, /没有需要重复下载的行情分区/);
+  assert.match(html, /等待明确确认核验缺失日期/);
+  assert.match(html, /计划保存的历史预检快照/);
+  assert.doesNotMatch(html, /预计18个行情分区/);
+  assert.doesNotMatch(html, /研究数据预检：暂不能提交/);
 });
 
 test("gap evidence lookup starts only after an explicit confirmation click", async () => {

@@ -13,6 +13,7 @@ from ai_quant_assistant.errors import ProviderError
 
 BASE = "https://www.cninfo.com.cn"
 COLUMNS = ["代码", "简称", "公告标题", "公告时间", "公告链接"]
+EVIDENCE_COLUMNS = [*COLUMNS, "附件链接", "公告ID", "机构ID"]
 CATEGORIES = {
     "年报": "category_ndbg_szsh", "半年报": "category_bndbg_szsh",
     "一季报": "category_yjdbg_szsh", "三季报": "category_sjdbg_szsh",
@@ -103,6 +104,64 @@ class CninfoAnnouncements:
     def fetch(self, *, symbol, market, category, start_date, end_date, keyword=""):
         if market != "沪深京" or category not in CATEGORIES or keyword:
             raise ValueError("unsupported announcement query")
+        return self._fetch_query(
+            symbol=symbol,
+            category=CATEGORIES[category],
+            start_date=start_date,
+            end_date=end_date,
+            keyword="",
+            max_pages=self.max_pages,
+        )[COLUMNS]
+
+    def fetch_keywords(
+        self,
+        *,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        keywords: tuple[str, ...] = ("停牌", "复牌"),
+    ) -> pd.DataFrame:
+        """Return bounded official announcement candidates for evidence parsing.
+
+        Keyword matches are candidates only.  Callers must inspect the official
+        document body and must never treat a title match as suspension proof.
+        """
+        normalized = tuple(dict.fromkeys(str(item).strip() for item in keywords))
+        if not normalized or len(normalized) > 4 or any(
+            not item or len(item) > 12 for item in normalized
+        ):
+            raise ValueError("announcement evidence keywords are invalid")
+        frames = [
+            self._fetch_query(
+                symbol=symbol,
+                category="",
+                start_date=start_date,
+                end_date=end_date,
+                keyword=keyword,
+                max_pages=min(self.max_pages, 10),
+            )
+            for keyword in normalized
+        ]
+        populated = [frame for frame in frames if not frame.empty]
+        if not populated:
+            return pd.DataFrame(columns=EVIDENCE_COLUMNS)
+        combined = pd.concat(populated, ignore_index=True)
+        return (
+            combined.drop_duplicates(["代码", "公告ID"], keep="first")
+            .sort_values(["公告时间", "公告ID"], kind="stable")
+            .reset_index(drop=True)[EVIDENCE_COLUMNS]
+        )
+
+    def _fetch_query(
+        self,
+        *,
+        symbol: str,
+        category: str,
+        start_date: str,
+        end_date: str,
+        keyword: str,
+        max_pages: int,
+    ) -> pd.DataFrame:
         if len(symbol) != 6 or not symbol.isdigit():
             raise ValueError("unsupported announcement symbol")
         start = datetime.strptime(start_date, "%Y%m%d").date()
@@ -128,7 +187,7 @@ class CninfoAnnouncements:
             params = {
                 "pageNum": "1", "pageSize": str(self.page_size), "column": "szse",
                 "tabName": "fulltext", "plate": "", "stock": f"{symbol},{self._organizations[symbol]}",
-                "searchkey": "", "secid": "", "category": CATEGORIES[category], "trade": "",
+                "searchkey": keyword, "secid": "", "category": category, "trade": "",
                 "seDate": f"{start.isoformat()}~{end.isoformat()}",
                 "sortName": "", "sortType": "", "isHLtitle": "true",
             }
@@ -152,7 +211,7 @@ class CninfoAnnouncements:
                 if total != count or len(items) != min(self.page_size, total - len(collected)):
                     raise AnnouncementResponseError("公告查询", "pagination")
                 pages = max(1, math.ceil(total / self.page_size))
-                if pages > self.max_pages:
+                if pages > max_pages:
                     raise AnnouncementResponseError("公告查询", "limit")
                 for item in items:
                     if not isinstance(item, dict) or any(
@@ -176,7 +235,7 @@ class CninfoAnnouncements:
                 params = {**params, "pageNum": str(page)}
                 time.sleep(0.2)
         if not collected:
-            return pd.DataFrame(columns=COLUMNS)
+            return pd.DataFrame(columns=EVIDENCE_COLUMNS)
         frame = pd.DataFrame(collected).rename(columns={
             "secCode": "代码", "secName": "简称", "announcementTitle": "公告标题",
             "announcementTime": "公告时间",
@@ -192,4 +251,14 @@ class CninfoAnnouncements:
                 frame["代码"], frame["announcementId"], frame["orgId"], frame["公告时间"], strict=True
             )
         ]
-        return frame[COLUMNS]
+        frame["附件链接"] = [
+            (
+                "https://static.cninfo.com.cn/" + str(path).lstrip("/")
+                if path and not str(path).lower().startswith(("http://", "https://"))
+                else str(path or "")
+            )
+            for path in frame.get("adjunctUrl", pd.Series("", index=frame.index))
+        ]
+        frame["公告ID"] = frame["announcementId"].astype(str)
+        frame["机构ID"] = frame["orgId"].astype(str)
+        return frame[EVIDENCE_COLUMNS]

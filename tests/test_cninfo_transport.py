@@ -63,6 +63,7 @@ def item(identity=1, published="2024-08-15 18:45:00"):
         "secCode": "688111", "secName": "测试公司", "announcementTitle": "2024年半年度报告",
         "announcementTime": int(pd.Timestamp(published, tz="Asia/Shanghai").timestamp() * 1000),
         "announcementId": str(identity), "orgId": "9900038384",
+        "adjunctUrl": f"finalpage/2024-08-15/{identity}.PDF",
     }
 
 
@@ -191,3 +192,25 @@ def test_provider_preserves_publication_semantics_and_uses_same_transport_for_in
     assert reports.iloc[0]["report_period_end"] == pd.Timestamp("2024-06-30")
     assert reports.iloc[0]["source"] == "akshare:stock_zh_a_disclosure_report_cninfo:interim"
     assert reports.iloc[0]["url"] == interim.iloc[0]["url"]
+
+
+def test_keyword_candidates_preserve_official_attachment_identity(monkeypatch):
+    duplicate = item(identity="evidence")
+    session = Session(
+        [
+            catalog(),
+            Response({"totalAnnouncement": 1, "announcements": [duplicate]}),
+            Response({"totalAnnouncement": 1, "announcements": [duplicate]}),
+        ]
+    )
+    monkeypatch.setattr(requests, "Session", lambda **_: session)
+    result = CninfoAnnouncements().fetch_keywords(
+        symbol="688111", start_date="20240101", end_date="20241231"
+    )
+    assert len(result) == 1
+    assert result.iloc[0]["公告ID"] == "evidence"
+    assert result.iloc[0]["附件链接"] == (
+        "https://static.cninfo.com.cn/finalpage/2024-08-15/evidence.PDF"
+    )
+    assert session.calls[1][2]["data"]["searchkey"] == "停牌"
+    assert session.calls[2][2]["data"]["searchkey"] == "复牌"

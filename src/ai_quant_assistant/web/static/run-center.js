@@ -846,6 +846,34 @@ const RunCenterUI = (() => {
   function gapVerificationActive(plan = {}) {
     return (plan.gap_verification?.tasks || []).some((task) => ["queued", "running"].includes(task.status));
   }
+  function officialEvidenceUrl(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      return parsed.protocol === "https:" && ["www.cninfo.com.cn", "static.cninfo.com.cn"].includes(parsed.hostname)
+        ? parsed.href : "";
+    } catch (_) { return ""; }
+  }
+  function renderOfficialGapEvidence(item = {}) {
+    const evidence = item.evidence;
+    if (!evidence || evidence.source_type !== "official_announcement_chain") return "";
+    const ids = Array.isArray(evidence.announcement_ids) ? evidence.announcement_ids : [];
+    const titles = Array.isArray(evidence.announcement_titles) ? evidence.announcement_titles : [];
+    const urls = Array.isArray(evidence.attachment_urls) ? evidence.attachment_urls : [];
+    const announcements = ids.map((identity, index) => {
+      const label = titles[index] ? `${identity} · ${titles[index]}` : identity;
+      const url = officialEvidenceUrl(urls[index]);
+      return url
+        ? `<li><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a></li>`
+        : `<li>${esc(label)}</li>`;
+    }).join("");
+    return `<details class="official-gap-evidence"><summary>查看官方公告证据链</summary><p>开始停牌：${esc(known(evidence.suspension_start))}；复牌交易日：${esc(known(evidence.resume_date))}（复牌日不计入停牌区间）；覆盖 ${esc(known(evidence.covered_dates?.length))} 个待核验交易日。</p><p>来源：${esc(known(evidence.source))}；解析规则：${esc(known(evidence.parser_version))}；核验时间：${esc(known(evidence.verified_at))}。</p>${announcements ? `<ul>${announcements}</ul>` : `<p>公告身份：未记录。</p>`}</details>`;
+  }
+  function renderGapEvidenceAttempts(item = {}) {
+    const attempts = Array.isArray(item.evidence_attempts) ? item.evidence_attempts : [];
+    if (!attempts.length) return "";
+    const rows = attempts.map((attempt) => `<li>${esc(known(attempt.source))} · ${esc(attempt.status === "completed" ? "查询完成" : attempt.status === "failed" ? "查询失败" : `${known(attempt.status)}（暂无中文说明）`)}${attempt.error ? ` · ${esc(attempt.error)}` : ""}</li>`).join("");
+    return `<details class="gap-evidence-attempts"><summary>查看已尝试的证据来源</summary><ul>${rows}</ul></details>`;
+  }
   function renderGapVerification(plan = {}) {
     const state = plan.gap_verification || {};
     const targets = Array.isArray(state.targets) ? state.targets : [];
@@ -858,7 +886,7 @@ const RunCenterUI = (() => {
     };
     const targetRows = targets.map((target) => {
       const counts = target.classification_counts || {};
-      const details = (target.details || []).map((item) => `<li>${esc(item.date)} · ${esc(labels[item.classification] || `${item.classification}（暂无中文说明）`)} · ${esc((item.adjustments || []).join("/") || "口径未记录")} · ${esc(item.reason || "原因未记录")} · 证据：${esc(item.source || "未记录")}${item.checked_at ? ` · 核验时间：${esc(item.checked_at)}` : ""}</li>`).join("");
+      const details = (target.details || []).map((item) => `<li>${esc(item.date)} · ${esc(labels[item.classification] || `${item.classification}（暂无中文说明）`)} · ${esc((item.adjustments || []).join("/") || "口径未记录")} · ${esc(item.reason || "原因未记录")} · 证据：${esc(item.source || "未记录")}${item.checked_at ? ` · 核验时间：${esc(item.checked_at)}` : ""}${renderOfficialGapEvidence(item)}${renderGapEvidenceAttempts(item)}</li>`).join("");
       const advice = (counts.missing_bar || 0) > 0
         ? "存在应有但本地缺少的行情，继续阻断；需另行明确确认精确补齐，不能把它猜成停牌。"
         : (counts.calendar_mismatch || 0) > 0

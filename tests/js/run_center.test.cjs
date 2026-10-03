@@ -1026,9 +1026,22 @@ test("completed data plan exposes explicit bounded gap verification separately",
         unverified_count: 2,
         details: [{
           date: "2024-02-01",
-          classification: "unverified_gap",
+          classification: "verified_suspension",
           adjustments: ["none", "qfq"],
-          reason: "尚无停牌证据",
+          reason: "官方公告形成闭合停复牌区间",
+          source: "cninfo:official_announcement_chain",
+          evidence: {
+            source_type: "official_announcement_chain",
+            source: "cninfo:official_announcement_chain",
+            suspension_start: "2024-02-01",
+            resume_date: "2024-02-02",
+            announcement_ids: ["safe-id"],
+            announcement_titles: ["<停牌公告>"],
+            attachment_urls: ["https://static.cninfo.com.cn/safe.pdf"],
+            parser_version: "m12e4-v1",
+            verified_at: "2024-02-03T00:00:00Z",
+            covered_dates: ["2024-02-01"],
+          },
         }],
         details_truncated: 1,
       }],
@@ -1039,6 +1052,10 @@ test("completed data plan exposes explicit bounded gap verification separately",
   assert.match(html, /交易日缺口核验/);
   assert.match(html, /暂时无法核验 2/);
   assert.match(html, /2024-02-01/);
+  assert.match(html, /查看官方公告证据链/);
+  assert.match(html, /safe-id/);
+  assert.match(html, /static\.cninfo\.com\.cn\/safe\.pdf/);
+  assert.doesNotMatch(html, /<停牌公告>/);
   assert.match(html, /不生成K线/);
   assert.ok(html.indexOf("</table></div>") < html.indexOf("gap-verification-panel"));
   assert.ok(html.indexOf("gap-verification-panel") < html.indexOf("data-plan-final-report"));
@@ -1067,6 +1084,17 @@ test("verification-only draft plan never offers another price download", () => {
   assert.match(html, /计划保存的历史预检快照/);
   assert.doesNotMatch(html, /预计18个行情分区/);
   assert.doesNotMatch(html, /研究数据预检：暂不能提交/);
+});
+
+test("unverified gap shows bounded evidence attempts without executing HTML", () => {
+  const html = ui.renderGapVerification({gap_verification:{
+    total_dates:1,verified_suspension:0,missing_bar:0,calendar_mismatch:0,unverified_gap:1,
+    targets:[{symbol:"000333",adjustments:["none","qfq"],required_start:"2018-09-10",required_end:"2018-09-10",unverified_count:1,blocking_count:1,classification_counts:{verified_suspension:0,missing_bar:0,calendar_mismatch:0,unverified_gap:1},details:[{date:"2018-09-10",classification:"unverified_gap",adjustments:["none","qfq"],reason:"证据不足",evidence_attempts:[{source:"cninfo",status:"failed",error:"<script>bad</script>"},{source:"eastmoney",status:"completed"}]}]}],tasks:[],
+  }});
+  assert.match(html, /查看已尝试的证据来源/);
+  assert.match(html, /查询失败/);
+  assert.match(html, /&lt;script&gt;bad/);
+  assert.doesNotMatch(html, /<script>bad/);
 });
 
 test("gap evidence lookup starts only after an explicit confirmation click", async () => {

@@ -93,6 +93,19 @@ function managedSyncLabel(asset) {
   return "补齐 / 更新";
 }
 
+function managedOfficialEvidence(gap) {
+  const evidence = gap?.evidence;
+  if (!evidence || evidence.source_type !== "official_announcement_chain") return "";
+  const ids = Array.isArray(evidence.announcement_ids) ? evidence.announcement_ids : [];
+  return `<details><summary>查看官方公告证据链</summary><p>开始停牌：${escapeHtml(evidence.suspension_start || "未记录")}；复牌交易日：${escapeHtml(evidence.resume_date || "未记录")}；覆盖 ${escapeHtml(evidence.covered_dates?.length ?? "未记录")} 个待核验交易日。</p><p>公告：${escapeHtml(ids.join("、") || "未记录")}；来源：${escapeHtml(evidence.source || "未记录")}；核验时间：${escapeHtml(evidence.verified_at || "未记录")}。</p></details>`;
+}
+
+function managedEvidenceAttempts(gap) {
+  const attempts = Array.isArray(gap?.evidence_attempts) ? gap.evidence_attempts : [];
+  if (!attempts.length) return "";
+  return `<details><summary>查看已尝试的证据来源</summary><ul>${attempts.map((attempt) => `<li>${escapeHtml(attempt.source || "未记录")} · ${escapeHtml(attempt.status || "unknown")}${attempt.error ? ` · ${escapeHtml(attempt.error)}` : ""}</li>`).join("")}</ul></details>`;
+}
+
 function managedRows(items) {
   return items.map((asset) => {
     const bars = asset.coverage.adjustments || {}, task = asset.task;
@@ -105,7 +118,7 @@ function managedRows(items) {
       found.adjustments.push(adjustment); grouped.set(key, found);
     }));
     const gapLabels = {verified_suspension:"已核验停牌",missing_bar:"真实行情缺失",calendar_mismatch:"交易日历冲突",unverified_gap:"暂时无法核验"};
-    const gapRows = [...grouped.values()].slice(0, 20).map((gap) => `<li><strong>${escapeHtml(gap.date)}</strong> · ${escapeHtml([...new Set(gap.adjustments)].join("/"))} · ${escapeHtml(gapLabels[gap.classification] || `${gap.classification}（暂无中文说明）`)}<br>${escapeHtml(gap.reason || "原因未记录")}${gap.source ? `<br>证据：${escapeHtml(gap.source)}${gap.checked_at ? ` · ${escapeHtml(gap.checked_at)}` : ""}` : ""}</li>`).join("");
+    const gapRows = [...grouped.values()].slice(0, 20).map((gap) => `<li><strong>${escapeHtml(gap.date)}</strong> · ${escapeHtml([...new Set(gap.adjustments)].join("/"))} · ${escapeHtml(gapLabels[gap.classification] || `${gap.classification}（暂无中文说明）`)}<br>${escapeHtml(gap.reason || "原因未记录")}${gap.source ? `<br>证据：${escapeHtml(gap.source)}${gap.checked_at ? ` · ${escapeHtml(gap.checked_at)}` : ""}` : ""}${managedOfficialEvidence(gap)}${managedEvidenceAttempts(gap)}</li>`).join("");
     const gapMore = Object.values(bars).reduce((sum, row) => sum + (row.gap_details_truncated || 0), 0);
     const gapDetail = gapRows ? `<details><summary>查看缺失日期、分类与证据</summary><ul>${gapRows}</ul>${gapMore ? `<p>另有 ${escapeHtml(gapMore)} 条未在本页显示。</p>` : ""}</details>` : "";
     const announcement = asset.coverage.announcement_sync;

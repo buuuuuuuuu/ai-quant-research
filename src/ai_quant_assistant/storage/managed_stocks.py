@@ -945,13 +945,16 @@ class ManagedStockService:
                         "classification": "unverified_gap",
                         "source": result.get("source"),
                         "checked_at": checked_at,
+                        "evidence_attempts": result.get("evidence_attempts", []),
                         "reason": errors.get(day)
                         or "停复牌来源未返回可明确覆盖该日期的记录；空结果不作为正常交易证明",
                     }
                 evidence = {
-                    "version": 1,
+                    "version": 2,
                     "checked_at": checked_at,
                     "source": result.get("source"),
+                    "evidence_chains": result.get("evidence_chains", []),
+                    "evidence_attempts": result.get("evidence_attempts", []),
                     "dates": saved,
                 }
                 staged = dict(asset["coverage"])
@@ -981,6 +984,8 @@ class ManagedStockService:
                     "verified_suspension": summary.get("verified_suspension", 0),
                     "unverified_gap": summary.get("unverified_gap", 0),
                     "provider_errors": result.get("errors", []),
+                    "evidence_chains": result.get("evidence_chains", []),
+                    "evidence_attempts": result.get("evidence_attempts", []),
                     "coverage": report,
                 }
                 connection.execute(
@@ -1010,6 +1015,7 @@ class ManagedStockService:
                     task_id=task_id,
                     outcome=outcome,
                     requested=len(spec["dates"]),
+                    official_evidence_chains=len(result.get("evidence_chains", [])),
                 )
         except ManagedStockConflict:
             pass

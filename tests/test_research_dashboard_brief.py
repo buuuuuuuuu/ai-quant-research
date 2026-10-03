@@ -268,7 +268,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
     from ai_quant_assistant.storage import schema
 
     migrations = schema.MIGRATIONS
-    monkeypatch.setattr(schema, "MIGRATIONS", migrations[:-1])
+    monkeypatch.setattr(schema, "MIGRATIONS", migrations[:-2])
     database = _explorer_database(tmp_path)
     with database.connect() as db:
         before = {
@@ -278,10 +278,10 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             ).fetchall()
         }
         broken = replace(
-            migrations[-1],
-            statements=(*migrations[-1].statements, "SELECT * FROM intentionally_missing_table"),
+            migrations[-2],
+            statements=(*migrations[-2].statements, "SELECT * FROM intentionally_missing_table"),
         )
-        monkeypatch.setattr(schema, "MIGRATIONS", (*migrations[:-1], broken))
+        monkeypatch.setattr(schema, "MIGRATIONS", (*migrations[:-2], broken))
         with pytest.raises(__import__("duckdb").CatalogException):
             apply_migrations(db)
         assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 16

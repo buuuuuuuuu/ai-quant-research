@@ -1379,7 +1379,7 @@ MIGRATIONS = (
                 task_id VARCHAR PRIMARY KEY,
                 task_type VARCHAR NOT NULL CHECK (task_type IN (
                     'backtest', 'sync', 'backup', 'copilot', 'document_ingest',
-                    'document_event_extract'
+                    'document_event_extract', 'stock_pool_sync'
                 )),
                 status VARCHAR NOT NULL CHECK (status IN (
                     'queued', 'running', 'succeeded', 'failed', 'cancelled'

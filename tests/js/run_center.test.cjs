@@ -240,7 +240,7 @@ test("copy only reads, preserves exact parameters, and requires current prefligh
   ];
   await h.ui.submit({ preventDefault() {} });
   assert.equal(h.calls.length, 2);
-  assert.match(h.element("center-error").textContent, /预检/);
+  assert.match(h.element("center-action-feedback").textContent, /预检/);
 });
 test("cancelled copy execution never POSTs research", async () => {
   const h = harness("/backtests/configure", async (url) =>
@@ -286,7 +286,7 @@ test("failed preflight and missing-field acknowledgment prevent execution", asyn
   assert.equal(h.element("center-submit").disabled, true);
   await h.ui.submit({ preventDefault() {} });
   assert.equal(h.calls.length, 2);
-  assert.match(h.element("center-error").textContent, /缺失参数/);
+  assert.match(h.element("center-action-feedback").textContent, /缺失参数/);
 });
 test("nulls in result tables remain unknown and untrusted text is escaped", () => {
   const html = ui.renderValue([{ value: null, source: "<img onerror=x>" }]);
@@ -584,7 +584,7 @@ test("failed second preflight clears previous approval", async () => {
   await h.ui.preflight();
   await h.ui.submit({ preventDefault() {} }, true);
   assert.equal(h.calls.length, 3);
-  assert.match(h.element("center-error").textContent, /预检/);
+  assert.match(h.element("center-action-feedback").textContent, /预检/);
 });
 test("late detail error cannot overwrite a newer identity", async () => {
   let release;
@@ -674,6 +674,64 @@ test("daily validation and summary explain periods, weights, and next-open execu
   assert.match(summary, /下一交易日开盘/);
 });
 
+test("daily issues identify their section and offer explicit non-silent fixes", () => {
+  const params = {
+    start_date: "2025-12-31", end_date: "2025-01-01",
+    candidate_count: 20, max_positions: 25,
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+  };
+  const issues = ui.dailySignalIssues(params, 11);
+  assert.equal(issues.find((item) => item.code === "candidate_exceeds_scope").fix.value, 11);
+  assert.equal(issues.find((item) => item.code === "positions_exceed_candidates").target, "center-execution-details");
+  assert.equal(issues.find((item) => item.code === "invalid_date_range").field, "start_date");
+});
+
+test("preflight groups duplicate root causes and renders typed actions", () => {
+  const report = {
+    status: "blocked", ready: false, blocking_check_count: 23,
+    recommendations: [
+      { code: "unfinished_end_date", title: "结束日期不完整", explanation: "当前值超出边界", action: "改为完整日期", action_kind: "update_field", field: "end_date", suggested_value: "2026-09-28" },
+      { code: "unfinished_end_date", title: "重复项", explanation: "不应显示", action: "重复" },
+      { code: "benchmark_coverage", title: "基准缺失", explanation: "需要数据", action: "查看计划", action_kind: "data_plan", network_required_for_resolution: true },
+    ],
+  };
+  assert.equal(ui.preflightProblems(report).length, 2);
+  const html = ui.renderPreflight(report);
+  assert.match(html, /2 类问题 · 23 项原始检查未通过/);
+  assert.match(html, /data-field="end_date"/);
+  assert.match(html, /查看处理计划（只生成计划、不联网）/);
+  assert.doesNotMatch(html, /重复项/);
+});
+
+test("initial frozen pool fetches the exact revision before showing its size", async () => {
+  const params = {
+    stock_pool_id: "pool-fixed", stock_pool_revision: 4,
+    start_date: "2025-01-01", end_date: "2025-12-31",
+    candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }],
+    candidate_count: 2, candidate_refresh: "monthly",
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+    buy_rule_mode: "all", sell_rule_mode: "any",
+    exit_on_candidate_drop: false, max_positions: 1,
+  };
+  const h = harness("/backtests/daily-signals", async (url) => {
+    if (url.includes("/configuration?")) return {
+      kind: "daily_signal", label: "日线信号策略", source_run_id: null,
+      params, scope: [], schema: { properties: Object.fromEntries(Object.keys(params).map((key) => [key, {}])) },
+      warnings: [], missing_fields: [], endpoint: "/api/v1/daily-signal-strategies",
+    };
+    if (url.includes("/stock-pools?")) return [{ pool_id: "pool-fixed", current_revision: 5, name: "股票池" }];
+    if (url.endsWith("/stock-pools/pool-fixed?revision=4")) return { symbols: ["600519", "000001"] };
+    throw Error("unexpected request " + url);
+  });
+  await tick();
+  await tick();
+  assert.ok(h.calls.some((call) => call.url.endsWith("/stock-pools/pool-fixed?revision=4")));
+  assert.match(h.element("center-pool-preview").textContent, /r4 · 2 只/);
+  assert.doesNotMatch(h.element("center-daily-errors").innerHTML, /只有 0 只/);
+});
+
 test("daily timeline links only saved identities and preserves missing values", () => {
   const rows = ui.dailySignalTimeline(
     [{ signal_date: "2024-01-02", symbol: "600519", action: "buy", signal_price: 10 }],
@@ -737,17 +795,21 @@ test("completed data plan restores its frozen pool before automatic recheck", as
       if (url.endsWith("/plans/data-plan-frozen")) return structuredClone(plan);
       if (url.includes("/stock-pools?"))
         return [{ pool_id: "pool-frozen", current_revision: 3, name: "当前版本" }];
+      if (url.endsWith("/stock-pools/pool-frozen?revision=2"))
+        return { pool_id: "pool-frozen", revision: 2, symbols: ["688111"] };
       throw Error("unexpected request " + url);
     },
-    { search: "?data_plan=data-plan-frozen" },
+    { search: "?data_plan=data-plan-frozen&end_date=2026-10-01" },
   );
   await tick();
   await tick();
   assert.equal(h.element("center-error").textContent, "");
   assert.equal(h.ui.currentParams().stock_pool_id, "pool-frozen");
   assert.equal(h.ui.currentParams().stock_pool_revision, 2);
+  assert.equal(h.ui.currentParams().end_date, "2025-12-31");
   assert.equal(h.ui.currentParams().symbols, undefined);
   assert.match(h.element("center-pool-preview").textContent, /r2 · 1 只：688111/);
+  assert.match(h.element("center-copy-warning").textContent, /URL 中的 end_date 未覆盖该计划/);
   assert.equal(h.element("center-submit").disabled, false);
   assert.equal(
     h.calls.filter((call) => call.url.endsWith("/plans/data-plan-frozen")).length,
@@ -757,6 +819,13 @@ test("completed data plan restores its frozen pool before automatic recheck", as
     h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies").length,
     0,
   );
+  h.element("center-copy-form").inputs = [
+    { dataset: { param: "end_date", type: "string" }, value: "2026-10-01" },
+  ];
+  h.element("center-copy-form").listeners.input();
+  assert.match(h.element("center-preflight-result").textContent, /结束日期 2025-12-31 → 2026-10-01/);
+  assert.match(h.element("center-preflight-result").textContent, /旧计划仍保留，但不能代替当前参数/);
+  assert.equal(h.element("center-data-plan").hidden, true);
 });
 
 test("data plan restore rejects missing or mismatched frozen identity", () => {
@@ -872,8 +941,10 @@ test("data plan separates completed gaps from real download failures", () => {
   const html = ui.renderDataPlan(completed);
   assert.match(html, /同步已完成，但最终检查仍有数据缺口/);
   assert.match(html, /排除缺失历史时点，不会填零/);
-  assert.match(html, /查看最终预检、受影响股票和日期/);
-  assert.match(html, /财务因子/);
+  assert.match(html, /计划保存的历史预检快照/);
+  assert.match(html, /按需查看完整历史快照/);
+  assert.doesNotMatch(html, /研究数据预检：暂不能提交/);
+  assert.match(html, /financial_metric/);
   assert.match(html, /执行结束（存在问题） · 100%/);
   assert.doesNotMatch(html, /95%/);
   assert.equal(ui.dataPlanExecutionSummary(completed).retryable, 0);
@@ -881,6 +952,246 @@ test("data plan separates completed gaps from real download failures", () => {
   const failed = {...completed,outcome:"download_failed",execution_summary:{total:2,published:1,verified:0,failed:1,pending:0,unknown:0,retryable:1}};
   assert.match(ui.renderDataPlan(failed),/存在真实同步失败/);
   assert.match(ui.renderDataPlan(failed),/已发布或已验证项目不会重新下载/);
+});
+
+test("preflight merges identical none and qfq gaps only in the display layer", () => {
+  const details = [
+    { date: "2026-01-02", classification: "unverified_gap" },
+    { date: "2026-01-05", classification: "verified_suspension" },
+  ];
+  const checks = ["none", "qfq"].map((adjustment) => ({
+    symbol: "000333", security_id: "SZSE.000333", dataset: "daily_bar",
+    adjustment, required_start: "2025-01-01", required_end: "2026-01-31",
+    satisfied: false, severity: "blocking", reason: "1 个交易日缺口仍需核验；1 个日期已核验为停牌",
+    gap_details: details,
+  }));
+  const report = {
+    ready: false, status: "blocked", checks,
+    blockers: checks.map((check) => `${check.symbol} ${check.dataset}: ${check.reason}`),
+  };
+  const groups = ui.preflightBlockingGroups(report);
+  assert.equal(groups.length, 1);
+  assert.match(groups[0].text, /none\/qfq共同/);
+  const html = ui.renderPreflight(report);
+  assert.match(html, /1 组；底层 2 项/);
+});
+
+test("parameter differences name date and pool identity changes", () => {
+  assert.deepEqual(
+    ui.parameterDifferences(
+      { start_date: "2025-01-01", end_date: "2026-10-01", stock_pool_revision: 20 },
+      { start_date: "2025-01-01", end_date: "2026-09-30", stock_pool_revision: 19 },
+    ),
+    [
+      { field: "end_date", label: "结束日期", previous: "2026-09-30", current: "2026-10-01" },
+      { field: "stock_pool_revision", label: "股票池 revision", previous: 19, current: 20 },
+    ],
+  );
+});
+
+test("completed data plan exposes explicit bounded gap verification separately", () => {
+  const plan = {
+    plan_id: "data-plan-gaps",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      symbols_sha256: "b".repeat(64),
+      resolved_symbols: ["000333"],
+      parameters: {},
+    },
+    report: { complete: false, checks: [] },
+    outcome: "completed_with_gaps",
+    execution_summary: {
+      total: 1, published: 1, verified: 0, failed: 0, pending: 0,
+    },
+    items: [{
+      symbol: "000333", dataset: "daily_bar", adjustment: "qfq",
+      start_date: "2024-01-01", end_date: "2024-12-31", status: "published",
+    }],
+    gap_verification: {
+      status: "available",
+      total_dates: 2,
+      verified_suspension: 0,
+      missing_bar: 0,
+      calendar_mismatch: 0,
+      unverified_gap: 2,
+      requires_confirmation: true,
+      targets: [{
+        symbol: "000333",
+        security_id: "SZSE.000333",
+        adjustments: ["none", "qfq"],
+        required_start: "2024-01-01",
+        required_end: "2024-12-31",
+        unverified_count: 2,
+        details: [{
+          date: "2024-02-01",
+          classification: "verified_suspension",
+          adjustments: ["none", "qfq"],
+          reason: "官方公告形成闭合停复牌区间",
+          source: "cninfo:official_announcement_chain",
+          evidence: {
+            source_type: "official_announcement_chain",
+            source: "cninfo:official_announcement_chain",
+            suspension_start: "2024-02-01",
+            resume_date: "2024-02-02",
+            announcement_ids: ["safe-id"],
+            announcement_titles: ["<停牌公告>"],
+            attachment_urls: ["https://static.cninfo.com.cn/safe.pdf"],
+            parser_version: "m12e4-v1",
+            verified_at: "2024-02-03T00:00:00Z",
+            covered_dates: ["2024-02-01"],
+          },
+        }],
+        details_truncated: 1,
+      }],
+      tasks: [],
+    },
+  };
+  const html = ui.renderDataPlan(plan);
+  assert.match(html, /交易日缺口核验/);
+  assert.match(html, /暂时无法核验 2/);
+  assert.match(html, /2024-02-01/);
+  assert.match(html, /查看官方公告证据链/);
+  assert.match(html, /safe-id/);
+  assert.match(html, /static\.cninfo\.com\.cn\/safe\.pdf/);
+  assert.doesNotMatch(html, /<停牌公告>/);
+  assert.match(html, /不生成K线/);
+  assert.ok(html.indexOf("</table></div>") < html.indexOf("gap-verification-panel"));
+  assert.ok(html.indexOf("gap-verification-panel") < html.indexOf("data-plan-final-report"));
+  assert.equal(ui.gapVerificationActive(plan), false);
+  plan.gap_verification.tasks = [{ status: "queued" }];
+  assert.equal(ui.gapVerificationActive(plan), true);
+});
+
+test("verification-only draft plan never offers another price download", () => {
+  const plan = {
+    plan_id: "data-plan-verify-only", version: 1,
+    input_sha256: "a".repeat(64), status: "draft", outcome: "verification_required",
+    input: { symbols_sha256: "b".repeat(64), resolved_symbols: ["000333", "600022"], parameters: {} },
+    report: { checked_at: "2026-10-01T00:00:00Z", blockers: ["one", "two", "three", "four"], affected_symbols: ["000333", "600022"] },
+    items: [],
+    available_actions: { sync_required: false, verification_required: true, calendar_attention: false, ready: false },
+    gap_verification: {
+      status: "available", total_dates: 107, verified_suspension: 10,
+      missing_bar: 0, calendar_mismatch: 0, unverified_gap: 97,
+      requires_confirmation: true, targets: [], tasks: [],
+    },
+  };
+  const html = ui.renderDataPlan(plan);
+  assert.match(html, /没有需要重复下载的行情分区/);
+  assert.match(html, /等待明确确认核验缺失日期/);
+  assert.match(html, /计划保存的历史预检快照/);
+  assert.doesNotMatch(html, /预计18个行情分区/);
+  assert.doesNotMatch(html, /研究数据预检：暂不能提交/);
+});
+
+test("unverified gap shows bounded evidence attempts without executing HTML", () => {
+  const html = ui.renderGapVerification({gap_verification:{
+    total_dates:1,verified_suspension:0,missing_bar:0,calendar_mismatch:0,unverified_gap:1,
+    targets:[{symbol:"000333",adjustments:["none","qfq"],required_start:"2018-09-10",required_end:"2018-09-10",unverified_count:1,blocking_count:1,classification_counts:{verified_suspension:0,missing_bar:0,calendar_mismatch:0,unverified_gap:1},details:[{date:"2018-09-10",classification:"unverified_gap",adjustments:["none","qfq"],reason:"证据不足",evidence_attempts:[{source:"cninfo",status:"failed",error:"<script>bad</script>"},{source:"eastmoney",status:"completed"}]}]}],tasks:[],
+  }});
+  assert.match(html, /查看已尝试的证据来源/);
+  assert.match(html, /查询失败/);
+  assert.match(html, /&lt;script&gt;bad/);
+  assert.doesNotMatch(html, /<script>bad/);
+});
+
+test("gap evidence lookup starts only after an explicit confirmation click", async () => {
+  const params = {
+    symbols: ["000333"],
+    start_date: "2024-01-01",
+    end_date: "2024-12-31",
+    candidate_factors: [{ code: "return_1", weight: 1, direction: "desc" }],
+    candidate_count: 1,
+    candidate_refresh: "daily",
+    buy_rules: [{ kind: "close_vs_ma", operator: "above", window: 2 }],
+    sell_rules: [{ kind: "close_vs_ma", operator: "below", window: 2 }],
+    buy_rule_mode: "all",
+    sell_rule_mode: "any",
+    exit_on_candidate_drop: false,
+    max_positions: 1,
+  };
+  const configuration = {
+    kind: "daily_signal",
+    label: "日线信号策略",
+    source_run_id: null,
+    params: { symbols: [] },
+    scope: [],
+    schema: {
+      properties: Object.fromEntries(Object.keys(params).map((key) => [key, {}])),
+    },
+    warnings: [],
+    missing_fields: [],
+    endpoint: "/api/v1/daily-signal-strategies",
+  };
+  const gap = {
+    status: "available",
+    total_dates: 1,
+    verified_suspension: 0,
+    missing_bar: 0,
+    calendar_mismatch: 0,
+    unverified_gap: 1,
+    requires_confirmation: true,
+    targets: [{
+      symbol: "000333", security_id: "SZSE.000333", adjustments: ["none", "qfq"],
+      required_start: "2024-01-01", required_end: "2024-12-31",
+      unverified_count: 1, details: [], tasks: [],
+    }],
+    tasks: [],
+  };
+  const plan = {
+    plan_id: "data-plan-confirm-gap",
+    version: 1,
+    input_sha256: "a".repeat(64),
+    status: "succeeded",
+    input: {
+      research_type: "daily_signal", parameters: params,
+      resolved_symbols: ["000333"], symbols_sha256: "b".repeat(64),
+    },
+    items: [{ symbol: "000333", dataset: "daily_bar", status: "published" }],
+    task: { status: "succeeded", progress: 100 },
+    gap_verification: gap,
+  };
+  const h = harness(
+    "/backtests/daily-signals",
+    async (url, options) => {
+      if (url.includes("/configuration?")) return structuredClone(configuration);
+      if (url.includes("/stock-pools?")) return [];
+      if (url.endsWith("/plans/data-plan-confirm-gap/preflight"))
+        return { ready: false, status: "blocked", complete: false };
+      if (url.endsWith("/plans/data-plan-confirm-gap/verify-gaps")) {
+        assert.equal(options.method, "POST");
+        assert.equal(JSON.parse(options.body).confirm, true);
+        return {
+          ...structuredClone(plan),
+          gap_verification: {
+            ...structuredClone(gap),
+            status: "running",
+            requires_confirmation: false,
+            tasks: [{ task_id: "task-gap", status: "queued", progress: 0 }],
+          },
+        };
+      }
+      if (url.endsWith("/plans/data-plan-confirm-gap")) return structuredClone(plan);
+      throw Error("unexpected request " + url);
+    },
+    { search: "?data_plan=data-plan-confirm-gap" },
+  );
+  await tick();
+  await tick();
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/verify-gaps")).length,
+    0,
+  );
+  assert.equal(h.element("center-plan-verify-gaps").hidden, false);
+  await h.element("center-plan-verify-gaps").listeners.click();
+  await tick();
+  assert.equal(
+    h.calls.filter((call) => call.url.endsWith("/verify-gaps")).length,
+    1,
+  );
+  assert.match(h.element("center-plan-status").innerHTML, /task-gap/);
 });
 
 test("successful daily signal submission redirects to exact highlighted history task", async () => {

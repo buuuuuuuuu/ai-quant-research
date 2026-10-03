@@ -12,6 +12,56 @@ from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps
 ADJUSTMENTS = ("none", "qfq")
 
 
+def classified_daily_bar_gaps(
+    connection: Any,
+    security_id: str,
+    start: date,
+    end: date,
+    *,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return the complete, evidence-backed gap classification for a bounded range.
+
+    Coverage and research pages intentionally preview only a small number of
+    dates. Confirmed verification tasks use this helper so their frozen input is
+    not accidentally limited to that presentation preview.
+    """
+    security = connection.execute(
+        "SELECT exchange FROM security_master WHERE security_id=?", [security_id]
+    ).fetchone()
+    if security is None:
+        return {adjustment: [] for adjustment in ADJUSTMENTS}
+    expected = {
+        row[0]
+        for row in connection.execute(
+            "SELECT trade_date FROM trading_calendar WHERE exchange=? AND is_open "
+            "AND trade_date BETWEEN ? AND ? ORDER BY trade_date",
+            [security[0], start, end],
+        ).fetchall()
+    }
+    missing_by_adjustment: dict[str, set[date]] = {}
+    for adjustment in ADJUSTMENTS:
+        observed = {
+            row[0]
+            for row in connection.execute(
+                "SELECT trade_date FROM published_daily_bar WHERE security_id=? "
+                "AND adjustment=? AND trade_date BETWEEN ? AND ?",
+                [security_id, adjustment, start, end],
+            ).fetchall()
+        }
+        missing_by_adjustment[adjustment] = expected - observed
+    if evidence is None:
+        previous = connection.execute(
+            "SELECT coverage_json FROM managed_stock WHERE security_id=?", [security_id]
+        ).fetchone()
+        try:
+            saved = json.loads(previous[0]) if previous and previous[0] else {}
+        except (TypeError, json.JSONDecodeError):
+            saved = {}
+        evidence = saved.get("gap_verification", {})
+    return classify_gaps(missing_by_adjustment, evidence)
+
+
 def market_today() -> date:
     return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock, Thread
+from typing import Any, Protocol
 
-from ai_quant_assistant.storage.managed_stocks import ManagedStockService
+from ai_quant_assistant.storage.database import LocalDatabase
 
 logger = logging.getLogger(__name__)
+
+
+class QueuedTaskService(Protocol):
+    database: LocalDatabase
+
+    def run(self, task_id: str) -> Any: ...
 
 
 class ManagedStockTaskManager:
@@ -16,9 +24,30 @@ class ManagedStockTaskManager:
     start it. No schema initialization or network work just for opening a page.
     """
 
-    def __init__(self, service: ManagedStockService):
+    def __init__(
+        self,
+        service: QueuedTaskService,
+        *,
+        datasets: Iterable[str],
+        worker_name: str,
+    ):
+        selected = tuple(
+            sorted(
+                {
+                    dataset.strip()
+                    for dataset in datasets
+                    if isinstance(dataset, str) and dataset.strip()
+                }
+            )
+        )
+        if not selected:
+            raise ValueError("task manager requires at least one dataset")
+        if not worker_name.strip():
+            raise ValueError("task manager requires a worker name")
         self.service = service
-        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="managed-stock")
+        self.datasets = selected
+        self.worker_name = worker_name.strip()
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=self.worker_name)
         self.stop = Event()
         self.lock = Lock()
         self.inflight: set[str] = set()
@@ -42,12 +71,13 @@ class ManagedStockTaskManager:
         with self.lock:
             if self.inflight:
                 return
+            placeholders = ",".join("?" for _ in self.datasets)
             with self.service.database.connect(read_only=True) as connection:
                 row = connection.execute(
-                    """SELECT task_id FROM operation_task WHERE status='queued'
-                       AND json_extract_string(spec_json, '$.dataset') IN
-                           ('managed_stock','managed_stock_gap_verification')
-                       ORDER BY created_at LIMIT 1"""
+                    f"""SELECT task_id FROM operation_task WHERE status='queued'
+                        AND json_extract_string(spec_json, '$.dataset') IN ({placeholders})
+                        ORDER BY created_at LIMIT 1""",  # noqa: S608 - placeholders only
+                    list(self.datasets),
                 ).fetchone()
             if row:
                 self.inflight.add(row[0])
@@ -57,7 +87,7 @@ class ManagedStockTaskManager:
         try:
             self.service.run(task_id)
         except Exception:
-            logger.exception("managed stock task failed: %s", task_id)
+            logger.exception("%s task attempt failed: %s", self.worker_name, task_id)
         finally:
             with self.lock:
                 self.inflight.discard(task_id)
@@ -68,10 +98,10 @@ class ManagedStockTaskManager:
                 try:
                     self.dispatch()
                 except Exception:
-                    logger.exception("managed stock queue dispatch failed")
+                    logger.exception("%s queue dispatch failed", self.worker_name)
                 self.stop.wait(5)
 
-        self.thread = Thread(target=poll, daemon=True, name="managed-stock-dispatch")
+        self.thread = Thread(target=poll, daemon=True, name=f"{self.worker_name}-dispatch")
         self.thread.start()
 
     def shutdown(self):

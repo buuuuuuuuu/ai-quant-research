@@ -28,6 +28,7 @@ class Provider:
         self.listed = date(2024, 1, 2)
         self.suspension_dates = set()
         self.suspension_errors = []
+        self.suspension_chains = []
 
     def get_listing_date(self, symbol):
         return self.listed, "fixture:explicit-listing-date"
@@ -96,12 +97,15 @@ class Provider:
             "verified": [
                 {"date": str(day), "classification": "verified_suspension",
                  "source": "fixture:suspension", "checked_at": "2024-01-12T00:00:00Z",
-                 "reason": "fixture explicit suspension"}
+                 "reason": "fixture explicit suspension",
+                 **({"evidence": self.suspension_chains[0]} if self.suspension_chains else {})}
                 for day in dates if day in self.suspension_dates
             ],
             "errors": list(self.suspension_errors),
             "requested": len(dates),
             "source": "fixture:suspension",
+            "evidence_chains": list(self.suspension_chains),
+            "evidence_attempts": [{"source": "fixture:suspension", "status": "completed"}],
         }
 
 
@@ -209,6 +213,14 @@ def test_gap_verification_is_explicit_bounded_and_never_redownloads(setup):
             "SZSE.003816", expected_revision=1, confirm=False, actor="fixture"
         )
     provider.suspension_dates = {date(2024, 1, 3)}
+    provider.suspension_chains = [
+        {
+            "source_type": "official_announcement_chain",
+            "suspension_start": "2024-01-03",
+            "resume_date": "2024-01-04",
+            "announcement_ids": ["fixture-announcement"],
+        }
+    ]
     task, created = service.request_gap_verification(
         "SZSE.003816", expected_revision=1, confirm=True, actor="fixture"
     )
@@ -217,6 +229,10 @@ def test_gap_verification_is_explicit_bounded_and_never_redownloads(setup):
     verified = service.get("SZSE.003816")
     assert verified["availability"] == "ready"
     assert verified["coverage"]["gap_summary"]["verified_suspension"] == 1
+    evidence = verified["coverage"]["gap_verification"]
+    assert evidence["version"] == 2
+    assert evidence["evidence_chains"][0]["announcement_ids"] == ["fixture-announcement"]
+    assert evidence["dates"]["2024-01-03"]["evidence"]["resume_date"] == "2024-01-04"
     assert provider.calls == download_calls
     with pytest.raises(ManagedStockConflict, match="没有可核验"):
         service.request_gap_verification(
@@ -236,7 +252,12 @@ def test_empty_suspension_result_remains_unverified_without_download_failure(set
     result = service.run(task["task_id"])
     assert result["status"] == "succeeded" and result["progress"] == 100
     assert result["result"]["outcome"] == "verification_incomplete"
-    assert service.get("SZSE.003816")["availability"] == "partial"
+    asset = service.get("SZSE.003816")
+    assert asset["availability"] == "partial"
+    attempts = asset["coverage"]["gap_verification"]["dates"]["2024-01-03"][
+        "evidence_attempts"
+    ]
+    assert attempts == [{"source": "fixture:suspension", "status": "completed"}]
     assert provider.calls == calls
 
 
@@ -576,7 +597,11 @@ def test_api_async_confirmation_limits_conflict_and_restore(setup, monkeypatch, 
     from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 
     _, provider, service = setup
-    manager = ManagedStockTaskManager(service)
+    manager = ManagedStockTaskManager(
+        service,
+        datasets=("managed_stock", "managed_stock_gap_verification"),
+        worker_name="managed-stock-test",
+    )
     monkeypatch.setattr(manager, "dispatch", lambda: None)
     app = FastAPI()
     app.include_router(managed_stock_router(manager, "fixture-api"))

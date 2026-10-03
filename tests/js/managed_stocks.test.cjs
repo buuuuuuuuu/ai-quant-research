@@ -171,17 +171,34 @@ test("rows escape names, task errors and coverage; older list responses cannot w
 
 test("unknown gaps are grouped by date, escaped and require explicit verification", async () => {
   const h = harness((url, options) => options.method ? {task_id:"task-verify",status:"queued"} : empty());
-  const gap = {date:"2024-01-03",classification:"unverified_gap",reason:"<未知>",source:"fixture"};
+  const gap = {date:"2024-01-03",classification:"unverified_gap",reason:"<未知>",source:"fixture",evidence_attempts:[{source:"official",status:"failed",error:"<remote>"}]};
   const asset = {security_id:"SZSE.003816",symbol:"003816",name:"fixture",status:"active",availability:"partial",revision:3,auto_update:false,target_start:"2012-01-01",coverage:{requires_gap_verification:true,gap_summary:{unverified_gap:1},issues:["同一问题","同一问题"],adjustments:{none:{rows:2,gap_details:[gap]},qfq:{rows:2,gap_details:[gap]}}}};
   const html = h.context.managedRows([asset]);
   assert.match(html, /none\/qfq/);
   assert.equal((html.match(/2024-01-03/g) || []).length, 1);
   assert.match(html, /暂时无法核验/);
   assert.match(html, /&lt;未知&gt;/);
+  assert.match(html, /查看已尝试的证据来源/);
+  assert.match(html, /&lt;remote&gt;/);
   assert.equal((html.match(/同一问题/g) || []).length, 1);
   await h.context.managedAction(asset, "verify-gaps");
   assert.match(h.confirmations[0], /访问公网/);
   assert.match(h.confirmations[0], /不会下载或改写K线/);
   assert.match(h.calls[0].url, /verify-gaps$/);
   assert.deepEqual(JSON.parse(h.calls[0].options.body), {expected_revision:3,confirm:true});
+});
+
+test("official suspension evidence is visible and escaped", () => {
+  const h = harness(empty);
+  const gap = {
+    date:"2024-01-03", classification:"verified_suspension", reason:"官方公告核验",
+    source:"cninfo:official_announcement_chain",
+    evidence:{source_type:"official_announcement_chain",suspension_start:"2024-01-03",resume_date:"2024-01-04",covered_dates:["2024-01-03"],announcement_ids:["<id>"],source:"cninfo:official_announcement_chain",verified_at:"2024-01-05T00:00:00Z"},
+  };
+  const asset = {security_id:"SZSE.003816",symbol:"003816",name:"fixture",status:"active",availability:"ready",revision:3,auto_update:false,coverage:{requires_gap_verification:false,issues:[],adjustments:{none:{rows:2,gap_details:[gap]},qfq:{rows:2,gap_details:[gap]}}}};
+  const html = h.context.managedRows([asset]);
+  assert.match(html, /查看官方公告证据链/);
+  assert.match(html, /2024-01-03/);
+  assert.match(html, /&lt;id&gt;/);
+  assert.doesNotMatch(html, /<id>/);
 });

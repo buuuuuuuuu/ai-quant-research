@@ -165,8 +165,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
 
     research_dashboard = ResearchDashboardBrief(database)
-    managed_stock_tasks = ManagedStockTaskManager(ManagedStockService(database, resolved_settings))
-    research_data_tasks = ManagedStockTaskManager(ResearchDataPlans(database, resolved_settings))
+    managed_stock_tasks = ManagedStockTaskManager(
+        ManagedStockService(database, resolved_settings),
+        datasets=("managed_stock", "managed_stock_gap_verification"),
+        worker_name="managed-stock",
+    )
+    research_data_tasks = ManagedStockTaskManager(
+        ResearchDataPlans(database, resolved_settings),
+        datasets=(ResearchDataPlans.dataset,),
+        worker_name="research-data",
+    )
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,
@@ -301,7 +309,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.stock_pools = stock_pools
     app.state.managed_stock_tasks = managed_stock_tasks
     app.state.research_data_tasks = research_data_tasks
-    app.include_router(research_data_router(research_data_tasks, resolved_settings.web_username, copilot_repository))
+    app.include_router(
+        research_data_router(
+            research_data_tasks,
+            resolved_settings.web_username,
+            copilot_repository,
+            gap_verification_manager=managed_stock_tasks,
+        )
+    )
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router

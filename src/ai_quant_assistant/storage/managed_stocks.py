@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from contextlib import ExitStack, contextmanager
@@ -15,6 +16,7 @@ from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.locks import InterProcessFileLock
 from ai_quant_assistant.storage.managed_coverage import (
     ADJUSTMENTS,
+    classified_daily_bar_gaps,
     completed_date,
     coverage_report,
     market_today,
@@ -236,6 +238,8 @@ class ManagedStockService:
         expected_revision: int,
         confirm: bool,
         actor: str = "system",
+        dates: list[str] | tuple[str, ...] | None = None,
+        source_context: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         if confirm is not True:
             raise ValueError("核验停牌状态需要明确确认访问公网")
@@ -245,33 +249,95 @@ class ManagedStockService:
                 raise ManagedStockConflict(f"revision conflict: current {asset['revision']}")
             if asset["status"] != "active":
                 raise ManagedStockConflict("已移出管理的股票不能启动缺口核验")
-            if asset["task"] and asset["task"]["status"] in {"queued", "running"}:
-                raise ManagedStockConflict("当前已有后台任务，请等待完成后再核验")
-            dates = sorted(
+            raw_dates = list(dates or []) if dates is not None else None
+            explicit = None
+            parsed_dates: list[date] = []
+            if raw_dates is not None:
+                try:
+                    parsed_dates = [date.fromisoformat(value) for value in raw_dates]
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("缺失日期必须使用YYYY-MM-DD格式") from exc
+                explicit = sorted({str(value) for value in parsed_dates})
+            if explicit is not None and not explicit:
+                raise ManagedStockConflict("当前没有可核验的未知交易日缺口；不会创建联网任务")
+            if explicit is not None and len(explicit) > 100:
+                raise ValueError("单次最多核验100个缺失日期，请分批确认")
+            if any(day > market_today() for day in parsed_dates):
+                raise ValueError("不能核验未来日期")
+            target_start = (
+                min(parsed_dates) if parsed_dates else date.fromisoformat(asset["target_start"])
+            )
+            target_end = (
+                max(parsed_dates)
+                if parsed_dates
+                else completed_date(date.fromisoformat(asset["target_end"]))
+            )
+            if asset.get("listing_date"):
+                target_start = max(target_start, date.fromisoformat(asset["listing_date"]))
+            classified = classified_daily_bar_gaps(
+                connection,
+                security_id,
+                target_start,
+                target_end,
+                evidence=asset["coverage"].get("gap_verification", {}),
+            )
+            available = sorted(
                 {
                     item["date"]
-                    for row in asset["coverage"].get("adjustments", {}).values()
-                    for item in row.get("gap_details", [])
+                    for rows in classified.values()
+                    for item in rows
                     if item.get("classification") == "unverified_gap" and item.get("date")
                 }
-            )[:100]
-            if not dates:
+            )
+            requested = available[:100] if explicit is None else explicit
+            if not requested:
                 raise ManagedStockConflict("当前没有可核验的未知交易日缺口；不会创建联网任务")
+            unavailable = sorted(set(requested) - set(available))
+            if unavailable:
+                raise ManagedStockConflict(
+                    f"{len(unavailable)}个日期已不属于当前未知缺口，请重新检查后再确认"
+                )
+            source_context = dict(source_context or {})
+            source_plan_id = source_context.get("source_plan_id")
+            current_task = asset.get("task") or {}
+            if current_task.get("status") in {"queued", "running"}:
+                current_spec = current_task.get("spec") or {}
+                if (
+                    current_spec.get("dataset") == "managed_stock_gap_verification"
+                    and current_spec.get("dates") == requested
+                    and current_spec.get("source_plan_id") == source_plan_id
+                ):
+                    return current_task, False
+                raise ManagedStockConflict("当前已有后台任务，请等待完成后再核验")
+            saved_dates = asset["coverage"].get("gap_verification", {}).get("dates", {})
+            evidence_identity = hashlib.sha256(
+                json.dumps(
+                    {value: saved_dates.get(value) for value in requested},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest()[:16]
             spec = {
                 "dataset": "managed_stock_gap_verification",
                 "security_id": security_id,
                 "symbol": asset["symbol"],
                 "generation": asset["generation"],
                 "revision": asset["revision"],
-                "dates": dates,
+                "dates": requested,
                 "actor": actor,
                 "confirmed": True,
+                **source_context,
             }
             task, created = self.tasks.create_or_get_active(
                 "sync",
-                claim_key=f"managed-gap:{security_id}:{asset['generation']}:{'-'.join(dates)}",
+                claim_key=(
+                    f"managed-gap:{security_id}:{asset['generation']}:"
+                    f"{hashlib.sha256('|'.join(requested).encode()).hexdigest()[:16]}:"
+                    f"{evidence_identity}"
+                ),
                 spec=spec,
-                message=f"等待核验 {len(dates)} 个无行情日期的停牌状态",
+                message=f"等待核验 {len(requested)} 个无行情日期的停牌状态",
                 connection=connection,
             )
             connection.execute(
@@ -285,7 +351,8 @@ class ManagedStockService:
                     security_id,
                     actor,
                     task_id=task["task_id"],
-                    dates=dates,
+                    dates=requested,
+                    source_plan_id=source_plan_id,
                 )
             return task, created
 
@@ -878,13 +945,16 @@ class ManagedStockService:
                         "classification": "unverified_gap",
                         "source": result.get("source"),
                         "checked_at": checked_at,
+                        "evidence_attempts": result.get("evidence_attempts", []),
                         "reason": errors.get(day)
                         or "停复牌来源未返回可明确覆盖该日期的记录；空结果不作为正常交易证明",
                     }
                 evidence = {
-                    "version": 1,
+                    "version": 2,
                     "checked_at": checked_at,
                     "source": result.get("source"),
+                    "evidence_chains": result.get("evidence_chains", []),
+                    "evidence_attempts": result.get("evidence_attempts", []),
                     "dates": saved,
                 }
                 staged = dict(asset["coverage"])
@@ -914,6 +984,8 @@ class ManagedStockService:
                     "verified_suspension": summary.get("verified_suspension", 0),
                     "unverified_gap": summary.get("unverified_gap", 0),
                     "provider_errors": result.get("errors", []),
+                    "evidence_chains": result.get("evidence_chains", []),
+                    "evidence_attempts": result.get("evidence_attempts", []),
                     "coverage": report,
                 }
                 connection.execute(
@@ -943,6 +1015,7 @@ class ManagedStockService:
                     task_id=task_id,
                     outcome=outcome,
                     requested=len(spec["dates"]),
+                    official_evidence_chains=len(result.get("evidence_chains", [])),
                 )
         except ManagedStockConflict:
             pass

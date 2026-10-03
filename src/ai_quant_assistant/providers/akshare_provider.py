@@ -30,6 +30,9 @@ from ai_quant_assistant.providers.normalization import (
     normalize_security_master,
     normalize_trading_calendar,
 )
+from ai_quant_assistant.providers.suspension_announcements import (
+    OfficialSuspensionAnnouncements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,10 @@ class AkShareProvider:
         self.timeout_seconds = timeout_seconds
         self.refresh = refresh
         self._announcement_client = CninfoAnnouncements(timeout_seconds=timeout_seconds)
+        self._official_suspensions = OfficialSuspensionAnnouncements(
+            self._announcement_client,
+            timeout_seconds=timeout_seconds,
+        )
 
     @staticmethod
     def _akshare():
@@ -472,10 +479,39 @@ class AkShareProvider:
             raise ProviderError("停牌核验要求1至100个非未来日期")
         if len(symbol) != 6 or not symbol.isdigit():
             raise ProviderError("停牌核验股票代码无效")
+        requested = tuple(sorted(set(dates)))
         verified: list[dict[str, object]] = []
         errors: list[dict[str, str]] = []
-        ak = self._akshare()
-        for day in sorted(set(dates)):
+        attempts: list[dict[str, object]] = []
+        evidence_chains: list[dict[str, object]] = []
+
+        try:
+            official = self._official_suspensions.verify(symbol, requested)
+            verified.extend(official.get("verified", []))
+            errors.extend(official.get("errors", []))
+            evidence_chains.extend(official.get("evidence_chains", []))
+            attempts.append(
+                {
+                    "source": official.get("source"),
+                    "status": "completed",
+                    "candidate_count": official.get("candidate_count"),
+                    "parsed_count": official.get("parsed_count"),
+                    "diagnostic": official.get("chain_diagnostic"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - independent official source boundary
+            attempts.append(
+                {
+                    "source": "cninfo:official_announcement_chain",
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}"[:500],
+                }
+            )
+
+        verified_dates = {str(item["date"]) for item in verified}
+        remaining = tuple(day for day in requested if str(day) not in verified_dates)
+        ak = self._akshare() if remaining else None
+        for day in remaining:
             params = {"date": self._compact(day)}
 
             def fetch(day=day) -> pd.DataFrame:
@@ -517,11 +553,25 @@ class AkShareProvider:
                         break
             except Exception as exc:  # noqa: BLE001 - external provider boundary
                 errors.append({"date": str(day), "error": f"{type(exc).__name__}: {exc}"[:500]})
+        attempts.append(
+            {
+                "source": "akshare:stock_tfp_em:eastmoney",
+                "status": "completed",
+                "requested": len(remaining),
+            }
+        )
+        final_verified = {str(item["date"]) for item in verified}
         return {
             "verified": verified,
-            "errors": errors,
-            "requested": len(set(dates)),
-            "source": "akshare:stock_tfp_em:eastmoney",
+            "errors": [item for item in errors if item.get("date") not in final_verified],
+            "requested": len(requested),
+            "source": ",".join(
+                str(item["source"])
+                for item in attempts
+                if item.get("source")
+            ),
+            "evidence_chains": evidence_chains,
+            "evidence_attempts": attempts,
         }
 
     def get_daily_bars(

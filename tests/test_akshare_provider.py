@@ -136,6 +136,59 @@ class FakeFinancialFallbackAkShare:
         )
 
 
+def test_official_suspension_evidence_precedes_third_party(tmp_path, monkeypatch):
+    provider = AkShareProvider(tmp_path, retries=1, refresh=True)
+
+    class Official:
+        @staticmethod
+        def verify(symbol, dates):
+            assert symbol == "000333"
+            assert dates == (date(2018, 9, 10), date(2018, 10, 30))
+            return {
+                "verified": [
+                    {
+                        "date": "2018-09-10",
+                        "classification": "verified_suspension",
+                        "source": "cninfo:official_announcement_chain",
+                    }
+                ],
+                "errors": [],
+                "evidence_chains": [{"suspension_start": "2018-09-10"}],
+                "source": "cninfo:official_announcement_chain",
+                "candidate_count": 2,
+                "parsed_count": 2,
+            }
+
+    class ThirdParty:
+        calls = []
+
+        @classmethod
+        def stock_tfp_em(cls, *, date):
+            cls.calls.append(date)
+            return pd.DataFrame(
+                {
+                    "代码": ["000333"],
+                    "停牌时间": ["2018-10-30"],
+                    "停牌截止时间": ["2018-10-30"],
+                    "停牌原因": ["结构化停牌记录"],
+                }
+            )
+
+    provider._official_suspensions = Official()
+    monkeypatch.setattr(provider, "_akshare", lambda: ThirdParty)
+
+    result = provider.get_suspension_evidence(
+        "000333", (date(2018, 9, 10), date(2018, 10, 30))
+    )
+
+    assert {item["date"] for item in result["verified"]} == {
+        "2018-09-10",
+        "2018-10-30",
+    }
+    assert ThirdParty.calls == ["20181030"]
+    assert result["evidence_chains"] == [{"suspension_start": "2018-09-10"}]
+
+
 class FakeFallbackMasterAkShare:
     @staticmethod
     def stock_info_a_code_name() -> pd.DataFrame:

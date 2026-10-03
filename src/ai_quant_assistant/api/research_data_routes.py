@@ -68,7 +68,7 @@ class ConfirmDataPlan(BaseModel):
     confirm: StrictBool
 
 
-def research_data_router(manager, actor, copilot_repository):
+def research_data_router(manager, actor, copilot_repository, gap_verification_manager=None):
     router = APIRouter(prefix="/api/v1/research-data", tags=["research-data"])
     service = manager.service
 
@@ -120,6 +120,26 @@ def research_data_router(manager, actor, copilot_repository):
     @router.post("/plans/{plan_id}/preflight")
     def recheck(plan_id: PlanID):
         return invoke(service.recheck, plan_id)
+
+    @router.post("/plans/{plan_id}/verify-gaps", status_code=202)
+    def verify_gaps(plan_id: PlanID, request: ConfirmDataPlan):
+        if gap_verification_manager is None:
+            raise HTTPException(409, "缺口核验任务管理器不可用")
+
+        def submit():
+            prepared = service.prepare_gap_verification(
+                plan_id, **request.model_dump()
+            )
+            for item in prepared:
+                gap_verification_manager.submit_gap_verification(
+                    item.pop("security_id"),
+                    **item,
+                    confirm=True,
+                    actor=actor,
+                )
+            return service.get(plan_id)
+
+        return invoke(submit)
 
     @router.post("/copilot/{plan_id}/plan", status_code=201)
     def from_copilot(plan_id: PlanID):

@@ -16,7 +16,7 @@ from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.managed_coverage import completed_date, market_today
 from ai_quant_assistant.storage.stock_pools import StockPoolService
-from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps
+from ai_quant_assistant.storage.trading_gaps import blocking_gaps, classify_gaps, gap_summary
 
 
 def encoded(value: Any) -> str:
@@ -250,6 +250,7 @@ class ResearchReadiness:
             "missing_dates": [str(day) for day in unresolved[:20]],
             "gap_details": gap_details[:20],
             "gap_details_truncated": max(0, len(gap_details) - 20),
+            "gap_summary": gap_summary({adjustment: gap_details}),
             "reason": reason,
             "can_backfill": not outside_lifetime,
             "cannot_backfill_reason": None,
@@ -544,17 +545,20 @@ class ResearchReadiness:
                 (blockers if check["severity"] == "blocking" else warnings).append(text)
         recommendations = []
 
-        def recommend(code, title, explanation, action):
+        def recommend(code, title, explanation, action, **details):
             if any(item["code"] == code for item in recommendations):
                 return
-            recommendations.append(
-                {
-                    "code": code,
-                    "title": title,
-                    "explanation": explanation,
-                    "action": action,
-                }
-            )
+            item = {
+                "code": code,
+                "title": title,
+                "explanation": explanation,
+                "action": action,
+            }
+            # These optional fields are display hints only.  They let clients
+            # offer an explicit repair action without parsing Chinese prose;
+            # the server remains the final authority on the next preflight.
+            item.update({key: value for key, value in details.items() if value is not None})
+            recommendations.append(item)
 
         if kind == "daily_signal":
             listing_dates = {
@@ -596,6 +600,10 @@ class ResearchReadiness:
                     "研究开始日早于股票上市日",
                     f"{examples}；上市前不存在行情和财务数据，不能通过补齐生成。",
                     action,
+                    field="start_date",
+                    suggested_value=max(listed_after_start.values()),
+                    affected_symbols=sorted(listed_after_start),
+                    action_kind="update_field",
                 )
             latest_complete = completed_date(end)
             if end > latest_complete:
@@ -604,6 +612,9 @@ class ResearchReadiness:
                     "结束日期尚不是可验证的完整交易日",
                     f"当前结束日期为 {end}，保守可验证日期截至 {latest_complete}。",
                     f"将结束日期改为 {latest_complete} 或更早，再重新预检。",
+                    field="end_date",
+                    suggested_value=str(latest_complete),
+                    action_kind="update_field",
                 )
             benchmark_gaps = [
                 item
@@ -617,6 +628,9 @@ class ResearchReadiness:
                     "基准日线覆盖不足",
                     f"{item['symbol']} 需要覆盖 {item['required_start']} 至 {item['required_end']}。",
                     "查看补齐计划并明确确认后同步基准日线；预检和查看计划都不会自动下载。",
+                    affected_symbols=[item["symbol"]],
+                    action_kind="data_plan",
+                    network_required_for_resolution=True,
                 )
             calendar_gaps = [
                 item
@@ -631,6 +645,8 @@ class ResearchReadiness:
                     f"上交所交易日历需要覆盖 {item['required_start']} 至 {item['required_end']}；"
                     "日历不足时无法判断行情是否缺少交易日。",
                     "查看补齐计划并明确确认后同步；修改日期或规则后必须重新预检。",
+                    action_kind="data_plan",
+                    network_required_for_resolution=True,
                 )
             price_gaps = [
                 item for item in checks if item["dataset"] == "daily_bar" and not item["satisfied"]
@@ -647,11 +663,54 @@ class ResearchReadiness:
                         {str(item.get("adjustment") or "none") for item in price_gaps}
                     )
                 )
+                gap_counts = {
+                    kind: sum(
+                        int((item.get("gap_summary") or {}).get(kind) or 0)
+                        for item in price_gaps
+                    )
+                    for kind in (
+                        "verified_suspension",
+                        "missing_bar",
+                        "calendar_mismatch",
+                        "unverified_gap",
+                    )
+                }
+                if gap_counts["missing_bar"]:
+                    title = "股票日线存在真实缺失"
+                    action = (
+                        "查看处理计划并明确确认后，仅同步真实缺失日期所在的行情分区；"
+                        "已发布且只需证据核验的行情不会重复下载。"
+                    )
+                    action_kind = "data_plan"
+                elif gap_counts["calendar_mismatch"]:
+                    title = "交易日历与行情记录存在冲突"
+                    action = (
+                        "查看缺失日期和证据来源；该问题不能通过重复下载股票行情解决。"
+                    )
+                    action_kind = "inspect_price_gaps"
+                elif gap_counts["unverified_gap"]:
+                    title = "股票行情已同步，缺失日期待核验"
+                    action = (
+                        "查看处理计划并明确确认核验停牌或交易状态证据；"
+                        "重复下载相同行情分区通常无法解决。"
+                    )
+                    action_kind = "verify_price_gaps"
+                else:
+                    title = "股票日线覆盖不足"
+                    action = (
+                        "查看处理计划并明确确认后同步必要的前复权信号数据和"
+                        "未复权开盘/记账数据。"
+                    )
+                    action_kind = "data_plan"
                 recommend(
                     "price_coverage",
-                    "股票日线覆盖不足",
+                    title,
                     f"受影响股票：{names}；所需复权口径：{adjustments}。",
-                    "同步前复权信号数据和未复权开盘/记账数据，并保留最长均线及交叉前值的预热区间。",
+                    action,
+                    affected_symbols=sorted({item["symbol"] for item in price_gaps}),
+                    action_kind=action_kind,
+                    gap_counts=gap_counts,
+                    network_required_for_resolution=True,
                 )
             financial_gaps = [
                 item
@@ -673,6 +732,10 @@ class ResearchReadiness:
                     "候选财务因子在部分时点不可用",
                     f"缺失或无法验证的因子：{metrics}；系统不会用当前值回填历史。",
                     "同步带实际公开时间的历史财务报告；若只想先验证技术链路，可明确改用 return_N 或 ma_deviation_N 后重新预检。",
+                    affected_symbols=sorted({item["symbol"] for item in financial_gaps}),
+                    affected_metrics=metric_codes,
+                    action_kind="edit_candidate_factors",
+                    network_required_for_resolution=True,
                 )
             if any("合格财务样本少于" in item for item in blockers):
                 recommend(
@@ -680,6 +743,8 @@ class ResearchReadiness:
                     "部分候选更新日无法选满股票",
                     f"候选数量要求为 {params['candidate_count']}，但部分时点的有效样本更少。",
                     "缩短到数据完整区间、扩充当时已经上市的股票范围，或补齐已公开财务数据；不要把缺失值填零。",
+                    field="candidate_count",
+                    action_kind="edit_field",
                 )
         blocking_check_count = len(blockers)
         return {

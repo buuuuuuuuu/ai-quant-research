@@ -546,6 +546,8 @@ class DailySignalStrategySpec:
     lot_size: int = 100
     missing_policy: str = "exclude"
     stock_pool: dict[str, Any] | None = None
+    scope_adjustment: dict[str, Any] | None = None
+    preflight_snapshot: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         symbols = tuple(dict.fromkeys(item.strip() for item in self.symbols))
@@ -588,6 +590,9 @@ class DailySignalStrategySpec:
         payload["candidate_factors"] = [item.to_dict() for item in self.candidate_factors]
         payload["buy_rules"] = [item.to_dict() for item in self.buy_rules]
         payload["sell_rules"] = [item.to_dict() for item in self.sell_rules]
+        for key in ("scope_adjustment", "preflight_snapshot"):
+            if payload[key] is None:
+                payload.pop(key)
         return payload
 
 

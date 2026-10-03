@@ -974,6 +974,20 @@ test("preflight merges identical none and qfq gaps only in the display layer", (
   assert.match(groups[0].text, /none\/qfq共同/);
   const html = ui.renderPreflight(report);
   assert.match(html, /1 组；底层 2 项/);
+  assert.match(html, /data-exclude-problem="000333"/);
+});
+
+test("trust summary escapes excluded reasons and keeps unknown values unrecorded", () => {
+  const html = ui.renderTrustSummary({
+    scope: { frozen_count: 1, excluded: [{symbol: "000333", reason: '<img src=x onerror="boom()">'}] },
+    per_symbol: [{symbol: "600519", buy_count: 1, sell_count: 0, buy_notional: 100, sell_notional: 0, total_cost: 2}],
+    drawdown_period: null, preflight: null, limitation: "缺少数据",
+  });
+  assert.match(html, /&lt;img src=x onerror=&quot;boom\(\)&quot;&gt;/);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /单笔盈亏和各股票收益贡献当前数据不足/);
+  assert.match(html, /600519/);
+  assert.match(html, /未记录/);
 });
 
 test("parameter differences name date and pool identity changes", () => {

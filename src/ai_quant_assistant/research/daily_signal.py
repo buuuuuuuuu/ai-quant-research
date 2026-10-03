@@ -13,7 +13,10 @@ import pandas as pd
 
 from ai_quant_assistant.domain.models import DailySignalRule, DailySignalStrategySpec
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
-from ai_quant_assistant.reports.daily_signal_writer import DailySignalReportWriter
+from ai_quant_assistant.reports.daily_signal_writer import (
+    DailySignalReportWriter,
+    daily_signal_trust_summary,
+)
 from ai_quant_assistant.research.daily_signal_audit import (
     EXECUTION_RULE_VERSION,
     build_account_audit,
@@ -729,6 +732,10 @@ class DailySignalStrategyService:
             financial_source_batch_ids=financial_source_batch_ids,
         )
         diagnostics["account_audit"] = account_audit
+        trust_summary = daily_signal_trust_summary(
+            spec=spec.to_dict(), metrics=metrics, nav=nav_frame, orders=orders_frame,
+            diagnostics=diagnostics, reproducibility=reproducibility,
+        )
         directory = self.artifact_dir / "daily-signals" / run_id
         artifacts = self.writer.write(
             directory,
@@ -742,6 +749,7 @@ class DailySignalStrategyService:
             diagnostics=diagnostics,
             account_audit=account_audit_frame,
             reproducibility=reproducibility,
+            trust_summary=trust_summary,
             indicator_series=indicator_frame,
         )
         completed = datetime.now(UTC)
@@ -762,6 +770,7 @@ class DailySignalStrategyService:
             },
             "diagnostics": diagnostics,
             "reproducibility": reproducibility,
+            "trust_summary": trust_summary,
             "artifacts": {k: str(v) for k, v in artifacts.items()},
         }
         manifest = directory / "run.json"

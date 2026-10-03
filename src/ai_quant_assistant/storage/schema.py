@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 @dataclass(frozen=True, slots=True)
@@ -1369,6 +1369,42 @@ MIGRATIONS = (
             )""",
             "CREATE INDEX research_brief_pool_created_idx ON research_brief(pool_id, pool_revision, created_at)",
             "CREATE INDEX research_brief_pool_asof_idx ON research_brief(pool_id, pool_revision, as_of)",
+        ),
+    ),
+    Migration(
+        version=18,
+        name="cancelled_operation_tasks",
+        statements=(
+            """CREATE TABLE operation_task_v18 (
+                task_id VARCHAR PRIMARY KEY,
+                task_type VARCHAR NOT NULL CHECK (task_type IN (
+                    'backtest', 'sync', 'backup', 'copilot', 'document_ingest',
+                    'document_event_extract'
+                )),
+                status VARCHAR NOT NULL CHECK (status IN (
+                    'queued', 'running', 'succeeded', 'failed', 'cancelled'
+                )),
+                progress INTEGER NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+                message VARCHAR NOT NULL DEFAULT '',
+                spec_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR,
+                run_id VARCHAR,
+                error VARCHAR,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                claim_key VARCHAR UNIQUE,
+                owner_id VARCHAR,
+                heartbeat_at TIMESTAMPTZ
+            )""",
+            """INSERT INTO operation_task_v18 SELECT * FROM operation_task""",
+            "DROP INDEX operation_task_type_created_idx",
+            "DROP INDEX operation_task_claim_status_idx",
+            "DROP TABLE operation_task",
+            "ALTER TABLE operation_task_v18 RENAME TO operation_task",
+            "CREATE INDEX operation_task_type_created_idx ON operation_task (task_type, created_at)",
+            "CREATE INDEX operation_task_claim_status_idx ON operation_task (claim_key, status)",
         ),
     ),
 )

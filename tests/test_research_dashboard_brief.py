@@ -292,7 +292,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             == 0
         )
         monkeypatch.setattr(schema, "MIGRATIONS", migrations)
-        assert apply_migrations(db) == [17]
+        assert apply_migrations(db) == [17, 18]
         for name, count in before.items():
             if name != "schema_migrations":
                 assert db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] == count

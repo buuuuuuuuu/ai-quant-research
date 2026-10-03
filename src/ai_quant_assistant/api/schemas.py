@@ -320,6 +320,7 @@ class DailySignalRuleRequest(BaseModel):
 
 class DailySignalStrategyRequest(StockPoolSelectableRequest):
     symbols: list[str] | None = Field(default=None, min_length=1, max_length=500)
+    scope_adjustment: dict[str, Any] | None = None
     start_date: date = date(2015, 1, 1)
     end_date: date = Field(default_factory=date.today)
     candidate_factors: list[CandidateFactorRequest] = Field(
@@ -413,6 +414,7 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
             lot_size=self.lot_size,
             missing_policy=self.missing_policy,
             stock_pool=stock_pool,
+            scope_adjustment=self.scope_adjustment,
         )
 
 

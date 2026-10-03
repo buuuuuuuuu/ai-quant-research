@@ -55,6 +55,33 @@ class ResearchReadiness:
         if unexpected:
             raise ValueError(f"unsupported research parameters: {sorted(unexpected)}")
         request = model.model_validate(parameters)
+        adjustment = getattr(request, "scope_adjustment", None)
+        if adjustment is not None:
+            excluded = adjustment.get("excluded")
+            if request.symbols is None or not isinstance(excluded, list) or not excluded or len(excluded) > 500:
+                raise ValueError("范围调整需要明确股票与排除原因")
+            codes = [item.get("symbol") for item in excluded if isinstance(item, dict)]
+            if len(codes) != len(excluded) or any(not isinstance(code, str) for code in codes) or len(set(codes)) != len(codes) or any(
+                not isinstance(item.get("reason"), str) or not item["reason"].strip()
+                or len(item["reason"]) > 200 for item in excluded
+            ):
+                raise ValueError("排除记录的股票或原因不完整")
+            if adjustment.get("pool_id") is not None:
+                revision = adjustment.get("pool_revision")
+                if not isinstance(revision, int) or revision < 1:
+                    raise ValueError("原股票池 revision 未记录")
+                original = StockPoolService(self.database).resolve(
+                    adjustment["pool_id"], revision=revision, initialize=False
+                )["resolved_symbols"]
+            else:
+                original = adjustment.get("source_symbols")
+                if not isinstance(original, list) or len(original) > 500:
+                    raise ValueError("原明确股票范围未记录")
+            if (any(not isinstance(code, str) or len(code) != 6 or not code.isdigit() for code in original)
+                or len(set(original)) != len(original)
+                or set(codes) - set(original)
+                or request.symbols != [code for code in original if code not in codes]):
+                raise ValueError("调整后的冻结范围与原范围及排除股票不一致")
         if request.symbols is None:
             context = StockPoolService(self.database).resolve(
                 request.stock_pool_id,

@@ -132,6 +132,21 @@ def test_delete_failed_unindexed_task_and_reject_other_types(center, tmp_path):
         center.delete_backtest("screen", "x", expected_run_id="x", actor="test")
 
 
+def test_delete_daily_signal_run_only_uses_its_artifact_root(center, tmp_path):
+    center.artifact_dir = tmp_path / "artifacts"
+    run_id = "daily-signal-20240101T000000Z-1234abcd"
+    directory = center.artifact_dir / "daily-signals" / run_id
+    directory.mkdir(parents=True)
+    (directory / "orders.csv").write_text("symbol,shares\n")
+    other = center.artifact_dir / "backtests" / run_id
+    other.mkdir(parents=True)
+    index(center, run_id=run_id, kind="daily_signal")
+    center.delete_backtest("index", run_id, expected_run_id=run_id, actor="test")
+    assert not directory.exists()
+    assert other.is_dir()
+    assert center.list()["total"] == 0
+
+
 def test_copy_exact_costs_and_original_scope_read_only(center):
     original = FactorBacktestRequest(**_payload()).to_spec().to_dict()
     original.update(commission_bps=12.3, slippage_bps=17, stamp_duty_bps=0, lot_size=10)

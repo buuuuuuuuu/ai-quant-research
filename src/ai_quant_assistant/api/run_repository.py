@@ -58,6 +58,7 @@ SIGNAL_DOWNLOAD_FILES = {
     "diagnostics.json": "application/json",
     "account_audit.json": "application/json",
     "reproducibility.json": "application/json",
+    "trust_summary.json": "application/json",
     "daily_signal_result.xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "report.html": "text/html",
     "run.json": "application/json",

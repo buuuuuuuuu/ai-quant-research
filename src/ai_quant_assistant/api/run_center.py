@@ -1,4 +1,4 @@
-"""Read-only API projection over existing durable records (Schema v17)."""
+"""Read-only API projection over existing durable records (Schema v18)."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ KINDS = {
     ),
     "document_event": ("公告事件研究", DocumentEventStudyRequest, None),
 }
-STATES = {"queued", "running", "succeeded", "failed", "partial", "unknown"}
+STATES = {"queued", "running", "succeeded", "failed", "cancelled", "partial", "unknown"}
 SOURCES = {"index", "task", "screen", "event", "copilot"}
 NOTICE = "仅展示数据库中的持久记录；无索引的旧文件产物仍通过原报告链接访问，不扫描目录。未知字段不按当前股票池补写。"
 
@@ -231,7 +231,7 @@ class RunCenter:
             != "next_common_trading_day_close"
         ):
             raise ValueError("原事件成交规则与当前接口不兼容")
-        metadata = {"stock_pool", "research_type", "entry_rule"}
+        metadata = {"stock_pool", "research_type", "entry_rule", "preflight_snapshot"}
         if kind == "factor_backtest":
             if spec.get("factors") or spec.get("missing_policy", "exclude") != "exclude":
                 raise ValueError("该回测使用组合因子或特殊缺失策略，请从原因子实验配置入口重建")

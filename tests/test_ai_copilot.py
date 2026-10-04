@@ -113,7 +113,7 @@ def test_conversations_plans_messages_and_events_persist_in_schema_v8(tmp_path) 
     restored = repository.get_plan(plan["plan_id"])
     messages = repository.list_messages(conversation["conversation_id"])
 
-    assert database.status()["schema_version"] == SCHEMA_VERSION == 17
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 18
     assert restored["spec"]["factor"] == "roe"
     assert restored["events"][0]["event_type"] == "created"
     assert messages[0]["content"] == QUESTION

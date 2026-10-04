@@ -133,7 +133,7 @@ class OperationTaskRepository:
                 lease_time = lease_time or row[TASK_COLUMNS.index("updated_at")]
                 if lease_time is not None and lease_time.tzinfo is None:
                     lease_time = lease_time.replace(tzinfo=UTC)
-                if lease_time is None or lease_time <= stale_before:
+                if status == "running" and (lease_time is None or lease_time <= stale_before):
                     connection.execute(
                         """
                         UPDATE operation_task
@@ -255,6 +255,26 @@ class OperationTaskRepository:
             ).fetchone()
         return updated is not None
 
+    def cancel_queued(self, task_id: str, *, research_type: str) -> dict[str, Any]:
+        """A queued task and its worker compete for the same status CAS."""
+        now = datetime.now(UTC)
+        with self.lock, self.database.connect() as connection:
+            updated = connection.execute(
+                """UPDATE operation_task
+                   SET status='cancelled', message='用户取消了等待中的任务',
+                       completed_at=?, updated_at=?, claim_key=NULL
+                   WHERE task_id=? AND task_type='backtest' AND status='queued'
+                     AND json_extract_string(spec_json, '$.research_type')=?
+                   RETURNING task_id""",
+                [now, now, task_id, research_type],
+            ).fetchone()
+        if updated is None:
+            task = self.get(task_id)
+            if task["task_type"] != "backtest" or task["spec"].get("research_type") != research_type:
+                raise KeyError(task_id)
+            raise ValueError("任务已经开始或结束，只有等待执行的任务可以取消")
+        return self.get(task_id)
+
     def update(self, task_id: str, **changes: Any) -> dict[str, Any]:
         if not changes:
             return self.get(task_id)
@@ -324,7 +344,11 @@ class OperationTaskRepository:
                     completed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP,
                     claim_key = NULL
-                WHERE status IN ('queued', 'running')
+                WHERE (status = 'running' OR
+                       (status = 'queued' AND NOT (
+                         task_type='backtest' AND
+                         json_extract_string(spec_json, '$.research_type')='daily_signal'
+                       )))
                   AND COALESCE(heartbeat_at, started_at, updated_at, created_at) <= ?
                 RETURNING task_id
                 """,

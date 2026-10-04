@@ -314,7 +314,11 @@ def build_reproducibility(
 
     return {
         "run_id": run_id,
-        "parameter_sha256": digest(spec),
+        "parameter_sha256": digest({
+            **{key: value for key, value in spec.items() if key != "preflight_snapshot"},
+            "stock_pool": {key: value for key, value in pool.items() if key != "resolved_at"}
+            if pool else spec.get("stock_pool"),
+        }),
         "stock_pool_id": pool.get("pool_id"),
         "stock_pool_revision": pool.get("pool_revision"),
         "frozen_symbols_sha256": pool.get("symbols_sha256") or digest(symbols),

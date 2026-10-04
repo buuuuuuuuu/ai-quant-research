@@ -144,11 +144,14 @@ def test_new_run_records_trade_audit_account_checks_and_reproducibility(tmp_path
         open(result["artifacts"]["account_audit_json"], encoding="utf-8").read()
     )
     assert audit_summary["status"] == "passed"
+    assert result["trust_summary"]["account_audit"]["status"] == "passed"
+    assert result["trust_summary"]["per_symbol"][0]["buy_count"] >= 1
+    assert json.loads(open(result["artifacts"]["trust_summary_json"], encoding="utf-8").read()) == result["trust_summary"]
 
     reproducibility = result["reproducibility"]
     assert reproducibility["parameter_sha256"] == digest(result["spec"])
     assert reproducibility["frozen_symbol_count"] == 2
-    assert reproducibility["schema_version"] == 17
+    assert reproducibility["schema_version"] == 18
     assert reproducibility["technical_warmup_start"] == "2024-01-02"
     assert reproducibility["signal_adjustment"] == "qfq"
     indicators = pd.read_csv(result["artifacts"]["indicator_series_csv"], dtype={"symbol": str})

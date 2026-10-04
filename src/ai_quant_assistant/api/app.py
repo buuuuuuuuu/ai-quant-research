@@ -5,7 +5,9 @@ import hashlib
 import io
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -263,6 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         managed_stock_tasks.start()
         research_data_tasks.start()
+        daily_signal_manager.start()
         yield
         managed_stock_tasks.shutdown()
         research_data_tasks.shutdown()
@@ -333,8 +336,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         requested = getattr(request, "symbols", None)
         pool_id = getattr(request, "stock_pool_id", None)
         revision = getattr(request, "stock_pool_revision", None)
+        adjustment = getattr(request, "scope_adjustment", None)
         if requested is not None:
             symbols = list(dict.fromkeys(str(item).strip() for item in requested))
+            if adjustment is not None:
+                if not isinstance(request, DailySignalStrategyRequest):
+                    raise ValueError("范围调整仅适用于日线信号策略")
+                excluded = adjustment.get("excluded")
+                if not isinstance(excluded, list) or not excluded or len(excluded) > 500:
+                    raise ValueError("请明确列出本次排除的股票及原因")
+                codes = [item.get("symbol") for item in excluded if isinstance(item, dict)]
+                if len(codes) != len(excluded) or any(not isinstance(code, str) for code in codes) or len(set(codes)) != len(codes) or any(
+                    not isinstance(item.get("reason"), str) or not item["reason"].strip()
+                    or len(item["reason"]) > 200 for item in excluded
+                ):
+                    raise ValueError("排除记录的股票或原因不完整")
+                origin_id = adjustment.get("pool_id")
+                origin_revision = adjustment.get("pool_revision")
+                if origin_id is not None:
+                    if not isinstance(origin_revision, int) or origin_revision < 1:
+                        raise ValueError("原股票池 revision 未记录")
+                    original = stock_pools.resolve(origin_id, revision=origin_revision)["resolved_symbols"]
+                else:
+                    original = adjustment.get("source_symbols")
+                    if not isinstance(original, list) or len(original) > 500:
+                        raise ValueError("原明确股票范围未记录")
+                if any(not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code) for code in original) or len(set(original)) != len(original):
+                    raise ValueError("原股票范围无效")
+                if set(codes) - set(original) or symbols != [code for code in original if code not in codes]:
+                    raise ValueError("调整后的冻结范围与原范围及排除股票不一致")
             canonical = json.dumps(symbols, ensure_ascii=False, separators=(",", ":"))
             return symbols, {
                 "pool_id": None,
@@ -1619,9 +1649,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def create_daily_signal_strategy(request: DailySignalStrategyRequest) -> dict[str, Any]:
         try:
             symbols, context = resolve_stock_selection(request)
-            task = daily_signal_manager.submit(
-                request.to_spec(resolved_symbols=symbols, stock_pool=context)
-            )
+            spec = request.to_spec(resolved_symbols=symbols, stock_pool=context)
+            try:
+                report = research_data_tasks.service.readiness.run(
+                    "daily_signal", request.model_dump(mode="json")
+                )
+                snapshot = {
+                    "checked_at": report.get("checked_at"),
+                    "ready": report.get("ready"),
+                    "complete": report.get("complete"),
+                    "blocker_count": len(report.get("blockers") or []),
+                    "affected_symbols": report.get("affected_symbols"),
+                    "benchmark": next((item for item in report.get("checks", [])
+                                       if item.get("dataset") == "benchmark_daily_bar"), None),
+                    "gap_checks": [
+                        {"symbol": item.get("symbol"), "adjustment": item.get("adjustment"),
+                         "counts": item.get("gap_summary")}
+                        for item in report.get("checks", [])
+                        if item.get("dataset") == "daily_bar" and item.get("gap_summary")
+                    ],
+                }
+            except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+                if request.scope_adjustment is not None:
+                    raise ValueError("调整后的股票范围必须重新通过本地数据预检；当前无法完成检查") from exc
+                snapshot = None
+            if request.scope_adjustment is not None and (
+                snapshot is None or snapshot["ready"] is not True or snapshot["blocker_count"]
+            ):
+                raise ValueError("调整后的股票范围仍有数据预检阻断；请先处理问题并重新检查")
+            task = daily_signal_manager.submit(replace(spec, preflight_snapshot=snapshot))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="stock pool not found") from exc
         except ValueError as exc:
@@ -1648,6 +1704,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return daily_signal_manager.get(task_id)
         except KeyError as exc:
             raise HTTPException(404, "daily signal task not found") from exc
+
+    @app.post("/api/v1/daily-signal-strategies/{task_id}/cancel")
+    def cancel_daily_signal_task(task_id: str) -> dict[str, Any]:
+        try:
+            task = daily_signal_manager.cancel(task_id)
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal task not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        audit_repository.record(
+            "daily_signal_strategy_cancelled",
+            actor=resolved_settings.web_username,
+            object_type="operation_task",
+            object_id=task_id,
+            details={"status": "cancelled"},
+        )
+        return task
 
     @app.get("/api/v1/daily-signal-runs/{run_id}")
     def get_daily_signal_run(run_id: str) -> dict[str, Any]:

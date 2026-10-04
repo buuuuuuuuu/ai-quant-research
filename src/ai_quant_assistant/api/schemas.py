@@ -355,6 +355,16 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
     lot_size: int = Field(default=100, ge=1, le=100_000)
     missing_policy: Literal["exclude", "available"] = "exclude"
 
+    @field_validator("candidate_factors", mode="before")
+    @classmethod
+    def require_candidate_factors(cls, value: Any) -> Any:
+        if isinstance(value, list) and not value:
+            raise ValueError(
+                "候选排序因子至少需要一项。请在“候选股票选择”中增加候选因子，"
+                "用于给股票排序；MA 买卖信号不能代替候选排序。修改后请重新检查本地数据"
+            )
+        return value
+
     @field_validator("symbols")
     @classmethod
     def validate_symbols(cls, values: list[str] | None) -> list[str] | None:

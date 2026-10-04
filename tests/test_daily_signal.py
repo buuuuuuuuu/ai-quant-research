@@ -33,6 +33,10 @@ from ai_quant_assistant.research.daily_signal_audit import (
 
 def test_daily_signal_request_has_actionable_chinese_validation():
     base = _spec().to_dict()
+    base["candidate_factors"] = []
+    with pytest.raises(ValueError, match="候选排序因子至少需要一项.*增加候选因子"):
+        DailySignalStrategyRequest.model_validate(base)
+    base = _spec().to_dict()
     base["buy_rules"] = [
         {
             "kind": "ma_cross",

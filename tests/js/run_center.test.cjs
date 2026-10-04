@@ -650,8 +650,23 @@ test("daily templates only contain legal rule parameters and do not contain scop
   for (const template of Object.values(ui.dailyTemplates)) {
     assert.equal("symbols" in template, false);
     assert.equal("stock_pool_id" in template, false);
-    assert.equal(ui.validateDailySignal({ ...template, candidate_count: 2, max_positions: 1 }, 2).length, 0);
+    assert.equal(ui.validateDailySignal({ ...template, candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }], candidate_count: 2, max_positions: 1 }, 2).length, 0);
   }
+});
+
+test("empty candidate factors show an actionable Chinese error before preflight", () => {
+  const params = {
+    candidate_factors: [], candidate_count: 1, max_positions: 1,
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+  };
+  const issues = ui.dailySignalIssues(params, 1);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, "empty_candidate_factors");
+  assert.equal(issues[0].target, "center-daily-candidates");
+  assert.match(issues[0].message, /增加候选因子.*重新检查本地数据/);
+  assert.match(ui.dailySignalSummary(params), /候选因子未配置/);
+  assert.equal(ui.dailySignalIssues({ ...params, candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }] }, 1).length, 0);
 });
 
 test("daily validation and summary explain periods, weights, and next-open execution", () => {

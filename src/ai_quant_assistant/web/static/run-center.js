@@ -419,6 +419,8 @@ const RunCenterUI = (() => {
     const issues = [];
     const add = (code, message, target, field = null, fix = null) =>
       issues.push({ code, message, target, field, fix });
+    if (!Array.isArray(params.candidate_factors) || !params.candidate_factors.length)
+      add("empty_candidate_factors", "还没有设置候选排序因子。请在“候选股票选择”中点击“增加候选因子”，选择至少一项用于给股票排序；MA 买卖信号不能代替候选排序。添加后请重新检查本地数据。", "center-daily-candidates");
     if (!params.buy_rules?.length) add("empty_buy_rules", "买入规则为空。空规则不会被解释为始终满足，请至少添加一条买入规则；修改后需要重新检查数据。", "center-daily-buy");
     if (!params.sell_rules?.length) add("empty_sell_rules", "卖出规则为空。现有引擎要求至少一条卖出规则；修改后需要重新检查数据。", "center-daily-sell");
     for (const [side, rules] of [["买入", params.buy_rules || []], ["卖出", params.sell_rules || []]])
@@ -779,7 +781,7 @@ const RunCenterUI = (() => {
     if (key === "factors")
       return `<div class="factor-editor" data-factor-editor><p>因子组合：相对权重为合成得分输入，不代表资金百分比。</p><div id="center-factor-rows">${value.map(factorRow).join("")}</div><button id="center-factor-add" type="button">增加因子</button></div>`;
     if (key === "candidate_factors")
-      return `<div class="factor-editor" data-candidate-editor><p>return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
+      return `<div class="factor-editor" data-candidate-editor><p>请至少设置一个候选排序因子，用来选择候选股票；MA 买卖信号决定何时交易，不能代替候选排序。return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
     if (["buy_rules", "sell_rules"].includes(key)) {
       const side = key === "buy_rules" ? "buy" : "sell";
       return `<div class="signal-rule-editor" data-signal-editor="${side}"><p>${side === "buy" ? "买入" : "卖出"}规则使用当日收盘后已完成的数据。</p><div id="center-${side}-rule-rows">${value.map(x => signalRuleRow(x, side)).join("")}</div><button data-rule-add="${side}" type="button">增加${side === "buy" ? "买入" : "卖出"}规则</button></div>`;
@@ -1610,7 +1612,7 @@ const RunCenterUI = (() => {
     const invalidField = form?.querySelector?.('[aria-invalid="true"]');
     const issueSection = form?.querySelector?.(".field-errors")?.closest?.("fieldset, details");
     const blocked = checked && !(checked.report.ready === true || checked.report.status === "ready");
-    const target = invalidField || issueSection || (blocked ? $("center-preflight-result") : $("center-daily-errors"));
+    const target = invalidField || (issueSection?.id === "center-daily-candidates" ? $("center-candidate-factor-add") : issueSection) || (blocked ? $("center-preflight-result") : $("center-daily-errors"));
     if (target?.tagName === "DETAILS") target.open = true;
     moveTo(target);
   }
@@ -1660,11 +1662,17 @@ const RunCenterUI = (() => {
       const message = $("error-" + input.id);
       if (message) message.textContent = "";
     }
+    $("center-candidate-factor-add")?.removeAttribute?.("aria-invalid");
+    $("center-candidate-factor-add")?.removeAttribute?.("aria-describedby");
   }
   function renderDailyIssues(issues) {
     clearDailyIssues();
     const groups = new Map();
     for (const issue of issues) {
+      if (issue.code === "empty_candidate_factors") {
+        $("center-candidate-factor-add")?.setAttribute?.("aria-invalid", "true");
+        $("center-candidate-factor-add")?.setAttribute?.("aria-describedby", "center-candidate-feedback");
+      }
       const feedback = {
         "center-scope-section": "center-scope-feedback",
         "center-daily-candidates": "center-candidate-feedback",
@@ -1998,7 +2006,8 @@ const RunCenterUI = (() => {
       }
       const jump = e.target.closest?.("[data-go-to]");
       if (jump) {
-        const target = $(jump.dataset.goTo);
+        const target = jump.dataset.goTo === "center-daily-candidates" && $("center-candidate-factor-add")
+          ? $("center-candidate-factor-add") : $(jump.dataset.goTo);
         if (target?.tagName === "DETAILS") target.open = true;
         moveTo(target);
         return;

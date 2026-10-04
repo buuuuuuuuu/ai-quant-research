@@ -1,42 +1,43 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>回测中心 · 澄明</title><link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}"></head>
 <body data-page="backtests">{% include "app-nav.html" %}<main>
-<div class="page-heading"><p class="eyebrow">RESEARCH · RUNS · EVIDENCE</p><h1 id="center-title">回测中心</h1><p>按研究类型配置，按运行身份回看。事件窗口收益与组合回测分别展示。</p></div>
+<div class="page-heading"><p class="eyebrow">RESEARCH · RUNS · EVIDENCE</p><h1 id="center-title">回测中心</h1><p id="center-page-description">选择研究类型，检查数据，再提交任务。已提交的任务可以在历史记录中继续查看。</p></div>
 <nav class="section-links" aria-label="回测中心导航"><a href="/backtests">新建研究 / 回测</a><a href="/backtests/history">历史记录</a></nav>
 <section id="center-types" class="entry-grid" aria-label="研究类型">
-<a class="entry-card" href="/backtests/daily-signals"><h2>日线信号策略</h2><p>以财务和技术因子维护候选股票，收盘确认 MA(N) 等买卖信号，下一交易日开盘尝试成交。</p></a>
-<a class="entry-card" href="/backtests/new"><h2>财务因子回测</h2><p>以已公开财务因子选股，沿用原调仓和交易成本模型。需要本地行情、基准与财务指标；结果为组合净值及交易明细。</p></a>
-<a class="entry-card" href="/backtests/factors"><h2>多因子研究与策略实验</h2><p>配置相对权重与方向，查看因子有效性和已有参数实验。验证集选定策略，样本外独立检验。</p></a>
-<a class="entry-card" href="/research/copilot"><h2>事件研究</h2><p>中报事件样本与窗口收益分析，沿用研究计划确认入口；需要公告与行情，不代表资金组合净值。</p></a>
-<a class="entry-card" href="/backtests/screen"><h2>条件选股</h2><p>按指定时点和已公开数据筛选股票，查看入选及缺失原因；筛选快照不代表组合回测。</p></a>
+<a class="entry-card" href="/backtests/daily-signals"><span class="entry-card-type">组合回测</span><h2>日线信号策略</h2><p>以财务和技术因子维护候选股票，收盘确认 MA(N) 等买卖信号，下一交易日开盘尝试成交。</p><span class="entry-card-cta">配置日线策略 <span aria-hidden="true">→</span></span></a>
+<a class="entry-card" href="/backtests/new"><span class="entry-card-type">组合回测</span><h2>财务因子回测</h2><p>以已公开财务因子选股，沿用原调仓和交易成本模型。需要本地行情、基准与财务指标；结果为组合净值及交易明细。</p><span class="entry-card-cta">配置因子回测 <span aria-hidden="true">→</span></span></a>
+<a class="entry-card" href="/backtests/factors"><span class="entry-card-type">研究与实验</span><h2>多因子研究与策略实验</h2><p>配置相对权重与方向，查看因子有效性和已有参数实验。验证集选定策略，样本外独立检验。</p><span class="entry-card-cta">进入策略实验 <span aria-hidden="true">→</span></span></a>
+<a class="entry-card" href="/research/copilot"><span class="entry-card-type">事件研究</span><h2>事件研究</h2><p>中报事件样本与窗口收益分析，沿用研究计划确认入口；需要公告与行情，不代表资金组合净值。</p><span class="entry-card-cta">进入事件研究 <span aria-hidden="true">→</span></span></a>
+<a class="entry-card" href="/backtests/screen"><span class="entry-card-type">选股快照</span><h2>条件选股</h2><p>按指定时点和已公开数据筛选股票，查看入选及缺失原因；筛选快照不代表组合回测。</p><span class="entry-card-cta">配置选股条件 <span aria-hidden="true">→</span></span></a>
 </section><p id="center-event-entry"><a href="/data#data-explorer">公告事件研究：进入原文、证据与事件审核入口</a></p>
 <p id="center-error" class="negative" role="alert"></p>
 <section id="center-history" class="panel">
-<h2>研究与回测历史</h2>
+<div class="center-panel-heading"><div><p class="eyebrow">RUN HISTORY</p><h2>研究与回测历史</h2><p>筛选已保存的任务和运行。刚提交的日线任务会单独置顶，页面刷新后仍可定位。</p></div><a href="/backtests/daily-signals">新建日线策略</a></div>
 <form id="center-filters" class="center-filters"><label>类型<select id="center-kind"><option value="">全部类型</option>{% for key,value in kinds.items() %}<option value="{{ key }}">{{ value[0] }}</option>{% endfor %}</select></label><label>状态<select id="center-status"><option value="">全部状态</option><option value="queued">等待执行</option><option value="running">运行中</option><option value="succeeded">成功</option><option value="partial">部分成功</option><option value="failed">失败</option><option value="cancelled">已取消</option><option value="unknown">未知</option></select></label><button type="submit">筛选 / 刷新</button></form>
 <div id="center-submitted-task" aria-live="polite"></div>
+<p id="center-task-feedback" role="alert" tabindex="-1"></p>
 <p id="center-notice" class="muted"></p><div id="center-list" class="table-shell" aria-live="polite">正在读取…</div><div class="center-pages"><button id="center-prev" type="button">上一页</button><span id="center-page"></span><button id="center-next" type="button">下一页</button></div>
 </section>
-<section id="center-detail" class="panel" hidden><h2>运行详情</h2><div id="center-identity"></div><div id="center-parameters"></div><p id="center-meaning" class="page-notice"></p><div id="center-detail-actions" class="center-actions"></div><h3>已保存的结果</h3><div id="center-result"></div><details><summary>参数与原始结果</summary><pre id="center-raw"></pre></details></section>
+<section id="center-detail" class="panel" hidden><h2>运行详情</h2><div id="center-identity"></div><div id="center-parameters"></div><p id="center-meaning" class="page-notice"></p><div id="center-detail-actions" class="center-actions"></div><h3>已保存的结果</h3><div id="center-result" tabindex="-1"></div><details><summary>参数与原始结果</summary><pre id="center-raw"></pre></details></section>
 <section id="center-configure" class="panel" hidden>
-<h2 id="center-configure-title">研究配置</h2><p id="center-copy-source"></p><p id="center-copy-warning" class="page-notice"></p>
+<h2 id="center-configure-title">研究配置</h2><p id="center-copy-source"></p><p id="center-copy-warning" class="page-notice" tabindex="-1"></p>
 <form id="center-copy-form">
-<nav id="center-daily-progress" class="daily-progress" hidden aria-label="日线策略配置进度"><a href="#center-scope-section">1 选择范围</a><a href="#center-daily-candidates">2 选择候选</a><a href="#center-daily-buy">3 买入条件</a><a href="#center-daily-sell">4 卖出条件</a><a href="#center-daily-actions">5 检查并运行</a></nav>
+<nav id="center-daily-progress" class="daily-progress" hidden aria-label="日线策略配置步骤"><a href="#center-scope-section" aria-current="step">1 选择范围</a><a href="#center-daily-candidates">2 选择候选</a><a href="#center-daily-buy">3 买入条件</a><a href="#center-daily-sell">4 卖出条件</a><a href="#center-daily-actions">5 检查并运行</a></nav>
 <div id="center-daily-mode" class="daily-mode" hidden><span>页面显示：</span><button id="center-mode-simple" type="button" aria-pressed="true">简洁模式</button><button id="center-mode-advanced" type="button" aria-pressed="false">高级模式</button><small>两种模式使用完全相同的策略参数；高级模式只展开较少使用的设置。</small></div>
 <section id="center-daily-templates" class="daily-templates" hidden aria-labelledby="center-template-title"><h3 id="center-template-title">配置示例</h3><div class="center-actions"><button type="button" data-daily-template="ma_cross">双均线趋势示例</button><button type="button" data-daily-template="trend_state">趋势状态示例</button><button type="button" data-daily-template="momentum_confirm">动量确认示例</button></div><p>这是配置示例，不代表投资建议、推荐策略或预期收益。套用模板只会填充规则参数，不会改变冻结股票范围、检查数据、下载数据或运行回测。</p></section>
 <fieldset id="center-scope-section"><legend>1. 研究范围</legend><div id="center-pool-selector"></div><div id="center-scope-fields" class="center-params"></div><div id="center-scope-feedback" class="section-feedback" role="alert" aria-live="assertive"></div><p id="center-warmup-summary" class="page-notice" hidden>实际预热起点将在本地数据预检后显示；预热期只计算指标，不产生交易。</p></fieldset>
-<fieldset id="center-generic-method"><legend>研究方法</legend><div id="center-common-fields" class="center-params"></div></fieldset>
+<fieldset id="center-generic-method"><legend>研究方法</legend><div id="center-common-fields" class="center-params"></div><div id="center-common-feedback" class="section-feedback" role="alert" tabindex="-1"></div></fieldset>
 <fieldset id="center-daily-candidates" hidden><legend>2. 候选股票选择</legend><div id="center-candidate-fields" class="center-params"></div><div id="center-candidate-feedback" class="section-feedback" role="alert" aria-live="assertive"></div><p>候选名单按所选频率更新；买卖信号仍在每个交易日收盘后检查。相对权重用于合成候选得分，不代表持仓资金比例。</p></fieldset>
 <fieldset id="center-daily-buy" hidden><legend>3. 买入信号</legend><div id="center-buy-fields" class="center-params"></div><div id="center-buy-feedback" class="section-feedback" role="alert" aria-live="assertive"></div><p>“高于/低于”是持续状态；“上穿/下穿”是相邻有效比较时点之间的变化事件。信号收盘后确认，最早下一交易日开盘尝试成交。</p></fieldset>
 <fieldset id="center-daily-sell" hidden><legend>4. 卖出信号</legend><div id="center-sell-fields" class="center-params"></div><div id="center-sell-feedback" class="section-feedback" role="alert" aria-live="assertive"></div><p>卖出受 T+1、停牌或交易限制影响时保留退出意图并继续尝试；第一阶段不会因信号消失自动撤销，回测结束也不隐含强制平仓。</p></fieldset>
 <details id="center-advanced-details"><summary>高级研究参数</summary><div id="center-advanced-fields" class="center-params"></div></details>
 <details id="center-execution-details"><summary>5. 成本与执行假设（执行前请核对）</summary><div id="center-cost-fields" class="center-params"></div><ul id="center-execution-assumptions"><li>沿用既有时点校验、下一交易日执行、整手、T+1、停牌及涨跌停约束。</li></ul></details>
-<section id="center-daily-summary" class="strategy-summary" hidden aria-live="polite"><h3>当前策略中文摘要</h3><p id="center-daily-summary-text"></p><div id="center-daily-errors" role="alert"></div></section>
+<section id="center-daily-summary" class="strategy-summary" hidden aria-live="polite"><h3>当前策略中文摘要</h3><p id="center-daily-summary-text"></p><div id="center-daily-errors" role="alert" tabindex="-1"></div></section>
 <label><input id="center-missing-confirm" type="checkbox"> 我已核对原记录缺失参数的补充值</label>
-<div id="center-daily-actions" class="daily-action-bar"><div class="center-actions"><button id="center-preflight" type="button">检查本地数据（只读、不联网）</button><button id="center-submit" type="submit" disabled title="当前参数必须先通过预检">核对并运行</button></div><p id="center-action-reason" class="muted">请先完成配置并检查本地数据。</p><div id="center-action-feedback" class="action-feedback" role="alert" aria-live="assertive" tabindex="-1"></div></div>
-<details id="center-review" hidden open><summary>提交前核对</summary><div id="center-review-content"></div><button id="center-execute" type="button">再次确认并提交回测</button><button id="center-review-cancel" type="button">返回修改</button></details>
+<div id="center-daily-actions" class="daily-action-bar"><div class="daily-action-main"><div class="center-actions"><button id="center-preflight" type="button">检查本地数据（只读、不联网）</button><button id="center-submit" type="submit" disabled title="当前参数必须先通过预检" aria-describedby="center-action-reason">核对并运行</button><button id="center-jump-issue" type="button" hidden>查看待处理问题</button></div><p id="center-action-reason" class="muted" role="status">请先完成配置并检查本地数据。</p></div><div id="center-action-feedback" class="action-feedback" role="alert" aria-live="assertive" tabindex="-1"></div></div>
+<details id="center-review" hidden open tabindex="-1"><summary>提交前核对</summary><div id="center-review-content"></div><button id="center-execute" type="button">再次确认并提交回测</button><button id="center-review-cancel" type="button">返回修改</button></details>
 </form>
-<div id="center-preflight-result"></div>
+<div id="center-preflight-result" tabindex="-1"></div>
 <section id="center-data-plan" class="data-plan-panel" hidden aria-labelledby="center-data-plan-title"><h3 id="center-data-plan-title">数据处理计划</h3><p>查看计划只冻结当前参数并判断应该“补行情”还是“核验证据”，不会联网。只有明确确认相应操作后才访问数据提供方。</p><div class="center-actions"><button id="center-plan-create" type="button">查看处理计划（只生成计划、不联网）</button><button id="center-plan-confirm" type="button" hidden>确认补齐缺失行情（将联网下载）</button><button id="center-plan-retry" type="button" hidden>确认重试失败分区</button><button id="center-plan-verify-gaps" type="button" hidden>确认核验缺失日期（不下载行情）</button><button id="center-plan-refresh" type="button" hidden>刷新任务状态</button></div><div id="center-plan-status" aria-live="polite" tabindex="-1"></div></section>
 <p id="center-submit-result" role="status"></p><div id="center-submitted-link"></div><a href="/data#research-data-panel">查看全部既有补齐计划</a>
 </section>

@@ -7,7 +7,7 @@
 {% macro shown(value) %}{{ value if value is not none else '未记录' }}{% endmacro %}
 {% macro pct(value) %}{{ '%.2f%%'|format(value * 100) if value is number else '未记录' }}{% endmacro %}
 {% macro money(value) %}{{ '%.2f'|format(value) if value is number else '未记录' }}{% endmacro %}
-{% macro term(key) %}{% set t=terms[key] %}<details class="term"><summary>{{ t.label }}<button type="button" aria-label="查看{{ t.label }}解释">?</button></summary><div class="term-card"><strong>{{ t.professional }}</strong><p>{{ t.short }}</p><p><b>口径：</b>{{ t.calculation }}</p><p><b>例子：</b>{{ t.example }}</p><p><b>限制：</b>{{ t.limitations }}</p><code>{{ t.code }}</code></div></details>{% endmacro %}
+{% macro term(key) %}{% set t=terms[key] %}<details class="term"><summary>{{ t.label }}<button type="button" aria-label="查看{{ t.label }}解释" aria-expanded="false">?</button></summary><div class="term-card"><button type="button" data-term-close aria-label="关闭{{ t.label }}解释">关闭</button><strong>{{ t.professional }}</strong><p>{{ t.short }}</p><p><b>口径：</b>{{ t.calculation }}</p><p><b>例子：</b>{{ t.example }}</p><p><b>限制：</b>{{ t.limitations }}</p><code>{{ t.code }}</code></div></details>{% endmacro %}
 
 <h1>{{ '单股日线技术信号策略报告' if spec.candidate_factors == [] and spec.symbols|length == 1 else '因子选股与日线技术信号策略报告' }}</h1>
 <p class="notice">信号在交易日收盘后确认，指令最早在下一交易日开盘尝试执行。日线数据不能证明开盘集合竞价的真实成交量；触及价格限制时采用保守阻断。</p>
@@ -51,4 +51,31 @@
 <details><summary>每日账户变化（最近 80 个已保存交易日）</summary><div class="scroll"><table><thead><tr><th>日期</th><th>现金</th><th>持仓市值</th><th>账户总资产</th><th>策略累计净值</th><th>基准累计净值</th><th>累计交易成本</th></tr></thead><tbody>{% for r in result_view.daily_accounts %}<tr><td>{{ shown(r.date) }}</td><td>{{ shown(r.cash) }}</td><td>{{ shown(r.position_value) }}</td><td>{{ shown(r.portfolio_value) }}</td><td>{{ shown(r.portfolio_nav) }}</td><td>{{ shown(r.benchmark_nav) }}</td><td>{{ shown(r.total_cost) }}</td></tr>{% endfor %}</tbody></table></div><p class="muted">完整记录请使用 daily_nav.csv 或 Excel 下载。</p></details>
 <details><summary>每日账户核对（最近 100 项）</summary><div class="scroll"><table><thead><tr><th>日期</th><th>检查项</th><th>状态</th><th>期望</th><th>实际</th><th>差异</th><th>容差</th></tr></thead><tbody>{% for r in account_audit_rows %}<tr><td>{{ shown(r.date) }}</td><td>{{ shown(r.check) }}</td><td>{{ shown(r.status) }}</td><td>{{ shown(r.expected_value) }}</td><td>{{ shown(r.actual_value) }}</td><td>{{ shown(r.difference) }}</td><td>{{ shown(r.tolerance) }}</td></tr>{% else %}<tr><td colspan="7">旧运行没有账户审计产物。</td></tr>{% endfor %}</tbody></table></div><p class="muted">完整机器可读结果见 account_audit.csv/json；来源信息见 reproducibility.json，价格指标见 indicator_series.csv。</p></details>
 <details><summary>完整策略参数</summary><pre>{{ spec|tojson(indent=2) }}</pre></details><details><summary>数据与执行限制</summary><pre>{{ diagnostics|tojson(indent=2) }}</pre></details>
+<script>
+(() => {
+  const terms = [...document.querySelectorAll('details.term')];
+  const closeTerms = (except = null, restoreFocus = false) => {
+    for (const details of terms) {
+      if (!details.open || details === except) continue;
+      details.open = false;
+      const button = details.querySelector('summary button');
+      button.setAttribute('aria-expanded', 'false');
+      if (restoreFocus && details.contains(document.activeElement)) button.focus();
+    }
+  };
+  for (const details of terms) {
+    const button = details.querySelector('summary button');
+    details.addEventListener('toggle', () => button.setAttribute('aria-expanded', String(details.open)));
+    details.querySelector('[data-term-close]').addEventListener('click', () => {
+      details.open = false;
+      button.setAttribute('aria-expanded', 'false');
+      button.focus();
+    });
+  }
+  document.addEventListener('click', (event) => closeTerms(event.target.closest('details.term')));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeTerms(null, true);
+  });
+})();
+</script>
 </body></html>

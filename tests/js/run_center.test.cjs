@@ -442,6 +442,54 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     ["600519", "000001"],
   );
 });
+
+test("term explanations dismiss on outside click and Escape without stealing focus", async () => {
+  const h = harness("/backtests");
+  await tick();
+  const doc = h.context.document;
+  const listeners = {};
+  const makeTerm = () => {
+    const button = {
+      attributes: {}, focused: false,
+      setAttribute(key, value) { this.attributes[key] = value; },
+      focus() { this.focused = true; },
+    };
+    const close = { addEventListener() {} };
+    const details = {
+      open: false, dataset: {}, listeners: {},
+      querySelector(selector) { return selector === "button[aria-expanded]" ? button : close; },
+      addEventListener(name, handler) { this.listeners[name] = handler; },
+      contains(target) { return target === close; },
+    };
+    return { details, button, close };
+  };
+  const first = makeTerm(), second = makeTerm();
+  const terms = [first.details, second.details];
+  doc.addEventListener = (name, handler) => { listeners[name] = handler; };
+  doc.querySelectorAll = (selector) => selector === "details.term-help[open]" ? terms.filter((term) => term.open) : terms;
+  const root = { querySelectorAll: () => terms };
+  h.ui.wireTermHelp(root);
+  h.ui.wireTermHelp(root);
+  first.details.open = true;
+  listeners.click({ target: { closest: () => first.details } });
+  assert.equal(first.details.open, true);
+  second.details.open = true;
+  listeners.click({ target: { closest: () => second.details } });
+  assert.equal(first.details.open, false);
+  assert.equal(second.details.open, true);
+  doc.activeElement = second.close;
+  listeners.keydown({ key: "Escape" });
+  assert.equal(second.details.open, false);
+  assert.equal(second.button.attributes["aria-expanded"], "false");
+  assert.equal(second.button.focused, true);
+  first.details.open = true;
+  first.button.focused = false;
+  doc.activeElement = null;
+  listeners.click({ target: { closest: () => null } });
+  assert.equal(first.details.open, false);
+  assert.equal(first.button.focused, false);
+});
+
 test("factor rows read exact codes, directions and relative weights without percent conversion", () => {
   const original = {
     factors: [{ code: "roe", weight: 2, direction: "desc" }],

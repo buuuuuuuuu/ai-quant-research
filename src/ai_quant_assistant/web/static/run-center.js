@@ -494,8 +494,28 @@ const RunCenterUI = (() => {
     const visible = label === null ? item.label : label;
     return `<details class="term-help" data-term="${esc(key)}"><summary>${esc(visible)}<button type="button" aria-label="查看${esc(item.label)}解释" aria-expanded="false">?</button></summary><div class="term-card"><button class="term-close" type="button" data-term-close aria-label="关闭${esc(item.label)}解释">关闭</button><strong>${esc(item.professional)}</strong><p>${esc(item.short)}</p><p><b>口径：</b>${esc(item.calculation)}</p><p><b>例子：</b>${esc(item.example)}</p><p><b>限制：</b>${esc(item.limitations)}</p><code>${esc(item.code)}</code></div></details>`;
   }
+  let termDismissBound = false;
   function wireTermHelp(root = document) {
+    if (!termDismissBound && typeof document.addEventListener === "function") {
+      const closeTerms = (except = null, restoreFocus = false) => {
+        document.querySelectorAll("details.term-help[open]").forEach((details) => {
+          if (details === except) return;
+          details.open = false;
+          const button = details.querySelector("button[aria-expanded]");
+          button?.setAttribute("aria-expanded", "false");
+          if (restoreFocus && details.contains(document.activeElement)) button?.focus();
+        });
+      };
+      document.addEventListener("click", (event) =>
+        closeTerms(event.target.closest?.("details.term-help") || null));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeTerms(null, true);
+      });
+      termDismissBound = true;
+    }
     root.querySelectorAll?.("details.term-help").forEach((details) => {
+      if (details.dataset.termWired) return;
+      details.dataset.termWired = "true";
       const button = details.querySelector?.("button[aria-expanded]");
       if (!button) return;
       const sync = () => button.setAttribute("aria-expanded", details.open ? "true" : "false");
@@ -2685,5 +2705,6 @@ const RunCenterUI = (() => {
     factorName,
     strategyName,
     termHelp,
+    wireTermHelp,
   };
 })();

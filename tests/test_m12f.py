@@ -150,3 +150,25 @@ def test_excluded_scope_requires_new_frozen_identity_and_does_not_fix_source(tmp
     params["candidate_count"] = 2
     with pytest.raises(ValueError, match="冻结股票范围只有 1 只"):
         readiness.freeze("daily_signal", params)
+
+
+def test_adjusted_scope_cannot_submit_when_new_preflight_is_blocked(tmp_path):
+    from fastapi.testclient import TestClient
+    from test_factor_backtest import _database
+    from test_web_workbench import _settings
+
+    from ai_quant_assistant.api.app import create_app
+
+    db = _database(tmp_path)
+    payload = spec().to_dict()
+    payload["scope_adjustment"] = {
+        "pool_id": None, "pool_revision": None,
+        "source_symbols": ["600519", "000333"],
+        "excluded": [{"symbol": "000333", "reason": "原范围仍有未核验缺口"}],
+    }
+    with TestClient(create_app(_settings(tmp_path))) as client:
+        response = client.post("/api/v1/daily-signal-strategies", json=payload)
+        assert response.status_code == 422
+        assert "重新检查" in response.json()["detail"] or "预检" in response.json()["detail"]
+    with db.connect(read_only=True) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM operation_task").fetchone()[0] == 0

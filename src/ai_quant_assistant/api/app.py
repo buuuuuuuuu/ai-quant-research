@@ -1669,8 +1669,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if item.get("dataset") == "daily_bar" and item.get("gap_summary")
                     ],
                 }
-            except (RuntimeError, ValueError, TypeError, KeyError):
+            except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+                if request.scope_adjustment is not None:
+                    raise ValueError("调整后的股票范围必须重新通过本地数据预检；当前无法完成检查") from exc
                 snapshot = None
+            if request.scope_adjustment is not None and (
+                snapshot is None or snapshot["ready"] is not True or snapshot["blocker_count"]
+            ):
+                raise ValueError("调整后的股票范围仍有数据预检阻断；请先处理问题并重新检查")
             task = daily_signal_manager.submit(replace(spec, preflight_snapshot=snapshot))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="stock pool not found") from exc

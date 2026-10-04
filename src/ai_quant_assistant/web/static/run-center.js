@@ -97,10 +97,10 @@ const RunCenterUI = (() => {
       : "";
     return `${esc(identity)}${identity ? "<br>" : ""}${row.symbols.length ? `${row.symbols.length} 只 · ${esc(row.symbols.slice(0, 6).join(" "))}${row.symbols.length > 6 ? " …" : ""}` : "历史范围未知"}`;
   }
-  function table(rows) {
+  function table(rows, deletable = false) {
     if (!rows.length)
       return '<p class="empty-state">没有匹配的持久运行记录。</p>';
-    return `<table class="center-table"><thead><tr><th>类型 / 身份</th><th>冻结范围</th><th>研究区间</th><th>状态 / 时间</th><th>操作</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.label)}<small><code>${esc(r.run_id || r.record_id)}</code></small></td><td>${scope(r)}</td><td>${esc(known(r.start_date))}<small>至 ${esc(known(r.end_date))}</small></td><td>${esc(labels[r.status] || r.status)}<small>${r.started_at ? "开始" : "创建"}：${esc(known(r.started_at || r.created_at))}</small><small>完成：${esc(known(r.completed_at))}</small><small>耗时：${r.duration_seconds == null ? "未记录" : esc(r.duration_seconds) + " 秒"}</small></td><td><a href="${esc(r.detail_url)}">查看详情</a><br><a href="${esc(r.copy_url)}">复制参数</a></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="center-table"><thead><tr><th>类型 / 身份</th><th>冻结范围</th><th>研究区间</th><th>状态 / 时间</th><th>操作</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.label)}<small><code>${esc(r.run_id || r.record_id)}</code></small></td><td>${scope(r)}</td><td>${esc(known(r.start_date))}<small>至 ${esc(known(r.end_date))}</small></td><td>${esc(labels[r.status] || r.status)}<small>${r.started_at ? "开始" : "创建"}：${esc(known(r.started_at || r.created_at))}</small><small>完成：${esc(known(r.completed_at))}</small><small>耗时：${r.duration_seconds == null ? "未记录" : esc(r.duration_seconds) + " 秒"}</small></td><td><a href="${esc(r.detail_url)}">查看详情</a><br><a href="${esc(r.copy_url)}">复制参数</a>${deletable && ["daily_signal", "factor_backtest"].includes(r.kind) && ["succeeded", "failed", "cancelled"].includes(r.status) && ["index", "task"].includes(r.source) ? `<br><button type="button" class="center-delete-button" data-delete-backtest data-source="${esc(r.source)}" data-record="${esc(r.record_id)}" data-run-id="${esc(r.run_id || r.record_id)}" data-label="${esc(r.label)}">删除记录与报告</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
   }
   const titles = {
     symbols: "冻结股票代码",
@@ -1174,7 +1174,7 @@ const RunCenterUI = (() => {
       const p = await get("/api/v1/run-center?" + q);
       if (own !== sequence) return;
       total = p.total;
-      $("center-list").innerHTML = table(p.items);
+      $("center-list").innerHTML = table(p.items, true);
       $("center-notice").className = "muted";
       $("center-notice").textContent = p.notice || "";
       $("center-page").textContent = `第 ${page} 页 · ${total} 条`;
@@ -2684,6 +2684,32 @@ const RunCenterUI = (() => {
       for (const k of ["kind", "status"])
         $("center-" + k).value = query.get(k) || "";
       if (submittedTaskId) $("center-kind").value = "daily_signal";
+      $("center-list").addEventListener("click", async (event) => {
+        const button = event.target.closest?.("[data-delete-backtest]");
+        if (!button || button.disabled) return;
+        const { source, record, runId, label } = button.dataset;
+        if (!window.confirm(`确认永久删除${label} ${runId}？该运行的历史记录、报告及下载文件将无法恢复；操作审计会保留。排队或运行中的任务不能删除。`)) return;
+        button.disabled = true;
+        const feedback = $("center-history-feedback");
+        feedback.textContent = "正在删除…";
+        try {
+          const query = new URLSearchParams({ source, record });
+          await get(`/api/v1/run-center/record?${query}`, {
+            method: "DELETE", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expected_run_id: runId }),
+          });
+          if (submittedTaskId === record) {
+            submittedTaskId = null;
+            $("center-submitted-task").innerHTML = "";
+          }
+          feedback.textContent = `已删除 ${label} ${runId} 的记录与报告。`;
+          if (page > 1 && total % 20 === 1) page--;
+          await history();
+        } catch (error) {
+          button.disabled = false;
+          feedback.textContent = `删除失败：${error.message}`;
+        }
+      });
       $("center-submitted-task").addEventListener("click", async (event) => {
         if (event.target.closest?.("[data-refresh-daily-task]")) {
           submittedTaskPolls = 0;

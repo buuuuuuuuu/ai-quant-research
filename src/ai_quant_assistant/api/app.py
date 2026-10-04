@@ -327,7 +327,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
     app.include_router(research_dashboard_router(research_dashboard, templates, asset_version, resolved_settings.web_username))
-    app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username))
+    app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username, resolved_settings.artifact_dir))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")

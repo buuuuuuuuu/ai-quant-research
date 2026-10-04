@@ -1,12 +1,18 @@
-"""Read-only API projection over existing durable records (Schema v18)."""
+"""Bounded history projection and explicit deletion of terminal backtests."""
 
 from __future__ import annotations
 
 import json
+import logging
+import os
+import shutil
+from pathlib import Path
 from urllib.parse import quote, urlencode
+from uuid import uuid4
 
 from pydantic import ValidationError
 
+from ai_quant_assistant.api.run_repository import RUN_ID_RE, SIGNAL_RUN_ID_RE
 from ai_quant_assistant.api.schemas import (
     BatchInterimReportEventStudyRequest,
     DailySignalStrategyRequest,
@@ -18,6 +24,13 @@ from ai_quant_assistant.api.schemas import (
 )
 from ai_quant_assistant.storage.research_run_index import frozen_symbols
 from ai_quant_assistant.storage.stock_pools import StockPoolService
+
+logger = logging.getLogger(__name__)
+
+
+class DeletionConflict(Exception):
+    """The record must be kept until its task or dependent research is resolved."""
+
 
 KINDS = {
     "daily_signal": ("日线信号策略", DailySignalStrategyRequest, "/api/v1/daily-signal-strategies"),
@@ -105,8 +118,151 @@ def decode(text):
 
 
 class RunCenter:
-    def __init__(self, database):
+    def __init__(self, database, artifact_dir: Path | None = None):
         self.database = database
+        self.artifact_dir = artifact_dir
+
+    def delete_backtest(self, source, record_id, *, expected_run_id, actor, remote_host=None):
+        """Delete a terminal backtest identity, its task aliases and its own artifacts.
+
+        A same-filesystem rename removes report/download URLs before the database
+        transaction commits. On ordinary errors the directory is restored.
+        """
+        if source not in {"index", "task"} or not record_id or len(record_id) > 160:
+            raise KeyError(record_id)
+        if self.artifact_dir is None:
+            raise RuntimeError("未配置回测产物目录")
+        quarantined = None
+        original = None
+        with self.database.connect() as c:
+            try:
+                c.execute("BEGIN TRANSACTION")
+                if source == "index":
+                    identity = c.execute(
+                        "SELECT run_id,research_type,result_json FROM stock_research_run WHERE run_id=?",
+                        [record_id],
+                    ).fetchone()
+                    if not identity or identity[1] not in {"daily_signal", "factor_backtest"}:
+                        raise KeyError(record_id)
+                    run_id, kind = identity[:2]
+                    if decode(identity[2]).get("status") not in {
+                        "succeeded",
+                        "failed",
+                        "cancelled",
+                    }:
+                        raise DeletionConflict("运行尚未结束，不能删除")
+                else:
+                    identity = c.execute(
+                        "SELECT run_id,status,spec_json FROM operation_task WHERE task_id=? AND task_type='backtest'",
+                        [record_id],
+                    ).fetchone()
+                    if not identity:
+                        raise KeyError(record_id)
+                    run_id = identity[0]
+                    kind = decode(identity[2]).get("research_type", "factor_backtest")
+                    if kind not in {"daily_signal", "factor_backtest"}:
+                        raise KeyError(record_id)
+                    if identity[1] not in {"succeeded", "failed", "cancelled"}:
+                        raise DeletionConflict("任务仍在排队或运行中，请先等待完成或取消排队任务")
+                if expected_run_id != (run_id or record_id):
+                    raise DeletionConflict("运行身份已变化，请刷新历史记录后重新核对")
+                if run_id:
+                    pattern = SIGNAL_RUN_ID_RE if kind == "daily_signal" else RUN_ID_RE
+                    if not pattern.fullmatch(run_id):
+                        raise DeletionConflict("运行 ID 格式不符合安全删除规则，请联系管理员核对")
+                    tasks = c.execute(
+                        "SELECT task_id,status,spec_json FROM operation_task WHERE task_type='backtest' AND run_id=?",
+                        [run_id],
+                    ).fetchall()
+                    if any(
+                        status not in {"succeeded", "failed", "cancelled"} for _, status, _ in tasks
+                    ):
+                        raise DeletionConflict("该运行仍有关联任务在执行，不能删除")
+                    if any(
+                        decode(spec).get("research_type", "factor_backtest") != kind
+                        for _, _, spec in tasks
+                    ):
+                        raise DeletionConflict("该运行 ID 还关联其他类型任务，拒绝删除")
+                    plan_count = c.execute(
+                        """SELECT COUNT(*) FROM research_plan WHERE run_id=?
+                        OR task_id IN (SELECT task_id FROM operation_task
+                                       WHERE task_type='backtest' AND run_id=?)""",
+                        [run_id, run_id],
+                    ).fetchone()[0]
+                    if plan_count:
+                        raise DeletionConflict("该运行关联研究计划，请先在研究计划入口处理")
+                    root = (
+                        self.artifact_dir
+                        / ("daily-signals" if kind == "daily_signal" else "backtests")
+                    ).resolve()
+                    original = root / run_id
+                    if original.is_symlink():
+                        raise DeletionConflict("运行目录是符号链接，拒绝删除")
+                    if original.exists():
+                        if not original.is_dir() or original.resolve().parent != root:
+                            raise DeletionConflict("运行目录不安全，拒绝删除")
+                        quarantined = root / f".deleted-{uuid4().hex}"
+                        os.replace(original, quarantined)
+                    c.execute(
+                        "DELETE FROM stock_research_run WHERE run_id=? AND research_type=?",
+                        [run_id, kind],
+                    )
+                    c.execute(
+                        "DELETE FROM operation_task WHERE task_type='backtest' AND run_id=?",
+                        [run_id],
+                    )
+                else:
+                    plan_count = c.execute(
+                        "SELECT COUNT(*) FROM research_plan WHERE task_id=?", [record_id]
+                    ).fetchone()[0]
+                    if plan_count:
+                        raise DeletionConflict("该任务关联研究计划，请先在研究计划入口处理")
+                    c.execute(
+                        "DELETE FROM operation_task WHERE task_id=? AND task_type='backtest'",
+                        [record_id],
+                    )
+                if source == "task":
+                    c.execute(
+                        "DELETE FROM operation_task WHERE task_id=? AND task_type='backtest'",
+                        [record_id],
+                    )
+                audit_id = f"audit-{uuid4().hex}"
+                c.execute(
+                    """INSERT INTO operation_audit
+                    (event_id,action,actor,outcome,remote_host,object_type,object_id,details_json)
+                    VALUES (?, 'backtest_deleted', ?, 'success', ?, 'backtest', ?, ?)""",
+                    [
+                        audit_id,
+                        actor,
+                        remote_host,
+                        run_id or record_id,
+                        json.dumps(
+                            {
+                                "source": source,
+                                "record_id": record_id,
+                                "kind": kind,
+                                "run_id": run_id,
+                                "artifact_removed": quarantined is not None,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ],
+                )
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                if quarantined is not None and original is not None:
+                    os.replace(quarantined, original)
+                raise
+        if quarantined is not None:
+            try:
+                shutil.rmtree(quarantined)
+            except OSError:
+                logger.exception(
+                    "Backtest deletion committed; quarantined files require cleanup: %s",
+                    quarantined,
+                )
+        return {"deleted": True, "run_id": run_id or record_id, "audit_id": audit_id}
 
     def _rows(self, connection, where, params, page, size, detail=False):
         result = "CASE WHEN length(result_json)<=500000 THEN result_json END" if detail else "NULL"

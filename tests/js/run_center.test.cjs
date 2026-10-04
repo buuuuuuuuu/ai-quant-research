@@ -80,7 +80,7 @@ function harness(
     location,
     URLSearchParams,
     structuredClone,
-    window: { confirm: () => true, history: { replaceState() {} } },
+    window: { confirm: options.confirm || (() => true), history: { replaceState() {} } },
     fetch: async (url, options = {}) => {
       calls.push({ url, options });
       const p = await responder(url, options);
@@ -119,6 +119,37 @@ test("history escapes values and preserves zeros and unknown times", () => {
   assert.ok(html.includes("历史范围未知"));
   assert.ok(html.includes("0 秒"));
   assert.ok(!html.includes("<script>"));
+});
+test("delete is offered only for terminal backtests and escapes identity", () => {
+  const terminal = { ...row('task-<bad>'), kind: 'daily_signal', status: 'succeeded' };
+  const html = ui.table([terminal, row('running'), { ...terminal, kind: 'screen' }], true);
+  assert.equal((html.match(/data-delete-backtest/g) || []).length, 1);
+  assert.match(html, /task-&lt;bad&gt;/);
+  assert.match(html, /删除记录与报告/);
+});
+test("delete requires confirmation, keeps inline errors, then refreshes history", async () => {
+  let accepted = false;
+  let deleted = false;
+  const h = harness('/backtests/history', async (_url, options) => {
+    if (options.method === 'DELETE') {
+      if (!accepted) throw Error('cancelled call must not run');
+      deleted = true;
+      return { deleted: true };
+    }
+    return { items: deleted ? [] : [{ ...row('task-1'), status: 'failed' }], total: deleted ? 0 : 1 };
+  }, { confirm: () => accepted });
+  await tick();
+  const button = { dataset: { source: 'task', record: 'task-1', runId: 'task-1', label: '财务因子回测' }, disabled: false };
+  const click = h.element('center-list').listeners.click;
+  await click({ target: { closest: () => button } });
+  assert.equal(h.calls.filter(c => c.options.method === 'DELETE').length, 0);
+  accepted = true;
+  await click({ target: { closest: () => button } });
+  const request = h.calls.find(c => c.options.method === 'DELETE');
+  assert.equal(request.url, '/api/v1/run-center/record?source=task&record=task-1');
+  assert.equal(JSON.parse(request.options.body).expected_run_id, 'task-1');
+  assert.match(h.element('center-history-feedback').textContent, /已删除/);
+  assert.match(h.element('center-list').innerHTML, /没有匹配/);
 });
 test("overview reuses one bounded dashboard read without creating plans or choosing another pool", async () => {
   for (const error of [false, true]) {

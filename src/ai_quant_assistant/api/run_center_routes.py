@@ -1,14 +1,19 @@
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
-from ai_quant_assistant.api.run_center import KINDS, RunCenter
+from ai_quant_assistant.api.run_center import KINDS, DeletionConflict, RunCenter
 from ai_quant_assistant.reports.presentation import presentation_catalog
 
 
-def run_center_router(database, templates, asset_version, actor):
+class DeleteBacktestRequest(BaseModel):
+    expected_run_id: str
+
+
+def run_center_router(database, templates, asset_version, actor, artifact_dir=None):
     router = APIRouter(tags=["run-center"])
-    service = RunCenter(database)
+    service = RunCenter(database, artifact_dir)
 
     def invoke(method, **kwargs):
         try:
@@ -17,6 +22,8 @@ def run_center_router(database, templates, asset_version, actor):
             raise HTTPException(404, "运行记录或原股票池 revision 不存在") from exc
         except (ValueError, TypeError) as exc:
             raise HTTPException(422, str(exc)) from exc
+        except DeletionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @router.get("/api/v1/run-center")
     def history(
@@ -34,6 +41,22 @@ def run_center_router(database, templates, asset_version, actor):
     @router.get("/api/v1/run-center/copy")
     def copy(source: str, record: Annotated[str, Query(min_length=1, max_length=160)]):
         return invoke(service.copy_parameters, source=source, record_id=record)
+
+    @router.delete("/api/v1/run-center/record")
+    def delete_backtest(
+        source: str,
+        record: Annotated[str, Query(min_length=1, max_length=160)],
+        body: DeleteBacktestRequest,
+        request: Request,
+    ):
+        return invoke(
+            service.delete_backtest,
+            source=source,
+            record_id=record,
+            expected_run_id=body.expected_run_id,
+            actor=actor,
+            remote_host=request.client.host if request.client else None,
+        )
 
     @router.get("/api/v1/run-center/configuration")
     def configuration(kind: str):

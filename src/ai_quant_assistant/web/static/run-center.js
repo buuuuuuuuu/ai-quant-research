@@ -419,8 +419,8 @@ const RunCenterUI = (() => {
     const issues = [];
     const add = (code, message, target, field = null, fix = null) =>
       issues.push({ code, message, target, field, fix });
-    if (!Array.isArray(params.candidate_factors) || !params.candidate_factors.length)
-      add("empty_candidate_factors", "还没有设置候选排序因子。请在“候选股票选择”中点击“增加候选因子”，选择至少一项用于给股票排序；MA 买卖信号不能代替候选排序。添加后请重新检查本地数据。", "center-daily-candidates");
+    if ((!Array.isArray(params.candidate_factors) || !params.candidate_factors.length) && scopeSize !== 1)
+      add("empty_candidate_factors", "只有冻结范围恰好一只股票时，才可以不设置候选因子。多股范围请增加候选排序因子；调整后重新检查本地数据。", "center-daily-candidates");
     if (!params.buy_rules?.length) add("empty_buy_rules", "买入规则为空。空规则不会被解释为始终满足，请至少添加一条买入规则；修改后需要重新检查数据。", "center-daily-buy");
     if (!params.sell_rules?.length) add("empty_sell_rules", "卖出规则为空。现有引擎要求至少一条卖出规则；修改后需要重新检查数据。", "center-daily-sell");
     for (const [side, rules] of [["买入", params.buy_rules || []], ["卖出", params.sell_rules || []]])
@@ -445,11 +445,16 @@ const RunCenterUI = (() => {
     return dailySignalIssues(params, scopeSize).map((item) => item.message);
   }
 
-  function dailySignalSummary(params = {}) {
+  function dailySignalSummary(params = {}, scopeSize = params.symbols?.length) {
     const refresh = catalog.enums[params.candidate_refresh] || params.candidate_refresh || "未知频率";
-    const factors = (params.candidate_factors || []).map((item) => `${factorName(item.code)}${item.direction === "desc" ? "从高到低" : "从低到高"}（相对权重 ${known(item.weight)}）`).join("、") || "候选因子未配置";
+    const factors = (params.candidate_factors || []).map((item) => `${factorName(item.code)}${item.direction === "desc" ? "从高到低" : "从低到高"}（相对权重 ${known(item.weight)}）`).join("、");
     const rules = (side) => (params[side + "_rules"] || []).map(ruleText).join("；") || "未配置";
-    return `${refresh}更新候选股票，根据${factors}合成得分，选择前 ${known(params.candidate_count)} 只。候选名单更新与每日信号检查是两个过程。每天收盘后检查候选股票；买入规则${enumName(params.buy_rule_mode)}：${rules("buy")}。满足时生成买入指令，最早在下一交易日开盘按滑点、费用、整手和资金约束尝试成交。卖出规则${enumName(params.sell_rule_mode)}：${rules("sell")}；${params.exit_on_candidate_drop ? "退出候选名单时也生成卖出指令" : "退出候选名单后继续持有，直到出现卖出信号"}。卖出受限时保留退出意图并继续尝试，回测结束不会隐含强制平仓。`;
+    const selection = factors
+      ? `${refresh}更新候选股票，根据${factors}合成得分，选择前 ${known(params.candidate_count)} 只。候选名单更新与每日信号检查是两个过程。`
+      : scopeSize === 1
+        ? "单只冻结股票直接参与每日信号检查，不使用候选因子排序；候选得分和排名不适用。"
+        : "尚未配置候选因子；仅单只冻结股票可以跳过排序，多股范围须先添加候选因子。";
+    return `${selection}每天收盘后检查候选股票；买入规则${enumName(params.buy_rule_mode)}：${rules("buy")}。满足时生成买入指令，最早在下一交易日开盘按滑点、费用、整手和资金约束尝试成交。卖出规则${enumName(params.sell_rule_mode)}：${rules("sell")}；${params.exit_on_candidate_drop ? "退出候选名单时也生成卖出指令" : "退出候选名单后继续持有，直到出现卖出信号"}。卖出受限时保留退出意图并继续尝试，回测结束不会隐含强制平仓。`;
   }
 
   function dailySignalTimeline(signals = [], orders = []) {
@@ -781,7 +786,7 @@ const RunCenterUI = (() => {
     if (key === "factors")
       return `<div class="factor-editor" data-factor-editor><p>因子组合：相对权重为合成得分输入，不代表资金百分比。</p><div id="center-factor-rows">${value.map(factorRow).join("")}</div><button id="center-factor-add" type="button">增加因子</button></div>`;
     if (key === "candidate_factors")
-      return `<div class="factor-editor" data-candidate-editor><p>请至少设置一个候选排序因子，用来选择候选股票；MA 买卖信号决定何时交易，不能代替候选排序。return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
+      return `<div class="factor-editor" data-candidate-editor><p>冻结范围只有一只股票时，可删除所有候选因子，该股票直接参与每日买卖信号检查。多只股票仍须至少一个候选因子来排序；MA 买卖信号决定何时交易。return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
     if (["buy_rules", "sell_rules"].includes(key)) {
       const side = key === "buy_rules" ? "buy" : "sell";
       return `<div class="signal-rule-editor" data-signal-editor="${side}"><p>${side === "buy" ? "买入" : "卖出"}规则使用当日收盘后已完成的数据。</p><div id="center-${side}-rule-rows">${value.map(x => signalRuleRow(x, side)).join("")}</div><button data-rule-add="${side}" type="button">增加${side === "buy" ? "买入" : "卖出"}规则</button></div>`;
@@ -1701,7 +1706,7 @@ const RunCenterUI = (() => {
     try {
       const params = readParams($("center-copy-form"), copy.params);
       const scopeSize = scopePending ? undefined : params.stock_pool_id ? copy.scope?.length : params.symbols?.length;
-      $("center-daily-summary-text").textContent = dailySignalSummary(params);
+      $("center-daily-summary-text").textContent = dailySignalSummary(params, scopeSize);
       const issues = dailySignalIssues(params, scopeSize);
       renderDailyIssues(issues);
       $("center-daily-errors").innerHTML = issues.length
@@ -2465,7 +2470,7 @@ const RunCenterUI = (() => {
         throw Error("请先通过当前参数的数据预检");
       if (!execute && $("center-review")?.querySelector) {
         $("center-review-content").innerHTML =
-          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
+          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params, params.stock_pool_id ? copy.scope?.length : params.symbols?.length))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
         $("center-review").hidden = false;
         moveTo($("center-review"));
         return;

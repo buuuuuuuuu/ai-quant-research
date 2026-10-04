@@ -324,7 +324,7 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
     start_date: date = date(2015, 1, 1)
     end_date: date = Field(default_factory=date.today)
     candidate_factors: list[CandidateFactorRequest] = Field(
-        default_factory=lambda: [CandidateFactorRequest(code="roe")], min_length=1, max_length=12
+        default_factory=lambda: [CandidateFactorRequest(code="roe")], max_length=12
     )
     candidate_count: int = Field(default=20, ge=1, le=500)
     candidate_refresh: Literal["daily", "monthly", "quarterly"] = "monthly"
@@ -354,16 +354,6 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
     stamp_duty_bps: float = Field(default=5.0, ge=0, le=500)
     lot_size: int = Field(default=100, ge=1, le=100_000)
     missing_policy: Literal["exclude", "available"] = "exclude"
-
-    @field_validator("candidate_factors", mode="before")
-    @classmethod
-    def require_candidate_factors(cls, value: Any) -> Any:
-        if isinstance(value, list) and not value:
-            raise ValueError(
-                "候选排序因子至少需要一项。请在“候选股票选择”中增加候选因子，"
-                "用于给股票排序；MA 买卖信号不能代替候选排序。修改后请重新检查本地数据"
-            )
-        return value
 
     @field_validator("symbols")
     @classmethod
@@ -397,6 +387,11 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
 
     def to_spec(self, *, resolved_symbols=None, stock_pool=None) -> DailySignalStrategySpec:
         scope = tuple(resolved_symbols or self.symbols or ())
+        if not self.candidate_factors and len(set(scope)) != 1:
+            raise ValueError(
+                "仅冻结一只股票时可以不配置候选因子；当前范围不是一只股票。"
+                "请缩小范围或增加候选排序因子，修改后重新检查本地数据"
+            )
         if scope and self.candidate_count > len(set(scope)):
             raise ValueError(
                 f"候选数量当前为 {self.candidate_count}，冻结股票范围只有 {len(set(scope))} 只。"

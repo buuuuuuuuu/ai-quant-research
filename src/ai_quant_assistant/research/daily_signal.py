@@ -145,6 +145,13 @@ class DailySignalStrategyService:
         return result
 
     def _candidate_snapshot(self, spec, day, features) -> pd.DataFrame:
+        if not spec.candidate_factors:
+            # A frozen single-stock scope needs no cross-sectional ranking. Keep
+            # score and rank absent rather than inventing a numerical factor.
+            return pd.DataFrame(
+                [{"symbol": spec.symbols[0], "composite_score": None, "rank": None,
+                  "selected": True, "component_sources": "{}"}]
+            )
         values: dict[str, pd.Series] = {}
         sources: dict[str, pd.Series] = {}
         for component in spec.candidate_factors:
@@ -259,8 +266,8 @@ class DailySignalStrategyService:
         active_buy_signals: set[str] = set()
         last_prices: dict[str, float] = {}
         candidates: set[str] = set()
-        candidate_scores: dict[str, float] = {}
-        candidate_ranks: dict[str, int] = {}
+        candidate_scores: dict[str, float | None] = {}
+        candidate_ranks: dict[str, int | None] = {}
         completed_period: str | None = None
         skipped_candidate_updates: list[str] = []
         signals, orders, selections, positions, nav = [], [], [], [], []
@@ -385,7 +392,11 @@ class DailySignalStrategyService:
             pending_buys = [
                 order for order in pending_buys if order["planned_execution_date"] != current
             ]
-            for order in sorted(todays, key=lambda x: (-x["candidate_score"], x["symbol"])):
+            ordered_buys = (
+                sorted(todays, key=lambda x: (-x["candidate_score"], x["symbol"]))
+                if spec.candidate_factors else sorted(todays, key=lambda x: x["symbol"])
+            )
+            for order in ordered_buys:
                 symbol = order["symbol"]
                 row = day.loc[symbol] if symbol in day.index else None
                 reason = ""
@@ -575,7 +586,11 @@ class DailySignalStrategyService:
                     if next_day is not None:
                         pending_exits[symbol] = order
             reserved = len(holdings) + len(pending_buys)
-            for symbol in sorted(candidates, key=lambda x: (-candidate_scores[x], x)):
+            ranked_candidates = (
+                sorted(candidates, key=lambda x: (-candidate_scores[x], x))
+                if spec.candidate_factors else sorted(candidates)
+            )
+            for symbol in ranked_candidates:
                 matched, evidence = self._rules(
                     spec.buy_rules, spec.buy_rule_mode, features[symbol], current
                 )

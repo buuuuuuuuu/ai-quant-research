@@ -34,7 +34,7 @@ from ai_quant_assistant.research.daily_signal_audit import (
 def test_daily_signal_request_has_actionable_chinese_validation():
     base = _spec().to_dict()
     base["candidate_factors"] = []
-    with pytest.raises(ValueError, match="候选排序因子至少需要一项.*增加候选因子"):
+    with pytest.raises(ValueError, match="仅冻结一只股票.*候选因子"):
         DailySignalStrategyRequest.model_validate(base)
     base = _spec().to_dict()
     base["buy_rules"] = [
@@ -74,6 +74,34 @@ def _run(tmp_path, spec=None):
     database = _database(tmp_path)
     service = DailySignalStrategyService(database=database, artifact_dir=tmp_path / "artifacts")
     return service.run(spec or _spec()), database
+
+
+def test_single_stock_without_factor_keeps_score_absent_and_executes_rules(tmp_path):
+    spec = _spec(symbols=("600519",), candidate_factors=())
+    request = DailySignalStrategyRequest.model_validate(spec.to_dict())
+    assert request.candidate_factors == []
+    result, _ = _run(tmp_path, spec)
+    selections = pd.read_csv(result["artifacts"]["candidate_selections_csv"], dtype={"symbol": str})
+    signals = pd.read_csv(result["artifacts"]["signals_csv"], dtype={"symbol": str})
+    orders = pd.read_csv(result["artifacts"]["orders_csv"], dtype={"symbol": str})
+    assert set(selections.symbol) == {"600519"}
+    assert selections.selected.all()
+    assert selections.composite_score.isna().all() and selections["rank"].isna().all()
+    assert not signals.empty and not orders.empty
+    assert signals.candidate_score.isna().all() and signals.candidate_rank.isna().all()
+    assert orders.candidate_score.isna().all() and orders.candidate_rank.isna().all()
+    report = open(result["artifacts"]["html_report"], encoding="utf-8").read()
+    assert "单股日线技术信号策略报告" in report
+    assert "未进行因子评分" in report
+    assert "根据候选因子未记录合成得分" not in report
+
+
+def test_multiple_stocks_still_require_factor_even_if_request_uses_pool():
+    request = DailySignalStrategyRequest.model_validate(
+        {**_spec().to_dict(), "symbols": None, "stock_pool_id": "pool-1", "candidate_factors": []}
+    )
+    with pytest.raises(ValueError, match="仅冻结一只股票"):
+        request.to_spec(resolved_symbols=("600519", "000001"))
 
 
 def test_rule_validation_and_cross_equal_boundary():

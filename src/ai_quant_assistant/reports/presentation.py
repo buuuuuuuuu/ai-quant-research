@@ -451,8 +451,13 @@ def daily_signal_summary(spec):
         if spec.get("exit_on_candidate_drop")
         else "退出候选名单后继续持有，直到卖出信号出现"
     )
+    selection = (
+        "单只冻结股票直接参与每日信号检查，不使用候选因子排序；候选得分和排名不适用。"
+        if spec.get("candidate_factors") == [] and len(spec.get("symbols") or []) == 1
+        else f"{refresh}更新候选股票，根据{factors}合成得分，选择前 {spec.get('candidate_count', '未记录')} 只。"
+    )
     return (
-        f"{refresh}更新候选股票，根据{factors}合成得分，选择前 {spec.get('candidate_count', '未记录')} 只。"
+        selection +
         f"每天收盘后检查信号；买入规则为{buy_mode}：{buy}。满足时生成买入指令，最早在下一交易日开盘"
         "按滑点、费用、整手和资金约束尝试成交。"
         f"卖出规则为{sell_mode}：{sell}；{exit_text}。卖出受 T+1、停牌或交易限制影响时，"

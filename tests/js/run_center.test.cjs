@@ -654,18 +654,20 @@ test("daily templates only contain legal rule parameters and do not contain scop
   }
 });
 
-test("empty candidate factors show an actionable Chinese error before preflight", () => {
+test("single stock permits no factor while multi-stock still needs one", () => {
   const params = {
     candidate_factors: [], candidate_count: 1, max_positions: 1,
     buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
     sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
   };
-  const issues = ui.dailySignalIssues(params, 1);
+  const issues = ui.dailySignalIssues(params, 2);
   assert.equal(issues.length, 1);
   assert.equal(issues[0].code, "empty_candidate_factors");
   assert.equal(issues[0].target, "center-daily-candidates");
-  assert.match(issues[0].message, /增加候选因子.*重新检查本地数据/);
-  assert.match(ui.dailySignalSummary(params), /候选因子未配置/);
+  assert.match(issues[0].message, /多股范围.*增加候选排序因子/);
+  assert.deepEqual(ui.dailySignalIssues(params, 1), []);
+  assert.match(ui.dailySignalSummary(params, 1), /单只冻结股票直接参与每日信号检查/);
+  assert.doesNotMatch(ui.dailySignalSummary(params), /合成得分/);
   assert.equal(ui.dailySignalIssues({ ...params, candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }] }, 1).length, 0);
 });
 

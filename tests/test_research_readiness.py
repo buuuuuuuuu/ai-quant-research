@@ -86,6 +86,14 @@ def confirm(service, plan, **kwargs):
     )
 
 
+def test_single_stock_without_candidate_factor_checks_prices_but_not_financial_metrics(db):
+    params = {**DAILY_SIGNAL, "symbols": ["600519"], "candidate_factors": []}
+    report = ResearchReadiness(db).run("daily_signal", params)
+    assert report["input"]["resolved_symbols"] == ["600519"]
+    assert not any(item["dataset"] == "financial_metric" for item in report["checks"])
+    assert any(item["dataset"] == "daily_bar" and item["symbol"] == "600519" for item in report["checks"])
+
+
 def test_per_stock_per_signal_not_global_counts_and_existing_availability_unchanged(db):
     finance_gap(db)
     readiness = ResearchReadiness(db)

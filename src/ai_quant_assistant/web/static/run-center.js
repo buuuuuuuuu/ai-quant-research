@@ -1038,11 +1038,12 @@ const RunCenterUI = (() => {
     if (scroll) element.scrollIntoView?.({ behavior: "smooth", block: "center" });
     if (focus) element.focus?.({ preventScroll: true });
   }
-  function showFeedback(id, message, { focus = false, scroll = false } = {}) {
+  function showFeedback(id, message, { focus = false, scroll = false, tone = "error" } = {}) {
     const element = $(id);
     if (!element) return false;
     element.textContent = message || "";
-    if (message) element.className = `${element.className || ""} negative`.trim();
+    const base = id === "center-action-feedback" ? "action-feedback" : id === "center-task-feedback" ? "task-feedback" : (element.className || "").replace(/\b(?:negative|positive)\b/g, "").trim();
+    element.className = `${base} ${message ? tone === "success" ? "positive" : "negative" : ""}`.trim();
     moveTo(element, { focus, scroll });
     return true;
   }
@@ -1054,6 +1055,7 @@ const RunCenterUI = (() => {
   async function history() {
     const own = ++sequence;
     $("center-error").textContent = "";
+    if (submittedTaskTimer && typeof clearTimeout === "function") clearTimeout(submittedTaskTimer);
     $("center-list").textContent = "正在读取…";
     $("center-prev").disabled = true;
     $("center-next").disabled = true;
@@ -1067,7 +1069,8 @@ const RunCenterUI = (() => {
       if (own !== sequence) return;
       total = p.total;
       $("center-list").innerHTML = table(p.items);
-      $("center-notice").textContent = p.notice;
+      $("center-notice").className = "muted";
+      $("center-notice").textContent = p.notice || "";
       $("center-page").textContent = `第 ${page} 页 · ${total} 条`;
       $("center-prev").disabled = page <= 1;
       $("center-next").disabled = page * 20 >= total;
@@ -1075,7 +1078,8 @@ const RunCenterUI = (() => {
     } catch (e) {
       if (own === sequence) {
         $("center-list").textContent = "读取失败，请重新筛选或刷新。";
-        fail(e);
+        $("center-notice").className = "history-notice-error";
+        $("center-notice").textContent = "历史记录读取失败：" + (e?.message || String(e));
       }
     }
   }
@@ -1083,12 +1087,16 @@ const RunCenterUI = (() => {
     const status = task?.status || "unknown";
     const detail = new URLSearchParams({ source: "task", record: task?.task_id || submittedTaskId });
     const complete = ["succeeded", "partial", "failed", "cancelled"].includes(status);
+    const hasProgress = task?.progress !== null && task?.progress !== undefined && Number.isFinite(Number(task.progress));
+    const progress = hasProgress ? Math.min(100, Math.max(0, Number(task.progress))) : null;
     const message = status === "failed"
       ? task.error || "任务失败，请打开详情查看原因。"
       : ["succeeded", "partial"].includes(status)
         ? "回测已完成，可以查看详情。"
-        : "已提交，正在等待执行或运行中。";
-    return `<article class="submitted-task ${esc(status)}" tabindex="-1"><p class="preflight-kicker">刚提交的日线信号策略</p><h3>${esc(labels[status] || enumName(status))}</h3><p><code>${esc(task?.task_id || submittedTaskId)}</code></p><p>${esc(status === "cancelled" ? "等待中的任务已取消，没有运行回测。" : message)}</p><p>进度：${esc(known(task?.progress))}%${task?.message ? ` · ${esc(task.message)}` : ""}</p>${status === "queued" ? '<button type="button" data-cancel-daily-task>取消等待中的任务</button>' : ""}${complete ? `<a href="/backtests/detail?${esc(detail.toString())}">查看详情</a>` : ""}</article>`;
+        : status === "queued" ? "任务已排队，等待后台开始执行。"
+          : status === "running" ? "任务正在执行；页面关闭后仍可从历史记录查看。"
+            : "任务状态暂未记录，请刷新后查看。";
+    return `<article class="submitted-task ${esc(status)}" tabindex="-1"><p class="preflight-kicker">刚提交的日线信号策略</p><h3>${esc(labels[status] || enumName(status))}</h3><p>任务 ID：<code>${esc(task?.task_id || submittedTaskId)}</code></p><p>${esc(status === "cancelled" ? "等待中的任务已取消，没有运行回测。" : message)}</p><p>进度：${progress === null ? "未记录" : `${progress}%`}${task?.message ? ` · ${esc(task.message)}` : ""}</p>${progress === null ? "" : `<div class="submitted-task-progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style="width:${progress}%"></span></div>`}<div class="submitted-task-actions"><button type="button" data-refresh-daily-task>刷新任务状态</button>${status === "queued" ? '<button type="button" data-cancel-daily-task>取消等待中的任务</button>' : ""}${complete ? `<a href="/backtests/detail?${esc(detail.toString())}">查看详情</a>` : ""}</div></article>`;
   }
   async function loadSubmittedTask(taskId, own = sequence) {
     if (!taskId || !$(`center-submitted-task`)) return;
@@ -1105,7 +1113,7 @@ const RunCenterUI = (() => {
       }
     } catch (error) {
       if (own === sequence && submittedTaskId === taskId)
-        $("center-submitted-task").innerHTML = `<p class="negative">刚提交任务暂时无法读取：${esc(error.message)}</p>`;
+        $("center-submitted-task").innerHTML = `<article class="submitted-task failed"><p class="negative">任务状态暂时无法读取：${esc(error.message)}</p><button type="button" data-refresh-daily-task>重新读取任务</button></article>`;
     }
   }
   function historyState(q) {
@@ -1117,10 +1125,11 @@ const RunCenterUI = (() => {
     try {
       row = await get("/api/v1/run-center/record?" + query);
     } catch (e) {
-      if (own === sequence) fail(e);
+      if (own === sequence) fail(e, { target: "center-result", focus: true, scroll: false });
       return;
     }
     if (own !== sequence) return;
+    $("center-result").className = "";
     $("center-title").textContent = row.label + " · 运行详情";
     $("center-identity").innerHTML =
       `<dl class="center-meta"><div><dt>运行身份</dt><dd>${esc(row.run_id || row.record_id)}</dd></div><div><dt>冻结范围</dt><dd>${scope(row)}</dd></div><div><dt>研究区间</dt><dd>${esc(known(row.start_date))} → ${esc(known(row.end_date))}</dd></div><div><dt>状态</dt><dd>${esc(labels[row.status] || row.status)}</dd></div><div><dt>${row.started_at ? "运行开始" : "记录创建"}</dt><dd>${esc(known(row.started_at || row.created_at))}</dd></div><div><dt>运行完成</dt><dd>${esc(known(row.completed_at))}</dd></div></dl>`;
@@ -1379,6 +1388,41 @@ const RunCenterUI = (() => {
     }
   }
   const readinessKinds = new Set(["factor_backtest", "factor_lab", "daily_signal", "screen"]);
+  function setActiveDailyStep(targetId) {
+    const nav = $("center-daily-progress");
+    if (!nav || nav.hidden) return;
+    for (const link of nav.querySelectorAll("a[href^='#']")) {
+      if (link.getAttribute("href") === `#${targetId}`) link.setAttribute("aria-current", "step");
+      else link.removeAttribute("aria-current");
+    }
+  }
+  function wireDailyProgress() {
+    const nav = $("center-daily-progress");
+    if (!nav || nav.hidden) return;
+    nav.addEventListener("click", (event) => {
+      const link = event.target.closest?.("a[href^='#center-']");
+      if (link) setActiveDailyStep(link.getAttribute("href").slice(1));
+    });
+    if (typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length) setActiveDailyStep(visible[0].target.id);
+    }, { rootMargin: "-155px 0px -65% 0px", threshold: 0 });
+    for (const link of nav.querySelectorAll("a[href^='#']")) {
+      const section = $(link.getAttribute("href").slice(1));
+      if (section) observer.observe(section);
+    }
+  }
+  function jumpToCurrentIssue() {
+    const form = $("center-copy-form");
+    const invalidField = form?.querySelector?.('[aria-invalid="true"]');
+    const issueSection = form?.querySelector?.(".field-errors")?.closest?.("fieldset, details");
+    const blocked = checked && !(checked.report.ready === true || checked.report.status === "ready");
+    const target = invalidField || issueSection || (blocked ? $("center-preflight-result") : $("center-daily-errors"));
+    if (target?.tagName === "DETAILS") target.open = true;
+    moveTo(target);
+  }
   function setActionState() {
     if (!copy) return;
     const preflightButton = $("center-preflight");
@@ -1394,7 +1438,8 @@ const RunCenterUI = (() => {
         invalid = true;
       }
     }
-    if (scopePending) reason = "正在读取所选股票池的冻结范围，请稍候。";
+    if (busy) reason = "正在处理当前操作，请稍候。";
+    else if (scopePending) reason = "正在读取所选股票池的冻结范围，请稍候。";
     else if (scopeError) reason = `股票范围读取失败：${scopeError}`;
     else if (invalid) reason = "请先修正页面中标出的配置问题。";
     else if (!checked) reason = "配置已就绪；请先检查本地数据。检查不会联网。";
@@ -1409,6 +1454,12 @@ const RunCenterUI = (() => {
       submitButton.title = submitButton.disabled ? reason : "先打开提交前核对，不会立即执行";
     }
     if ($("center-action-reason")) $("center-action-reason").textContent = reason;
+    const state = busy || scopePending ? "loading" : scopeError || invalid ? "invalid" : !checked ? "unchecked" : submitButton?.disabled ? "blocked" : "ready";
+    if ($("center-daily-actions")) $("center-daily-actions").className = `daily-action-bar state-${state}`;
+    if ($("center-jump-issue")) {
+      $("center-jump-issue").hidden = !(state === "invalid" || state === "blocked");
+      $("center-jump-issue").textContent = state === "invalid" ? "定位配置问题" : "查看预检问题";
+    }
   }
   function clearDailyIssues() {
     for (const id of ["center-scope-feedback", "center-candidate-feedback", "center-buy-feedback", "center-sell-feedback"])
@@ -1534,6 +1585,7 @@ const RunCenterUI = (() => {
           query.has("data_plan")
             ? Error("补齐计划恢复失败：" + e.message)
             : e,
+          { target: "center-copy-warning", focus: true, scroll: false },
         );
       return;
     }
@@ -1595,6 +1647,7 @@ const RunCenterUI = (() => {
     scopeAdjustment = data.params.scope_adjustment || null;
     $("center-title").textContent =
       data.label + (freshKind ? " · 新建配置" : " · 复制配置");
+    $("center-page-description").textContent = "先设置研究范围与条件，再检查本地数据。只有提交前再次确认后，才会创建回测任务。";
     $("center-configure-title").textContent =
       data.label + (freshKind ? " · 新建配置" : " · 复制配置");
     $("center-copy-source").textContent = data.source_run_id
@@ -1687,6 +1740,7 @@ const RunCenterUI = (() => {
     for (const id of ["center-daily-progress", "center-daily-mode", "center-daily-templates", "center-daily-candidates", "center-daily-buy", "center-daily-sell", "center-daily-summary"])
       $(id).hidden = !isDaily;
     if (isDaily) {
+      wireDailyProgress();
       const assumptions = catalog.daily_signal_execution || {};
       $("center-execution-assumptions").innerHTML = Object.values(assumptions)
         .map((item) => `<li>${esc(item)}</li>`).join("");
@@ -1710,7 +1764,7 @@ const RunCenterUI = (() => {
           $("center-factor-rows").querySelectorAll(".factor-editor-row")
             .length >= 12
         ) {
-          fail(Error("最多 12 个因子"));
+          fail(Error("最多 12 个因子"), { target: "center-common-feedback", focus: true, scroll: false });
           return;
         }
         $("center-factor-rows").insertAdjacentHTML("beforeend", factorRow());
@@ -1718,7 +1772,7 @@ const RunCenterUI = (() => {
       });
     if ($("center-candidate-factor-add"))
       $("center-candidate-factor-add").addEventListener("click", () => {
-        if ($("center-candidate-factor-rows").querySelectorAll(".candidate-factor-row").length >= 12) return fail(Error("最多 12 个候选因子"));
+        if ($("center-candidate-factor-rows").querySelectorAll(".candidate-factor-row").length >= 12) return fail(Error("最多 12 个候选因子"), { target: "center-candidate-feedback", focus: true, scroll: false });
         $("center-candidate-factor-rows").insertAdjacentHTML("beforeend", candidateFactorRow());
         invalidate();
       });
@@ -1808,7 +1862,7 @@ const RunCenterUI = (() => {
           invalidate();
           scopeAdjustment = adjustment;
           refreshDailyUX();
-          showFeedback("center-action-feedback", `已从本次研究排除 ${symbol}。请重新检查当前 ${next.length} 只股票；不会自动下载或提交。`, { scroll: false });
+          showFeedback("center-action-feedback", `已从本次研究排除 ${symbol}。请重新检查当前 ${next.length} 只股票；不会自动下载或提交。`, { scroll: false, tone: "success" });
         } catch (error) {
           fail(error, { target: "center-action-feedback", focus: true, scroll: false });
         }
@@ -1848,7 +1902,7 @@ const RunCenterUI = (() => {
           else schedulePlanRefresh(planOwn);
         }
       } catch (error) {
-        if (planOwn === planSequence) fail(Error("补齐计划恢复失败：" + error.message));
+        if (planOwn === planSequence) fail(Error("补齐计划恢复失败：" + error.message), { target: "center-action-feedback", focus: true, scroll: false });
       }
     }
   }
@@ -2086,6 +2140,7 @@ const RunCenterUI = (() => {
     if (busy || !copy || copy.kind !== "daily_signal") return;
     const own = planSequence;
     busy = true;
+    setActionState();
     try {
       if (action === "create") {
         const params = currentParams();
@@ -2155,7 +2210,11 @@ const RunCenterUI = (() => {
     if (planTimer && typeof clearTimeout === "function") clearTimeout(planTimer);
     if ($("center-data-plan")) $("center-data-plan").hidden = true;
     busy = true;
-    if ($("center-action-feedback")) $("center-action-feedback").textContent = "正在检查当前配置的本地数据…";
+    setActionState();
+    if ($("center-action-feedback")) {
+      $("center-action-feedback").className = "action-feedback";
+      $("center-action-feedback").textContent = "正在检查当前配置的本地数据…";
+    }
     $("center-preflight").disabled = true;
     $("center-submit").disabled = true;
     try {
@@ -2168,9 +2227,9 @@ const RunCenterUI = (() => {
       });
       if (own !== planSequence || paramsKey(params) !== paramsKey(currentParams())) return;
       $("center-preflight-result").innerHTML = renderPreflight(p);
-      $("center-action-feedback").textContent = p.ready === true || p.status === "ready"
+      showFeedback("center-action-feedback", p.ready === true || p.status === "ready"
         ? "检查完成：当前数据可以进入提交前核对。"
-        : "检查完成：请处理下方问题卡片后重新检查。";
+        : "检查完成：请处理下方问题卡片后重新检查。", { tone: p.ready === true || p.status === "ready" ? "success" : "error" });
       checked = { params: paramsKey(params), report: p };
       $("center-warmup-summary").hidden = !p.technical_warmup_explanation;
       $("center-warmup-summary").textContent = p.technical_warmup_explanation || "";
@@ -2208,12 +2267,13 @@ const RunCenterUI = (() => {
         $("center-review-content").innerHTML =
           `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
         $("center-review").hidden = false;
-        $("center-review").scrollIntoView({ block: "nearest" });
+        moveTo($("center-review"));
         return;
       }
       if (!window.confirm("确认使用这些参数提交新的" + copy.label + "？"))
         return;
       busy = true;
+      setActionState();
       $("center-submit").disabled = true;
       const p = await get(copy.endpoint, {
         method: "POST",
@@ -2302,6 +2362,12 @@ const RunCenterUI = (() => {
     }
     if (!$("center-history")) return;
     const query = new URLSearchParams(location.search);
+    const onHistory = location.pathname.endsWith("/history");
+    for (const link of document.querySelectorAll?.(".section-links a") || []) {
+      if (link.getAttribute("href") === (onHistory ? "/backtests/history" : "/backtests"))
+        link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
     submittedTaskId = query.get("submitted");
     const configKind = location.pathname.endsWith("/factors")
       ? "factor_lab"
@@ -2321,6 +2387,7 @@ const RunCenterUI = (() => {
     if (location.pathname.endsWith("/detail")) {
       $("center-history").hidden = true;
       $("center-detail").hidden = false;
+      $("center-page-description").textContent = "查看本次运行的身份、结果、数据限制与已保存证据。";
       await detail(query);
     } else if (location.pathname.endsWith("/configure") || configKind) {
       $("center-history").hidden = true;
@@ -2328,6 +2395,7 @@ const RunCenterUI = (() => {
       $("center-copy-form").addEventListener("input", invalidate);
       $("center-copy-form").addEventListener("submit", submit);
       $("center-preflight").addEventListener("click", preflight);
+      $("center-jump-issue").addEventListener("click", jumpToCurrentIssue);
       $("center-plan-create").addEventListener("click", () => planAction("create"));
       $("center-plan-confirm").addEventListener("click", () => planAction("confirm"));
       $("center-plan-retry").addEventListener("click", () => planAction("retry"));
@@ -2350,19 +2418,29 @@ const RunCenterUI = (() => {
         return;
       }
       $("center-title").textContent = "研究与回测历史";
+      $("center-page-description").textContent = "按类型和状态查找运行；刚提交的任务会在列表前单独显示。";
       if (submittedTaskId) submittedTaskPolls = 0;
       for (const k of ["kind", "status"])
         $("center-" + k).value = query.get(k) || "";
       if (submittedTaskId) $("center-kind").value = "daily_signal";
       $("center-submitted-task").addEventListener("click", async (event) => {
+        if (event.target.closest?.("[data-refresh-daily-task]")) {
+          submittedTaskPolls = 0;
+          $("center-task-feedback").textContent = "";
+          await history();
+          return;
+        }
         if (!event.target.closest?.("[data-cancel-daily-task]") || !submittedTaskId) return;
         const taskId = submittedTaskId;
         if (!window.confirm(`确认取消仍在等待中的回测任务 ${taskId}？如果已开始运行，将不会中断。`)) return;
         try {
           await get(`/api/v1/daily-signal-strategies/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
-          if (submittedTaskId === taskId) await history();
+          if (submittedTaskId === taskId) {
+            $("center-task-feedback").textContent = "";
+            await history();
+          }
         } catch (error) {
-          if (submittedTaskId === taskId) fail(error, { target: "center-error", focus: true, scroll: false });
+          if (submittedTaskId === taskId) fail(error, { target: "center-task-feedback", focus: true, scroll: false });
         }
       });
       page = Math.max(1, Math.min(10000, Number(query.get("page")) || 1));

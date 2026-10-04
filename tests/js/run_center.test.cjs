@@ -1256,3 +1256,48 @@ test("submitted history uses one exact task read and highlights persisted status
   assert.equal(h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies/task-123").length, 1);
   assert.ok(h.calls.every((call) => !call.url.includes("daily-signal-strategies?")));
 });
+
+test("history task card refreshes the exact task without submitting another run", async () => {
+  let status = "queued";
+  const h = harness(
+    "/backtests/history",
+    async (url) => url.startsWith("/api/v1/run-center?")
+      ? { items: [], total: 0, notice: "bounded" }
+      : { task_id: "task-123", status, progress: status === "queued" ? 0 : 100 },
+    { search: "?kind=daily_signal&submitted=task-123" },
+  );
+  await tick();
+  await tick();
+  assert.match(h.element("center-submitted-task").innerHTML, /role="progressbar"/);
+  assert.match(h.element("center-submitted-task").innerHTML, /取消等待中的任务/);
+  status = "succeeded";
+  await h.element("center-submitted-task").listeners.click({
+    target: { closest: (selector) => selector === "[data-refresh-daily-task]" ? {} : null },
+  });
+  assert.match(h.element("center-submitted-task").innerHTML, /回测已完成/);
+  assert.match(h.element("center-submitted-task").innerHTML, /查看详情/);
+  assert.equal(h.calls.filter((call) => call.url === "/api/v1/daily-signal-strategies/task-123").length, 2);
+  assert.ok(h.calls.every((call) => !call.options.method));
+});
+
+test("history read errors stay beside the filters", async () => {
+  const h = harness("/backtests/history", async () => ({ error: "数据库暂时不可用" }), { search: "" });
+  await tick();
+  await tick();
+  assert.match(h.element("center-notice").textContent, /数据库暂时不可用/);
+  assert.equal(h.element("center-notice").className, "history-notice-error");
+  assert.equal(h.element("center-error").textContent, "");
+});
+
+test("blocked check exposes a local problem shortcut without submitting", async () => {
+  const h = harness("/backtests/configure", async (url) => url.includes("/copy?")
+    ? structuredClone(copied)
+    : { status: "blocked", ready: false, blockers: ["缺少本地行情"] });
+  await tick();
+  await h.ui.preflight();
+  assert.equal(h.element("center-jump-issue").hidden, false);
+  assert.equal(h.element("center-jump-issue").textContent, "查看预检问题");
+  assert.match(h.element("center-daily-actions").className, /state-blocked/);
+  h.element("center-jump-issue").listeners.click();
+  assert.equal(h.calls.length, 2);
+});

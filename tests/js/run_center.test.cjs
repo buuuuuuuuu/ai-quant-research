@@ -765,7 +765,7 @@ test("preflight groups duplicate root causes and renders typed actions", () => {
   const html = ui.renderPreflight(report);
   assert.match(html, /2 类问题 · 23 项原始检查未通过/);
   assert.match(html, /data-field="end_date"/);
-  assert.match(html, /查看处理计划（只生成计划、不联网）/);
+  assert.match(html, /生成并查看处理计划（只生成计划、不联网）/);
   assert.doesNotMatch(html, /重复项/);
 });
 
@@ -1057,6 +1057,9 @@ test("day selection ignores an older date response and keeps the newer card", as
   h.element("center-price-window").value = "all";
   h.element("center-price-events").value = "all";
   h.element("center-price-detail").hidden = true;
+  const documentListeners = {};
+  h.context.document.addEventListener = (name, handler) => { (documentListeners[name] ||= []).push(handler); };
+  h.context.document.querySelectorAll = () => [];
   await h.ui.detail("source=index&record=daily");
   await tick();
   assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
@@ -1079,6 +1082,21 @@ test("day selection ignores an older date response and keeps the newer card", as
     target: { closest: (selector) => selector === "[data-price-event-date]" ? { getAttribute: () => "2024-01-03" } : null },
   });
   assert.equal(h.element("center-price-position").value, "1");
+  const panel = h.element("center-price-detail"), chartElement = h.element("center-price-chart");
+  panel.contains = (target) => target === panel;
+  chartElement.focus = () => { chartElement.focused = true; };
+  chartElement.listeners.click({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  assert.equal(panel.hidden, false);
+  for (const listener of documentListeners.click || []) listener({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  assert.equal(panel.hidden, false, "opening click must not immediately dismiss the detail");
+  for (const listener of documentListeners.click || []) listener({ target: { closest: () => null } });
+  assert.equal(panel.hidden, true);
+  assert.equal(chartElement.focused, undefined, "outside click must not steal focus");
+  chartElement.listeners.click({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  h.context.document.activeElement = panel;
+  for (const listener of documentListeners.keydown || []) listener({ key: "Escape" });
+  assert.equal(panel.hidden, true);
+  assert.equal(chartElement.focused, true, "Escape from the panel returns focus to the chart");
 });
 
 test("event-only chart does not invent a signal price", () => {
@@ -1149,6 +1167,51 @@ test("preflight merges identical none and qfq gaps only in the display layer", (
   const html = ui.renderPreflight(report);
   assert.match(html, /1 组；底层 2 项/);
   assert.match(html, /data-exclude-problem="000333"/);
+  assert.match(html, /data-check-symbol="000333"/);
+  assert.match(html, /data-clear-problem-filter/);
+});
+
+test("problem action creates a read-only plan once and the symbol filter can be cleared", async () => {
+  const params = {
+    symbols: ["000333", "600022"], start_date: "2025-01-01", end_date: "2025-12-31",
+    candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }], candidate_count: 1, max_positions: 1,
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules, sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+  };
+  const report = { ready: false, status: "blocked", complete: false,
+    checks: [{ symbol: "000333", dataset: "daily_bar", status: "missing", reason: "缺口待核验" }],
+    recommendations: [{ code: "price_gaps", title: "待核验", action_kind: "data_plan" }] };
+  const h = harness("/backtests/daily-signals", (url) => {
+    if (url.includes("/configuration?")) return { kind: "daily_signal", label: "日线信号策略", params, schema: { properties: {} }, warnings: [], missing_fields: [], scope: params.symbols };
+    if (url.includes("/stock-pools?")) return [];
+    if (url === "/api/v1/research-data/preflight") return report;
+    if (url === "/api/v1/research-data/plans") return { plan_id: "data-plan-1", status: "draft", input: { parameters: params, resolved_symbols: params.symbols }, items: [], report };
+    throw Error(`unexpected request ${url}`);
+  });
+  await tick();
+  await tick();
+  await h.element("center-preflight").listeners.click();
+  assert.match(h.element("center-preflight-result").innerHTML, /缺口待核验/);
+  const root = h.element("center-preflight-result");
+  const rows = ["000333", "000333", "000333", "600022"].map((symbol, index) => ({ dataset: { checkSymbol: symbol, checkStatus: index === 2 ? "ready" : "missing" }, hidden: false, querySelector: () => null }));
+  const trigger = { dataset: { showProblem: "000333" }, focused: false, focus() { this.focused = true; } };
+  const label = { textContent: "" };
+  const filter = { hidden: true, dataset: {}, querySelector: () => label };
+  root.querySelector = (selector) => selector === "[data-preflight-filter]" ? filter : null;
+  root.querySelectorAll = (selector) => selector === ".preflight-checks tbody tr" ? rows : selector === "[data-show-problem]" ? [trigger] : [];
+  root.listeners.click({ target: { closest: (selector) => selector.includes("data-show-problem") ? trigger : null } });
+  assert.deepEqual(rows.map((item) => item.hidden), [false, false, true, true]);
+  assert.equal(filter.hidden, false);
+  assert.match(label.textContent, /2 项检查/);
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-clear-problem-filter]" ? {} : null } });
+  assert.deepEqual(rows.map((item) => item.hidden), [false, false, false, false]);
+  assert.equal(filter.hidden, true);
+  assert.equal(trigger.focused, true);
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-preflight-action]" ? { dataset: { preflightAction: "show-plan" } } : null } });
+  await tick();
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-preflight-action]" ? { dataset: { preflightAction: "show-plan" } } : null } });
+  await tick();
+  assert.equal(h.calls.filter((call) => call.url === "/api/v1/research-data/plans").length, 1);
+  assert.equal(h.calls.filter((call) => call.url.includes("/confirm") || call.url.includes("/verify-gaps")).length, 0);
 });
 
 test("trust summary escapes excluded reasons and keeps unknown values unrecorded", () => {

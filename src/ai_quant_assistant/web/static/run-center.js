@@ -205,7 +205,7 @@ const RunCenterUI = (() => {
     if (item.action_kind === "edit_field" && item.field)
       return `<button type="button" data-preflight-action="focus-field" data-field="${esc(item.field)}">修改${esc(titles[item.field] || item.field)}</button>`;
     if (["data_plan", "inspect_price_gaps", "verify_price_gaps"].includes(item.action_kind))
-      return '<button type="button" data-preflight-action="show-plan">查看处理计划（只生成计划、不联网）</button>';
+      return '<button type="button" data-preflight-action="show-plan">生成并查看处理计划（只生成计划、不联网）</button>';
     if (item.action_kind === "edit_candidate_factors")
       return '<button type="button" data-preflight-action="focus-section" data-target="center-daily-candidates">修改候选因子</button>';
     return "";
@@ -270,7 +270,7 @@ const RunCenterUI = (() => {
       return `${known(start)} 至 ${known(end)}`;
     };
     const checkTable = checks.length
-      ? `<section><h3>默认检查结果</h3><div class="table-shell"><table class="preflight-checks"><thead><tr><th>对象</th><th>检查项</th><th>口径 / 因子</th><th>需要覆盖</th><th>本地覆盖</th><th>状态与原因</th></tr></thead><tbody>${checks
+      ? `<section><h3>默认检查结果</h3><div class="preflight-filter" data-preflight-filter hidden><span data-preflight-filter-label tabindex="-1"></span><button type="button" data-clear-problem-filter>显示全部检查</button></div><div class="table-shell"><table class="preflight-checks"><thead><tr><th>对象</th><th>检查项</th><th>口径 / 因子</th><th>需要覆盖</th><th>本地覆盖</th><th>状态与原因</th></tr></thead><tbody>${checks
           .slice(0, 100)
           .map((item) => {
             const detail = item.metric
@@ -290,7 +290,7 @@ const RunCenterUI = (() => {
             const gapDetails = gaps ? `<details><summary>查看缺失日期与分类</summary><ul>${gaps}</ul>${item.gap_details_truncated ? `<p>另有 ${esc(item.gap_details_truncated)} 条未显示。</p>` : ""}${verifyLink}</details>` : "";
             const problemAction = item.dataset === "daily_bar" && item.status !== "ready" && /^[0-9]{6}$/.test(item.symbol || "")
               ? `<button type="button" data-show-problem="${esc(item.symbol)}">只看这只股票的问题</button> <button type="button" data-exclude-problem="${esc(item.symbol)}">从本次研究排除</button>` : "";
-            return `<tr><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small>${gapDetails}${problemAction}</td></tr>`;
+            return `<tr data-check-symbol="${esc(item.symbol || "")}" data-check-status="${esc(item.status || "")}"><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small>${gapDetails}${problemAction}</td></tr>`;
           })
           .join("")}</tbody></table></div>${checks.length > 100 ? "<p>仅展示前 100 项检查。</p>" : ""}</section>`
       : "";
@@ -495,6 +495,8 @@ const RunCenterUI = (() => {
     return `<details class="term-help" data-term="${esc(key)}"><summary>${esc(visible)}<button type="button" aria-label="查看${esc(item.label)}解释" aria-expanded="false">?</button></summary><div class="term-card"><button class="term-close" type="button" data-term-close aria-label="关闭${esc(item.label)}解释">关闭</button><strong>${esc(item.professional)}</strong><p>${esc(item.short)}</p><p><b>口径：</b>${esc(item.calculation)}</p><p><b>例子：</b>${esc(item.example)}</p><p><b>限制：</b>${esc(item.limitations)}</p><code>${esc(item.code)}</code></div></details>`;
   }
   let termDismissBound = false;
+  let priceDismissBound = false;
+  let activePriceDismiss = null;
   function wireTermHelp(root = document) {
     if (!termDismissBound && typeof document.addEventListener === "function") {
       const closeTerms = (except = null, restoreFocus = false) => {
@@ -1346,10 +1348,27 @@ const RunCenterUI = (() => {
         let priceDates = [];
         const priceDayCache = new Map();
         const priceDetail = $("center-price-detail");
-        const closePriceDetail = () => {
+        const closePriceDetail = (restoreFocus = true) => {
           priceDetail.hidden = true;
-          $("center-price-chart")?.focus?.({ preventScroll: true });
+          if (restoreFocus) $("center-price-chart")?.focus?.({ preventScroll: true });
         };
+        activePriceDismiss = {
+          click(event) {
+            if (own !== sequence || priceDetail.hidden || priceDetail.contains?.(event.target)) return;
+            // The preview's button opens this panel during the same bubbling click.
+            if (event.target.closest?.("[data-price-open-day]")) return;
+            closePriceDetail(false);
+          },
+          keydown(event) {
+            if (own !== sequence || priceDetail.hidden || event.key !== "Escape") return;
+            closePriceDetail(priceDetail.contains?.(document.activeElement) === true);
+          },
+        };
+        if (!priceDismissBound && typeof document.addEventListener === "function") {
+          document.addEventListener("click", (event) => activePriceDismiss?.click(event));
+          document.addEventListener("keydown", (event) => activePriceDismiss?.keydown(event));
+          priceDismissBound = true;
+        }
         const setPriceDay = (day) => {
           priceDay = day;
           redrawPriceChart();
@@ -1475,9 +1494,6 @@ const RunCenterUI = (() => {
         });
         priceDetail.addEventListener("click", (event) => {
           if (event.target.closest?.("[data-price-close-day]")) closePriceDetail();
-        });
-        priceDetail.addEventListener("keydown", (event) => {
-          if (event.key === "Escape") closePriceDetail();
         });
         if (typeof window.addEventListener === "function") window.addEventListener("resize", redrawPriceChart, { passive: true });
         if (chartSymbols.length) loadPriceChart();
@@ -2044,16 +2060,34 @@ const RunCenterUI = (() => {
       }
     });
     $("center-preflight-result").addEventListener("click", (event) => {
+      const preflightRoot = $("center-preflight-result");
+      if (event.target.closest?.("[data-clear-problem-filter]")) {
+        const filter = preflightRoot.querySelector("[data-preflight-filter]");
+        preflightRoot.querySelectorAll(".preflight-checks tbody tr").forEach((row) => { row.hidden = false; });
+        const selected = filter?.dataset.symbol;
+        filter.hidden = true;
+        [...preflightRoot.querySelectorAll("[data-show-problem]")]
+          .find((button) => button.dataset.showProblem === selected)?.focus?.({ preventScroll: true });
+        return;
+      }
       const symbolButton = event.target.closest?.("[data-show-problem],[data-exclude-problem]");
       if (symbolButton && checked?.report) {
         const symbol = symbolButton.dataset.showProblem || symbolButton.dataset.excludeProblem;
         const issues = (checked.report.checks || []).filter((item) => item.symbol === symbol && item.status !== "ready");
         if (!issues.length) return;
-        for (const row of $("center-preflight-result").querySelectorAll("tr")) {
-          row.hidden = !row.textContent.includes(symbol) && !row.querySelector("th");
-          if (row.textContent.includes(symbol)) row.querySelector("details")?.setAttribute("open", "");
-        }
         if (symbolButton.dataset.showProblem) {
+          const rows = [...preflightRoot.querySelectorAll(".preflight-checks tbody tr")];
+          const matches = rows.filter((row) => row.dataset.checkSymbol === symbol && row.dataset.checkStatus !== "ready");
+          rows.forEach((row) => {
+            row.hidden = !matches.includes(row);
+            if (!row.hidden) row.querySelector("details")?.setAttribute("open", "");
+          });
+          const filter = preflightRoot.querySelector("[data-preflight-filter]");
+          if (filter) {
+            filter.hidden = false;
+            filter.dataset.symbol = symbol;
+            filter.querySelector("[data-preflight-filter-label]").textContent = `只看 ${symbol}：显示 ${matches.length} 项检查（包含不同复权口径）；可点击“显示全部检查”恢复。`;
+          }
           showFeedback("center-action-feedback", `${symbol}：${issues.map((item) => item.reason || "问题原因未记录").join("；")}。可以查看日期和证据，或主动排除并重新预检。`, { scroll: false });
           return;
         }
@@ -2107,7 +2141,9 @@ const RunCenterUI = (() => {
         moveTo($(action.dataset.target));
       } else if (action.dataset.preflightAction === "show-plan") {
         moveTo($("center-data-plan"), { focus: false, scroll: true });
-        $("center-plan-create")?.focus?.();
+        if (dataPlan?.input?.parameters && paramsKey(dataPlan.input.parameters) === paramsKey(currentParams()))
+          $("center-plan-status")?.focus?.({ preventScroll: true });
+        else planAction("create");
       }
     });
     $("center-missing-confirm").parentElement.hidden =
@@ -2465,7 +2501,7 @@ const RunCenterUI = (() => {
         $("center-plan-confirm").hidden = true;
         $("center-plan-retry").hidden = true;
         $("center-plan-refresh").hidden = true;
-        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“查看处理计划”只会冻结参数并判断下一步是补行情还是核验证据，不会联网。</p>';
+        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“生成并查看处理计划”只会冻结参数并判断下一步是补行情还是核验证据，不会联网。</p>';
       }
     } catch (e) {
       if (own === planSequence) fail(e, { target: "center-action-feedback", focus: true, scroll: true });

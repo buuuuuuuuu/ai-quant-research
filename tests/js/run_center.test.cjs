@@ -913,9 +913,118 @@ test("price signal chart keeps adjusted prices separate from raw execution event
   assert.deepEqual(model.events.map((item) => item.kind), ["buy-signal", "planned", "executed"]);
   const html = ui.renderPriceSignalChart(payload, 3);
   assert.match(html, /价格（信号复权口径）/);
-  assert.match(html, /未复权开盘参考价 101/);
+  assert.match(html, /点击曲线附近或事件圆点/);
+  assert.match(html, /data-price-event-date="2024-01-05"/);
+  assert.match(html, /price-selected-point/);
   assert.match(html, /price-event executed/);
-  assert.doesNotMatch(html, /101\.00,[0-9.]+/);
+  assert.doesNotMatch(html, /101\.00/);
+});
+
+test("price chart selects actual saved dates across sampling and missing prices", () => {
+  const payload = {
+    symbol: "600519", price_adjustment: "qfq", price_range: { minimum: 10, maximum: 16 },
+    date_index: ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"],
+    missing_dates: { signal_close: ["2024-01-04"], ma_2: ["2024-01-03", "2024-01-04"] },
+    series: [
+      { date: "2024-01-02", signal_close: 10, ma_2: null },
+      { date: "2024-01-05", signal_close: 15, ma_2: 13 },
+      { date: "2024-01-08", signal_close: 16, ma_2: 14 },
+    ],
+    signals: [{ signal_date: "2024-01-03", action: "buy" }, { signal_date: "2024-01-03", action: "sell" }],
+    orders: [{ planned_execution_date: "2024-01-04", execution_date: "2024-01-05", status: "executed", execution_price: 108 }],
+  };
+  const model = ui.priceChartModel(payload, 1);
+  assert.equal(model.selected, null); // The exact unsampled row is read by the day endpoint.
+  assert.equal(model.dates[0], "2024-01-02");
+  assert.equal(model.dates.at(-1), "2024-01-08");
+  assert.equal(model.segments.signal_close.length, 2);
+  assert.equal(model.events.filter((event) => event.date === "2024-01-03").length, 2);
+  const html = ui.renderPriceSignalChart(payload, 1, 3, "all", { date: "2024-01-03", price: { signal_close: 11 } });
+  assert.match(html, /price-selected-point price-close/);
+  assert.match(html, /2024-01-03/);
+  assert.doesNotMatch(html, /108\.00/);
+  assert.equal(ui.nearestPriceDateIndex(payload.date_index, "2024-01-06"), 3);
+});
+
+test("day detail separates saved signals, planned instructions, executions and missing values", () => {
+  const day = {
+    date: "2024-01-03", symbol: "600519", price: { signal_close: null, ma_2: 11 },
+    signals: [{ action: "buy", signal_price: null, rule_evidence: '<script>alert(1)</script>', planned_execution_date: "2024-01-04" }],
+    orders: [
+      { signal_date: "2024-01-02", planned_execution_date: "2024-01-03", execution_date: "2024-01-04", side: "buy", status: "executed", execution_price: 101, shares: 100 },
+      { signal_date: "2024-01-02", planned_execution_date: "2024-01-03", execution_date: "2024-01-03", side: "sell", status: "unfilled", reason: "t_plus_one", shares: null },
+    ], account: null,
+  };
+  const html = ui.renderPriceDayDetail(day);
+  assert.match(html, /当天尚无实际尝试记录/);
+  assert.match(html, /当日尝试但未成交/);
+  assert.match(html, /当天账户快照未记录/);
+  assert.match(html, /未记录/);
+  assert.doesNotMatch(html, /101\.00/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(ui.renderPriceDayPreview(day), /当天产生 1 条新信号/);
+  const explained = ui.renderPriceDayDetail({ ...day, signals: [{ action: "buy", rule_evidence: JSON.stringify([{ rule: { kind: "ma_cross", operator: "cross_above", short_window: 5, long_window: 20 }, matched: true, values: { ma_5: 10, ma_20: 9 } }]) }] });
+  assert.match(explained, /MA5从下方向上穿越 MA20/);
+  assert.match(explained, /ma_5 10/);
+});
+
+test("day selection ignores an older date response and keeps the newer card", async () => {
+  let releaseOld;
+  const record = { ...row("daily"), kind: "daily_signal", label: "日线信号策略", status: "succeeded", run_id: "daily-signal-20240108T000000Z-00000001", spec: { symbols: ["600519"], initial_capital: 1000 }, result: {} };
+  const chart = {
+    symbol: "600519", price_adjustment: "qfq", date_index: ["2024-01-02", "2024-01-03"],
+    series: [{ date: "2024-01-02", signal_close: 10 }, { date: "2024-01-03", signal_close: 11 }],
+    signals: [{ signal_date: "2024-01-03", action: "buy" }], orders: [],
+  };
+  const h = harness("/backtests/detail", (url) => {
+    if (url.includes("/run-center/record?")) return record;
+    if (url.endsWith("/daily-signal-20240108T000000Z-00000001")) return { spec: record.spec, series: [], orders: [], signals: [], positions: [], diagnostics: {} };
+    if (url.includes("/price-signals/day")) {
+      const date = new URL(url, "http://local.test").searchParams.get("date");
+      if (date === "2024-01-02") return new Promise((resolve) => { releaseOld = resolve; });
+      return { date, symbol: "600519", price: { signal_close: 11 }, signals: [{ action: "buy" }], orders: [], account: null };
+    }
+    if (url.includes("/price-signals?")) return chart;
+    return {};
+  });
+  h.element("center-price-symbol").value = "600519";
+  h.element("center-price-window").value = "all";
+  h.element("center-price-events").value = "all";
+  h.element("center-price-detail").hidden = true;
+  await h.ui.detail("source=index&record=daily");
+  await tick();
+  assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
+  h.element("center-price-position").listeners.input({ target: { value: "0" } });
+  await tick();
+  h.element("center-price-position").listeners.input({ target: { value: "1" } });
+  await tick();
+  releaseOld({ date: "2024-01-02", symbol: "600519", price: { signal_close: 10 }, signals: [], orders: [], account: null });
+  await tick();
+  assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
+  assert.equal(h.element("center-price-position").value, "1");
+  assert.equal(h.element("center-price-date").value, "2024-01-03");
+  h.element("center-price-chart").listeners.click({
+    clientX: 76,
+    target: { closest: (selector) => selector === "[data-price-plot]" ? {} : null,
+      ownerSVGElement: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } },
+  });
+  assert.equal(h.element("center-price-position").value, "0");
+  h.element("center-price-chart").listeners.click({
+    target: { closest: (selector) => selector === "[data-price-event-date]" ? { getAttribute: () => "2024-01-03" } : null },
+  });
+  assert.equal(h.element("center-price-position").value, "1");
+});
+
+test("event-only chart does not invent a signal price", () => {
+  const html = ui.renderPriceSignalChart({
+    symbol: "600519", date_index: ["2024-01-02"],
+    series: [{ date: "2024-01-02", signal_close: null }],
+    signals: [], orders: [{ execution_date: "2024-01-02", status: "unfilled" }],
+  });
+  assert.match(html, /price-event blocked/);
+  assert.doesNotMatch(html, /price-selected-point/);
+  assert.match(html, /价格（信号复权口径）/);
 });
 
 test("trade audit and account audit use saved values and preserve unknowns", () => {

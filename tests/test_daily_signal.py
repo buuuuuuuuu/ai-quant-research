@@ -11,6 +11,7 @@ from test_factor_backtest import _database
 from test_web_workbench import _settings
 
 from ai_quant_assistant.api.app import create_app
+from ai_quant_assistant.api.run_repository import DailySignalRunRepository
 from ai_quant_assistant.api.schemas import DailySignalStrategyRequest
 from ai_quant_assistant.domain.models import (
     DailySignalRule,
@@ -554,6 +555,49 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
     assert "未成交与等待退出" in html
 
 
+def test_price_day_lookup_uses_exact_saved_dates_and_bounded_chart(tmp_path):
+    run_id = "daily-signal-20240108T000000Z-00000001"
+    directory = tmp_path / "daily-signals" / run_id
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text(
+        json.dumps({"spec": {"symbols": ["600519"], "adjustment": "qfq"}}),
+        encoding="utf-8",
+    )
+    pd.DataFrame([
+        {"date": "2024-01-02", "symbol": "600519", "signal_close": 10.0, "ma_2": None, "price_adjustment": "qfq"},
+        {"date": "2024-01-03", "symbol": "600519", "signal_close": 11.0, "ma_2": 10.5, "price_adjustment": "qfq"},
+        {"date": "2024-01-04", "symbol": "600519", "signal_close": None, "ma_2": None, "price_adjustment": "qfq"},
+        {"date": "2024-01-05", "symbol": "600519", "signal_close": 15.0, "ma_2": 13.0, "price_adjustment": "qfq"},
+        {"date": "2024-01-08", "symbol": "600519", "signal_close": 16.0, "ma_2": 15.5, "price_adjustment": "qfq"},
+    ]).to_csv(directory / "indicator_series.csv", index=False)
+    pd.DataFrame([
+        {"signal_date": "2024-01-03", "symbol": "600519", "action": "buy", "signal_price": 11.0},
+        {"signal_date": "2024-01-03", "symbol": "600519", "action": "sell", "signal_price": 11.0},
+    ]).to_csv(directory / "signals.csv", index=False)
+    pd.DataFrame([
+        {"signal_date": "2024-01-03", "planned_execution_date": "2024-01-04", "execution_date": "2024-01-05", "symbol": "600519", "side": "buy", "status": "executed", "execution_price": 101.0, "cost": 2.0},
+        {"signal_date": "2024-01-03", "planned_execution_date": "2024-01-04", "execution_date": "2024-01-04", "symbol": "600519", "side": "sell", "status": "unfilled", "reason": "t_plus_one"},
+    ]).to_csv(directory / "orders.csv", index=False)
+    pd.DataFrame([{"date": "2024-01-04", "cash": 1000.0, "position_value": 0.0, "portfolio_value": 1000.0}]).to_csv(directory / "daily_nav.csv", index=False)
+    repository = DailySignalRunRepository(tmp_path)
+    chart = repository.price_signals(run_id, "600519", limit=3)
+    assert chart["date_index"] == ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"]
+    assert "2024-01-04" in chart["missing_dates"]["signal_close"]
+    assert chart["price_range"] == {"minimum": 10.0, "maximum": 16.0}
+    assert {row["date"] for row in chart["series"]} >= {"2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"}
+    day = repository.price_signal_day(run_id, "600519", date(2024, 1, 4))
+    assert day["price"]["signal_close"] is None
+    assert len(day["orders"]) == 2
+    assert day["signals"] == []
+    assert day["account"]["cash"] == 1000.0
+    signal_day = repository.price_signal_day(run_id, "600519", date(2024, 1, 3))
+    assert len(signal_day["signals"]) == 2
+    assert signal_day["orders"] == []
+    assert repository.price_signal_day(run_id, "600519", date(2024, 1, 6))["price"] is None
+    with pytest.raises(KeyError):
+        repository.price_signal_day(run_id, "000333", date(2024, 1, 4))
+
+
 def test_api_history_copy_report_and_read_only_configuration(tmp_path):
     database = _database(tmp_path)
     payload = _spec().to_dict()
@@ -594,8 +638,33 @@ def test_api_history_copy_report_and_read_only_configuration(tmp_path):
         price_payload = price_signals.json()
         assert price_payload["price_adjustment"] == "qfq"
         assert {row["symbol"] for row in price_payload["series"]} == {"600519"}
+        assert price_payload["date_index"][0] == price_payload["series"][0]["date"]
+        assert price_payload["date_index"][-1] == price_payload["series"][-1]["date"]
+        assert price_payload["price_range"]["minimum"] <= price_payload["price_range"]["maximum"]
         assert all("execution_price" not in row for row in price_payload["series"])
         assert price_payload["orders"][0]["execution_price"] is not None
+        signal_day = client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "2024-01-04"},
+        )
+        assert signal_day.status_code == 200
+        assert signal_day.json()["date"] == "2024-01-04"
+        assert signal_day.json()["signals"][0]["planned_execution_date"] == "2024-01-05"
+        execution_day = client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "2024-01-05"},
+        )
+        assert execution_day.status_code == 200
+        assert execution_day.json()["orders"][0]["execution_price"] == price_payload["orders"][0]["execution_price"]
+        assert execution_day.json()["account"]["date"] == "2024-01-05"
+        assert client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "999999", "date": "2024-01-05"},
+        ).status_code == 404
+        assert client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "not-a-date"},
+        ).status_code == 422
         assert (
             client.get(
                 f"/api/v1/daily-signal-runs/{run_id}/price-signals",

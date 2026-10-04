@@ -8,7 +8,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs, quote
@@ -1734,11 +1734,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run_id: str,
         symbol: Annotated[str, Query(pattern=r"^[0-9]{6}$")],
         limit: Annotated[int, Query(ge=100, le=2_000)] = 1_200,
+        window: Annotated[str, Query(pattern=r"^(all|year)$")] = "all",
     ) -> dict[str, Any]:
         try:
-            return daily_signal_repository.price_signals(run_id, symbol, limit=limit)
+            return daily_signal_repository.price_signals(run_id, symbol, limit=limit, window=window)
         except KeyError as exc:
             raise HTTPException(404, "price and signal artifact not found") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/v1/daily-signal-runs/{run_id}/price-signals/day")
+    def get_daily_signal_price_signal_day(
+        run_id: str,
+        symbol: Annotated[str, Query(pattern=r"^[0-9]{6}$")],
+        date_value: Annotated[date, Query(alias="date")],
+    ) -> dict[str, Any]:
+        try:
+            return daily_signal_repository.price_signal_day(run_id, symbol, date_value)
+        except KeyError as exc:
+            raise HTTPException(404, "price and signal artifact not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/v1/daily-signal-runs/{run_id}/downloads/{filename}")
     def download_daily_signal_file(run_id: str, filename: str) -> FileResponse:

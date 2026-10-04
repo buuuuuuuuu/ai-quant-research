@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -215,6 +217,9 @@ class FactorLabRunRepository(BacktestRunRepository):
 
 
 class DailySignalRunRepository(BacktestRunRepository):
+    MAX_CHART_DATES = 12_000
+    MAX_DAY_EVENTS = 100
+
     def __init__(self, artifact_dir: Path) -> None:
         self.root = (artifact_dir / "daily-signals").resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -245,18 +250,19 @@ class DailySignalRunRepository(BacktestRunRepository):
     def _symbol_records(path: Path, symbol: str, *, limit: int = 2_000) -> list[dict[str, Any]]:
         if not path.is_file() or path.stat().st_size == 0:
             return []
-        chunks = []
+        frame = pd.DataFrame()
         for chunk in pd.read_csv(path, dtype={"symbol": str}, chunksize=50_000):
             selected = chunk.loc[chunk.get("symbol", pd.Series(dtype=str)).eq(symbol)]
             if not selected.empty:
-                chunks.append(selected)
-        if not chunks:
+                frame = pd.concat([frame, selected], ignore_index=True).tail(limit)
+        if frame.empty:
             return []
-        frame = pd.concat(chunks, ignore_index=True).tail(limit)
         frame = frame.astype(object).where(pd.notna(frame), None)
         return frame.to_dict(orient="records")
 
-    def price_signals(self, run_id: str, symbol: str, *, limit: int = 1_200) -> dict[str, Any]:
+    def price_signals(
+        self, run_id: str, symbol: str, *, limit: int = 1_200, window: str = "all"
+    ) -> dict[str, Any]:
         directory = self.run_dir(run_id)
         manifest = self.manifest(run_id)
         frozen = [str(value) for value in manifest.get("spec", {}).get("symbols", [])]
@@ -265,21 +271,60 @@ class DailySignalRunRepository(BacktestRunRepository):
         path = directory / "indicator_series.csv"
         if not path.is_file() or path.stat().st_size == 0:
             raise KeyError("indicator_series.csv")
-        chunks = []
+        frame = pd.DataFrame()
         for chunk in pd.read_csv(path, dtype={"symbol": str}, chunksize=50_000):
             selected = chunk.loc[chunk["symbol"].eq(symbol)]
             if not selected.empty:
-                chunks.append(selected)
-        if not chunks:
+                frame = pd.concat([frame, selected], ignore_index=True)
+                if window == "all" and len(frame) > self.MAX_CHART_DATES:
+                    raise ValueError("price and signal chart exceeds the bounded date range")
+                if window == "year":
+                    frame = frame.tail(self.MAX_CHART_DATES)
+        if frame.empty:
             raise KeyError(symbol)
-        frame = pd.concat(chunks, ignore_index=True)
+        if window == "year":
+            last_date = pd.to_datetime(frame["date"].iloc[-1])
+            start_date = (last_date - pd.DateOffset(years=1)).date().isoformat()
+            frame = frame.loc[frame["date"].astype(str).str[:10].ge(start_date)].reset_index(
+                drop=True
+            )
+        elif window != "all":
+            raise ValueError("unsupported chart date window")
+        if len(frame) > self.MAX_CHART_DATES:
+            raise ValueError("price and signal chart exceeds the bounded date range")
         signals = self._symbol_records(directory / "signals.csv", symbol)
         orders = self._symbol_records(directory / "orders.csv", symbol)
+        if window == "year":
+            first_date = str(frame["date"].iloc[0])[:10]
+            last_date_text = str(frame["date"].iloc[-1])[:10]
+            signals = [
+                row for row in signals if first_date <= str(row.get("signal_date") or "")[:10]
+                <= last_date_text
+            ]
+            orders = [
+                row for row in orders
+                if any(
+                    first_date <= str(row.get(key) or "")[:10] <= last_date_text
+                    for key in ("planned_execution_date", "execution_date")
+                )
+            ]
         key_dates = {
             str(row.get(key))[:10]
             for row in [*signals, *orders]
             for key in ("signal_date", "planned_execution_date", "execution_date")
             if row.get(key) not in (None, "", "nan")
+        }
+        date_index = frame["date"].astype(str).str[:10].tolist()
+        line_keys = [key for key in frame if key == "signal_close" or re.fullmatch(r"ma_\d+", key)]
+        numeric = frame[line_keys].apply(pd.to_numeric, errors="coerce") if line_keys else pd.DataFrame()
+        price_values = numeric.to_numpy().ravel() if not numeric.empty else []
+        finite_values = [float(value) for value in price_values if pd.notna(value) and math.isfinite(value)]
+        missing_dates = {
+            key: frame.loc[pd.to_numeric(frame[key], errors="coerce").isna(), "date"]
+            .astype(str)
+            .str[:10]
+            .tolist()
+            for key in line_keys
         }
         if len(frame) > limit:
             dates = frame["date"].astype(str).str[:10]
@@ -302,6 +347,12 @@ class DailySignalRunRepository(BacktestRunRepository):
                 manifest.get("spec", {}).get("adjustment"),
             ),
             "series": frame.to_dict(orient="records"),
+            "date_index": date_index,
+            "missing_dates": missing_dates,
+            "price_range": {
+                "minimum": min(finite_values), "maximum": max(finite_values)
+            } if finite_values else None,
+            "window": window,
             "signals": signals,
             "orders": orders,
             "notice": (
@@ -309,6 +360,78 @@ class DailySignalRunRepository(BacktestRunRepository):
                 "不绘制到同一价格轴。"
             ),
         }
+
+    @staticmethod
+    def _day_rows(
+        path: Path, symbol: str, day: str, fields: tuple[str, ...]
+    ) -> tuple[list[dict[str, Any]], bool]:
+        if not path.is_file() or path.stat().st_size == 0:
+            return [], False
+        rows: list[dict[str, Any]] = []
+        overflow = False
+        for chunk in pd.read_csv(path, dtype={"symbol": str}, chunksize=50_000):
+            if "symbol" not in chunk:
+                continue
+            matching = chunk["symbol"].eq(symbol)
+            matching_date = pd.Series(False, index=chunk.index)
+            for key in fields:
+                if key in chunk:
+                    matching_date |= chunk[key].astype(str).str[:10].eq(day)
+            matching &= matching_date
+            selected = chunk.loc[matching]
+            for row in selected.to_dict(orient="records"):
+                if len(rows) == DailySignalRunRepository.MAX_DAY_EVENTS:
+                    overflow = True
+                    break
+                rows.append({key: None if pd.isna(value) else value for key, value in row.items()})
+            if overflow:
+                break
+        return rows, overflow
+
+    def price_signal_day(self, run_id: str, symbol: str, day: date) -> dict[str, Any]:
+        directory = self.run_dir(run_id)
+        manifest = self.manifest(run_id)
+        if symbol not in {str(value) for value in manifest.get("spec", {}).get("symbols", [])}:
+            raise KeyError(symbol)
+        day_text = day.isoformat()
+        price_rows, price_overflow = self._day_rows(
+            directory / "indicator_series.csv", symbol, day_text, ("date",)
+        )
+        if price_overflow or len(price_rows) > 1:
+            raise ValueError("duplicate indicator rows for the selected date")
+        signals, signal_overflow = self._day_rows(
+            directory / "signals.csv", symbol, day_text, ("signal_date",)
+        )
+        orders, order_overflow = self._day_rows(
+            directory / "orders.csv", symbol, day_text,
+            ("planned_execution_date", "execution_date"),
+        )
+        account_rows = self._records_for_day(directory / "daily_nav.csv", day_text)
+        return {
+            "run_id": run_id,
+            "symbol": symbol,
+            "date": day_text,
+            "price": price_rows[0] if price_rows else None,
+            "signals": signals,
+            "orders": orders,
+            "account": account_rows[0] if account_rows else None,
+            "truncated": signal_overflow or order_overflow,
+        }
+
+    @staticmethod
+    def _records_for_day(path: Path, day: str) -> list[dict[str, Any]]:
+        if not path.is_file() or path.stat().st_size == 0:
+            return []
+        for chunk in pd.read_csv(path, chunksize=50_000):
+            if "date" not in chunk:
+                return []
+            selected = chunk.loc[chunk["date"].astype(str).str[:10].eq(day)]
+            if not selected.empty:
+                return [
+                    {key: None if pd.isna(value) else value for key, value in row.items()}
+                    for row in selected.head(1).to_dict(orient="records")
+                ]
+        return []
 
     def file(self, run_id: str, filename: str) -> tuple[Path, str]:
         media_type = SIGNAL_DOWNLOAD_FILES.get(filename)

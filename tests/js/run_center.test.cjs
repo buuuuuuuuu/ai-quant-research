@@ -1143,12 +1143,31 @@ test("event-only chart does not invent a signal price", () => {
 
 test("trade audit and account audit use saved values and preserve unknowns", () => {
   const trade = ui.renderExecutedTrades([{ symbol: "600519", side: "buy", status: "executed", shares: 100, notional: 1000, cost: 3, cash_before: 2000, cash_after: 997, position_shares_before: 0, position_shares_after: 100, commission_cost: 1, slippage_cost: 2, stamp_duty_cost: 0, signal_id: "signal-000001" }]);
-  assert.match(trade, /2,000\.00 → 997\.00/);
+  assert.match(trade, /2,000\.00 元 → 997\.00 元/);
+  assert.match(trade, /trade-buy/);
+  assert.match(trade, /data-execution-sort="notional"/);
   assert.match(trade, /signal-000001/);
   const audit = ui.renderAuditSummary({ status: "warning", checked_dates: 1, check_count: 6, failure_count: 1, failures: [{ date: "2024-01-02", check: "cash_plus_positions_equals_total_assets", expected_value: 100, actual_value: 101, difference: 1, tolerance: 0.000001 }] });
   assert.match(audit, /完成但有差异/);
   assert.match(audit, /cash_plus_positions_equals_total_assets/);
   assert.match(ui.renderReproducibility({ git_commit_sha: null }), /未记录/);
+});
+
+test("trade table exposes bounded sortable columns and separates buy and sell", () => {
+  const html = ui.renderExecutedTrades([
+    { symbol: '600519', side: 'buy', status: 'executed', notional: 1234567.89, cost: 0.0001 },
+    { symbol: '000001', side: 'sell', status: 'executed', notional: -1234.56, cost: 0 },
+  ], { total: 2100, page: 2, page_size: 50, sort: 'notional', direction: 'desc' });
+  assert.match(html, /trade-buy/);
+  assert.match(html, /trade-sell/);
+  assert.match(html, /1,234,567\.89 元/);
+  assert.match(html, /-1,234\.56 元/);
+  assert.match(html, /0\.000100 元/);
+  assert.match(html, /0\.00 元/);
+  assert.match(html, /aria-sort="descending"/);
+  assert.match(html, /匹配 2100 笔 · 第 2 \/ 42 页/);
+  assert.match(html, /600519（名称未记录）/);
+  assert.doesNotMatch(html, /<script>/);
 });
 
 test("data plan separates completed gaps from real download failures", () => {

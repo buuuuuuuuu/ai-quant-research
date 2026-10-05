@@ -23,6 +23,7 @@ from ai_quant_assistant.reports.daily_signal_writer import (
     daily_signal_chart,
     daily_signal_result_view,
 )
+from ai_quant_assistant.reports.presentation import display_money
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
 from ai_quant_assistant.research.daily_signal_audit import (
     build_account_audit,
@@ -190,6 +191,24 @@ def test_new_run_records_trade_audit_account_checks_and_reproducibility(tmp_path
     indicators = pd.read_csv(result["artifacts"]["indicator_series_csv"], dtype={"symbol": str})
     assert set(indicators.symbol) == {"600519", "000001"}
     assert {"signal_close", "ma_1", "ma_2", "price_adjustment"}.issubset(indicators.columns)
+    assert result["display_metadata"]["symbol_names"]["600519"] == "测试公司600519"
+    with open(result["artifacts"]["html_report"], encoding="utf-8") as report:
+        assert "测试公司600519（600519）" in report.read()
+    with pd.ExcelFile(result["artifacts"]["excel"]) as workbook:
+        sheet = workbook.book["orders"]
+        headers = [cell.value for cell in sheet[1]]
+        column = headers.index("notional") + 1
+        assert isinstance(sheet.cell(2, column).value, (int, float))
+        assert sheet.cell(2, column).number_format.startswith("#,##0.00")
+        assert sheet.cell(1, sheet.max_column).value == "股票名称（运行时快照）"
+
+
+def test_money_display_keeps_zero_missing_negative_and_small_cost():
+    assert display_money(1234567.89) == "1,234,567.89 元"
+    assert display_money(-1234.56) == "-1,234.56 元"
+    assert display_money(0) == "0.00 元"
+    assert display_money(0.0001) == "0.000100 元"
+    assert display_money(float("nan")) == "未记录"
 
 
 def test_account_audit_detects_tampered_nav_without_repairing_input():

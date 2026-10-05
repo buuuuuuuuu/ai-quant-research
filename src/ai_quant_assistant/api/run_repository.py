@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
 
 RUN_ID_RE = re.compile(r"^factor-backtest-\d{8}T\d{6}Z-[0-9a-f]{8}$")
@@ -245,6 +246,83 @@ class DailySignalRunRepository(BacktestRunRepository):
             "downloads": list(SIGNAL_DOWNLOAD_FILES),
             "report_url": f"/reports/daily-signals/{run_id}",
         }
+
+    def executed_orders(
+        self, run_id: str, *, page: int = 1, page_size: int = 50,
+        symbols: tuple[str, ...] = (), side: str = "", date_from: str = "",
+        date_to: str = "", min_notional: float | None = None,
+        max_notional: float | None = None, sort: str = "execution_date",
+        direction: str = "desc",
+    ) -> dict[str, Any]:
+        """Filter the complete run-scoped CSV, returning only one bounded page."""
+        path = self.run_dir(run_id) / "orders.csv"
+        if not 1 <= page_size <= 100 or not 1 <= page <= 100_000:
+            raise ValueError("页码或每页数量超出范围")
+        if side not in ("", "buy", "sell") or direction not in ("asc", "desc"):
+            raise ValueError("成交筛选或排序方向无效")
+        if len(symbols) > 200 or any(not re.fullmatch(r"\d{6}", s) for s in symbols):
+            raise ValueError("股票筛选范围无效")
+        if date_from and date_to and date_from > date_to:
+            raise ValueError("起始日期不能晚于结束日期")
+        if any(v is not None and not math.isfinite(v) for v in (min_notional, max_notional)):
+            raise ValueError("成交金额范围无效")
+        if min_notional is not None and max_notional is not None and min_notional > max_notional:
+            raise ValueError("最低成交金额不能高于最高成交金额")
+        sort_keys = {
+            "execution_date": '"execution_date"',
+            "symbol": '"symbol"',
+            "side": '"side"',
+            "shares": 'TRY_CAST("shares" AS DOUBLE)',
+            "notional": 'TRY_CAST("notional" AS DOUBLE)',
+            "cost": 'TRY_CAST("cost" AS DOUBLE)',
+        }
+        if sort not in sort_keys:
+            raise ValueError("不支持该排序字段")
+        if not path.is_file() or not path.stat().st_size:
+            return {"rows": [], "total": 0, "page": page, "page_size": page_size}
+        predicates = ['"status" = \'executed\'']
+        parameters: list[Any] = []
+        if symbols:
+            predicates.append(f'"symbol" IN ({", ".join("?" for _ in symbols)})')
+            parameters.extend(symbols)
+        for clause, value in (
+            ('"side" = ?', side), ('"execution_date" >= ?', date_from),
+            ('"execution_date" <= ?', date_to),
+        ):
+            if value:
+                predicates.append(clause)
+                parameters.append(value)
+        for operator, value in ((">=", min_notional), ("<=", max_notional)):
+            if value is not None:
+                predicates.append(f'TRY_CAST("notional" AS DOUBLE) {operator} ?')
+                parameters.append(value)
+        where = " AND ".join(predicates)
+        # All column names and sort directions are selected from the allowlist above.
+        source = "read_csv(?, header=true, all_varchar=true)"
+        ordering = f"{sort_keys[sort]} {direction.upper()} NULLS LAST, "
+        ordering += '"execution_date" DESC, "signal_date" DESC, "symbol" ASC, _row ASC'
+        with duckdb.connect(":memory:") as connection:
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM {source} WHERE {where}", [str(path), *parameters]
+            ).fetchone()[0]
+            frame = connection.execute(
+                f"WITH source AS (SELECT *, row_number() OVER () AS _row FROM {source}) "
+                f"SELECT * EXCLUDE (_row) FROM source WHERE {where} "
+                f"ORDER BY {ordering} LIMIT ? OFFSET ?",
+                [str(path), *parameters, page_size, (page - 1) * page_size],
+            ).df()
+        numeric = (
+            "shares", "signal_price", "execution_price", "notional", "cost",
+            "candidate_rank", "candidate_score", "cash_before", "cash_after",
+            "position_shares_before", "position_shares_after", "commission_cost",
+            "slippage_cost", "stamp_duty_cost",
+        )
+        for column in numeric:
+            if column in frame:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame.astype(object).where(pd.notna(frame), None)
+        return {"rows": frame.to_dict(orient="records"), "total": total,
+                "page": page, "page_size": page_size}
 
     @staticmethod
     def _symbol_records(path: Path, symbol: str, *, limit: int = 2_000) -> list[dict[str, Any]]:

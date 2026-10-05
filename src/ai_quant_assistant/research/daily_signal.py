@@ -751,6 +751,25 @@ class DailySignalStrategyService:
             spec=spec.to_dict(), metrics=metrics, nav=nav_frame, orders=orders_frame,
             diagnostics=diagnostics, reproducibility=reproducibility,
         )
+        # Snapshot mutable catalogue labels only for display. Prices and orders stay untouched.
+        symbol_names: dict[str, str] = {}
+        frozen_symbols = tuple(dict.fromkeys(str(symbol) for symbol in spec.symbols))
+        if frozen_symbols:
+            with self.database.connect(read_only=True) as connection:
+                rows = connection.execute(
+                    "SELECT symbol, name FROM security_master WHERE symbol IN ("
+                    + ",".join("?" for _ in frozen_symbols) + ")",
+                    list(frozen_symbols),
+                ).fetchall()
+            symbol_names = {
+                str(symbol): str(name).strip() for symbol, name in rows
+                if name and str(name).strip() and str(symbol) in frozen_symbols
+            }
+        display_metadata = {
+            "symbol_names": symbol_names,
+            "name_source": "security_master snapshot at run",
+            "captured_at": datetime.now(UTC).isoformat(),
+        }
         directory = self.artifact_dir / "daily-signals" / run_id
         artifacts = self.writer.write(
             directory,
@@ -766,6 +785,7 @@ class DailySignalStrategyService:
             reproducibility=reproducibility,
             trust_summary=trust_summary,
             indicator_series=indicator_frame,
+            display_metadata=display_metadata,
         )
         completed = datetime.now(UTC)
         payload = {
@@ -786,6 +806,7 @@ class DailySignalStrategyService:
             "diagnostics": diagnostics,
             "reproducibility": reproducibility,
             "trust_summary": trust_summary,
+            "display_metadata": display_metadata,
             "artifacts": {k: str(v) for k, v in artifacts.items()},
         }
         manifest = directory / "run.json"

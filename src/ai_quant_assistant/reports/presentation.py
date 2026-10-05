@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 
 ENUM_LABELS = {
@@ -515,6 +517,15 @@ def presentation_catalog():
     }
 
 
+def display_money(value):
+    """Human readable yuan amount; preserve small nonzero audit costs."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return "未记录"
+    if value and abs(value) < 0.005:
+        return f"{value:,.6f} 元" if abs(value) >= 0.0000005 else f"{value:.3e} 元"
+    return f"{value:,.2f} 元"
+
+
 def install_filters(environment):
     environment.filters.update(
         factor_label=factor_label,
@@ -523,4 +534,5 @@ def install_filters(environment):
         rule_label=rule_label,
         daily_signal_summary=daily_signal_summary,
         strategy_label=strategy_label,
+        display_money=display_money,
     )

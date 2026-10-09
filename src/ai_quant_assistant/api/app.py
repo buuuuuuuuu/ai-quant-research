@@ -256,7 +256,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for name in (
                 "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
-                "workbench.css", "stock-pools.css", "app-shell.css", "app-shell.js", "run-center.js",
+                "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
+                "app-shell.js", "run-center.js",
             )
         )
     ).hexdigest()[:16]

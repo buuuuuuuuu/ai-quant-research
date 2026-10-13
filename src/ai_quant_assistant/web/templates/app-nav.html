@@ -1,14 +1,15 @@
 <link rel="stylesheet" href="/assets/app-shell.css?v={{ asset_version }}">
+<link rel="stylesheet" href="/assets/ui-foundation.css?v={{ asset_version }}">
 <script src="/assets/app-shell.js?v={{ asset_version }}" defer></script>
 <a class="skip-link" href="#page-content">跳至内容</a>
-<header class="app-topbar"><button id="nav-toggle" type="button" aria-controls="app-navigation" aria-expanded="false" aria-label="打开导航">☰ <span>菜单</span></button><a class="app-brand" href="/">澄明 <small>研究工作台</small></a><span class="app-user">{{ username }}</span><a href="/research/copilot">Copilot</a></header>
+<header class="app-topbar"><button id="nav-toggle" type="button" aria-controls="app-navigation" aria-expanded="false" aria-label="打开导航">☰ <span>菜单</span></button><a class="app-brand" href="/"><span class="app-logo" aria-hidden="true">澄</span><span>澄明 <small>研究工作台</small></span></a><span class="app-user" aria-label="当前用户">{{ username }}</span><a class="app-topbar-shortcut" href="/research/copilot">AI 研究助手 <span aria-hidden="true">↗</span></a></header>
 <button id="nav-backdrop" type="button" hidden aria-label="关闭导航"></button>
 <nav id="app-navigation" class="app-sidebar" aria-label="主导航">
   <p class="nav-caption">工作空间</p>
-  <a href="/" data-nav="overview">总览</a>
-  <a href="/data" data-nav="data">数据与股票池</a>
-  <a href="/research" data-nav="research">研究中心</a>
-  <a href="/backtests" data-nav="backtests">回测中心</a>
-  <a href="/system" data-nav="system">系统管理</a>
-  <div class="nav-footer"><a href="/research/copilot">AI 研究助手</a><a href="/docs">API 文档</a><form method="post" action="/logout"><button type="submit">退出登录</button></form><small>本地研究 · 证据可追溯</small></div>
+  <a href="/" data-nav="overview"><span class="app-nav-glyph" aria-hidden="true">总</span>总览</a>
+  <a href="/data" data-nav="data"><span class="app-nav-glyph" aria-hidden="true">数</span>数据与股票池</a>
+  <a href="/research" data-nav="research"><span class="app-nav-glyph" aria-hidden="true">研</span>研究中心</a>
+  <a href="/backtests" data-nav="backtests"><span class="app-nav-glyph" aria-hidden="true">测</span>回测中心</a>
+  <a href="/system" data-nav="system"><span class="app-nav-glyph" aria-hidden="true">管</span>系统管理</a>
+  <div class="nav-footer"><p class="nav-caption">快捷入口</p><a href="/research/copilot">AI 研究助手</a><a href="/docs">API 文档</a><form method="post" action="/logout"><button type="submit">退出登录</button></form><small>本地研究 · 证据可追溯</small></div>
 </nav>

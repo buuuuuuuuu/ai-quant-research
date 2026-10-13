@@ -787,10 +787,10 @@ async function loadDocumentPage(documentId,pageNumber) {
 
 function renderDocumentEvents(documentId,events) {
   const target=$("#document-events"); if(!target) return;
-  target.innerHTML=`<div class="document-events-head"><div><h5>结构化事件</h5><p>离线规则提取；每项事实必须经过逐字引用校验和人工审核。</p></div><button id="document-event-extract" class="secondary-button" type="button">提取 / 刷新事件</button></div><p id="document-event-task-status" class="empty-state"></p><div class="document-event-list">${events.length?events.map((item)=>`<article class="document-event-card"><header><strong>${escapeHtml(documentEventTypeLabels[item.event_type]||item.event_type)}</strong><span class="quality-pill">${escapeHtml(item.status)}</span></header>${detailGrid([["公开时间",item.published_at],["事件日期",item.event_date||"未明确"],["方向",item.direction],["金额",item.amount==null?"未明确":formatNumber(item.amount)],["币种",item.currency||"—"],["比例",item.ratio==null?"未明确":`${(Number(item.ratio)*100).toFixed(2)}%`]])}<div class="document-event-evidence">${(item.evidence||[]).map((evidence)=>`<button type="button" data-event-page="${escapeHtml(evidence.page_number)}"><small>${escapeHtml(evidence.field_name)} · 第 ${escapeHtml(evidence.page_number)} 页</small><q>${escapeHtml(evidence.quote)}</q></button>`).join("")||'<p class="negative">没有通过逐字校验的证据。</p>'}</div><div class="document-event-actions">${item.status==="needs_review"?`<button type="button" class="secondary-button" data-event-review="accepted" data-event-id="${escapeHtml(item.event_id)}">接受</button><button type="button" class="secondary-button" data-event-review="rejected" data-event-id="${escapeHtml(item.event_id)}">拒绝</button>`:""}${item.status==="accepted"?`<button type="button" class="primary-button" data-event-study="${escapeHtml(item.event_id)}">运行事件研究 <b>→</b></button>`:""}</div><div id="event-study-${escapeHtml(item.event_id)}"></div></article>`).join(""):'<p class="empty-state">尚未提取到受支持的结构化事件。</p>'}</div>`;
+  target.innerHTML=`<div class="document-events-head"><div><h5>结构化事件</h5><p>离线规则提取；每项事实必须经过逐字引用校验和人工审核。</p></div><button id="document-event-extract" class="secondary-button" type="button">提取 / 刷新事件</button></div><p id="document-event-task-status" class="empty-state"></p><div class="document-event-list">${events.length?events.map((item)=>`<article class="document-event-card"><header><strong>${escapeHtml(documentEventTypeLabels[item.event_type]||item.event_type)}</strong><span class="quality-pill">${escapeHtml(item.status)}</span></header>${detailGrid([["公开时间",item.published_at],["事件日期",item.event_date||"未明确"],["方向",item.direction],["金额",item.amount==null?"未明确":formatNumber(item.amount)],["币种",item.currency||"—"],["比例",item.ratio==null?"未明确":`${(Number(item.ratio)*100).toFixed(2)}%`]])}<div class="document-event-evidence">${(item.evidence||[]).map((evidence)=>`<button type="button" data-event-page="${escapeHtml(evidence.page_number)}"><small>${escapeHtml(evidence.field_name)} · 第 ${escapeHtml(evidence.page_number)} 页</small><q>${escapeHtml(evidence.quote)}</q></button>`).join("")||'<p class="negative">没有通过逐字校验的证据。</p>'}</div><div class="document-event-actions">${item.status==="needs_review"?`<button type="button" class="secondary-button" data-event-review="accepted" data-event-id="${escapeHtml(item.event_id)}">接受</button><button type="button" class="secondary-button" data-event-review="rejected" data-event-id="${escapeHtml(item.event_id)}">拒绝</button>`:""}${item.status==="accepted"?`<button type="button" class="primary-button" data-event-study="${escapeHtml(item.event_id)}">运行事件研究 <b>→</b></button>`:""}</div><p data-event-feedback aria-live="polite"></p><div id="event-study-${escapeHtml(item.event_id)}"></div></article>`).join(""):'<p class="empty-state">尚未提取到受支持的结构化事件。</p>'}</div>`;
   $("#document-event-extract").addEventListener("click",()=>extractDocumentEvents(documentId));
   $$('[data-event-page]').forEach((button)=>button.addEventListener("click",()=>loadDocumentPage(documentId,Number(button.dataset.eventPage))));
-  $$('[data-event-review]').forEach((button)=>button.addEventListener("click",()=>reviewDocumentEvent(button.dataset.eventId,button.dataset.eventReview,documentId)));
+  $$('[data-event-review]').forEach((button)=>button.addEventListener("click",()=>reviewDocumentEvent(button.dataset.eventId,button.dataset.eventReview,documentId,button)));
   $$('[data-event-study]').forEach((button)=>button.addEventListener("click",()=>runDocumentEventStudy(button.dataset.eventStudy)));
 }
 
@@ -807,9 +807,15 @@ async function extractDocumentEvents(documentId) {
   catch(error){target.innerHTML=`<span class="negative">${escapeHtml(error.message)}</span>`;}
 }
 
-async function reviewDocumentEvent(eventId,status,documentId) {
+async function reviewDocumentEvent(eventId,status,documentId,button) {
+  const card=button?.closest(".document-event-card");
+  const feedback=card?.querySelector("[data-event-feedback]");
+  const reviewButtons=[...(card?.querySelectorAll?.("[data-event-review]")||[button].filter(Boolean))];
+  if(feedback){feedback.textContent="正在保存审核结果…";feedback.classList.remove("negative");}
+  reviewButtons.forEach((item)=>{item.disabled=true;});
   try {await requestJson(`/api/v1/document-events/${encodeURIComponent(eventId)}/review`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({status,note:"Web 工作台审核"})});await loadDocumentEvents(documentId);}
-  catch(error){window.alert(error.message);}
+  catch(error){if(feedback){feedback.textContent=`审核未保存：${error.message}。请检查后重试。`;feedback.classList.add("negative");feedback.setAttribute("role","alert");}else{const target=$("#document-event-task-status");if(target)target.textContent=`审核未保存：${error.message}。请重试。`;}}
+  finally{reviewButtons.forEach((item)=>{if(item.isConnected)item.disabled=false;});}
 }
 
 async function runDocumentEventStudy(eventId) {

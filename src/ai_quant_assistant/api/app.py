@@ -8,7 +8,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs, quote
@@ -327,7 +327,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(stock_research_router(StockResearchWorkbench(database), templates, asset_version, resolved_settings.web_username))
     app.include_router(research_dashboard_router(research_dashboard, templates, asset_version, resolved_settings.web_username))
-    app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username))
+    app.include_router(run_center_router(database, templates, asset_version, resolved_settings.web_username, resolved_settings.artifact_dir))
     app.state.stock_pool_sync_tasks = stock_pool_sync_tasks
     app.state.security_master_tasks = security_master_tasks
     app.mount("/assets", StaticFiles(directory=web_root / "static"), name="assets")
@@ -1725,20 +1725,84 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/daily-signal-runs/{run_id}")
     def get_daily_signal_run(run_id: str) -> dict[str, Any]:
         try:
-            return daily_signal_repository.detail(run_id)
+            payload = daily_signal_repository.detail(run_id)
+            return _with_daily_signal_names(payload)
         except KeyError as exc:
             raise HTTPException(404, "daily signal run not found") from exc
+
+    def _with_daily_signal_names(payload: dict[str, Any]) -> dict[str, Any]:
+        saved = payload.get("display_metadata") or {}
+        if isinstance(saved.get("symbol_names"), dict):
+            return payload
+        symbols = [str(value) for value in payload.get("spec", {}).get("symbols", [])]
+        if not symbols or len(symbols) > 500 or not database.path.is_file():
+            payload["display_metadata"] = {"symbol_names": {}, "name_source": "historical_unrecorded"}
+            return payload
+        with database.connect(read_only=True) as connection:
+            rows = connection.execute(
+                "SELECT symbol, name FROM security_master WHERE symbol IN ("
+                + ",".join("?" for _ in symbols) + ")", symbols,
+            ).fetchall()
+        payload["display_metadata"] = {
+            "symbol_names": {str(symbol): str(name) for symbol, name in rows if name},
+            "name_source": "current_catalog_not_historical",
+        }
+        return payload
+
+    @app.get("/api/v1/daily-signal-runs/{run_id}/executed-orders")
+    def get_daily_signal_executed_orders(
+        run_id: str,
+        page: Annotated[int, Query(ge=1, le=100_000)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+        symbols: Annotated[str, Query(max_length=1400)] = "",
+        side: Annotated[str, Query(pattern=r"^(|buy|sell)$")] = "",
+        date_from: date | None = None,
+        date_to: date | None = None,
+        min_notional: float | None = None,
+        max_notional: float | None = None,
+        sort: Annotated[str, Query(pattern=r"^(execution_date|symbol|side|shares|notional|cost)$")] = "execution_date",
+        direction: Annotated[str, Query(pattern=r"^(asc|desc)$")] = "desc",
+    ) -> dict[str, Any]:
+        try:
+            return daily_signal_repository.executed_orders(
+                run_id, page=page, page_size=page_size,
+                symbols=tuple(value for value in symbols.split(",") if value), side=side,
+                date_from=date_from.isoformat() if date_from else "",
+                date_to=date_to.isoformat() if date_to else "",
+                min_notional=min_notional, max_notional=max_notional,
+                sort=sort, direction=direction,
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "daily signal run not found") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/v1/daily-signal-runs/{run_id}/price-signals")
     def get_daily_signal_price_signals(
         run_id: str,
         symbol: Annotated[str, Query(pattern=r"^[0-9]{6}$")],
         limit: Annotated[int, Query(ge=100, le=2_000)] = 1_200,
+        window: Annotated[str, Query(pattern=r"^(all|year)$")] = "all",
     ) -> dict[str, Any]:
         try:
-            return daily_signal_repository.price_signals(run_id, symbol, limit=limit)
+            return daily_signal_repository.price_signals(run_id, symbol, limit=limit, window=window)
         except KeyError as exc:
             raise HTTPException(404, "price and signal artifact not found") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/v1/daily-signal-runs/{run_id}/price-signals/day")
+    def get_daily_signal_price_signal_day(
+        run_id: str,
+        symbol: Annotated[str, Query(pattern=r"^[0-9]{6}$")],
+        date_value: Annotated[date, Query(alias="date")],
+    ) -> dict[str, Any]:
+        try:
+            return daily_signal_repository.price_signal_day(run_id, symbol, date_value)
+        except KeyError as exc:
+            raise HTTPException(404, "price and signal artifact not found") from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/v1/daily-signal-runs/{run_id}/downloads/{filename}")
     def download_daily_signal_file(run_id: str, filename: str) -> FileResponse:

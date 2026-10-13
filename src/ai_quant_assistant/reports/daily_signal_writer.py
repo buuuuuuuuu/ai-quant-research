@@ -442,6 +442,7 @@ class DailySignalReportWriter:
         reproducibility: dict[str, Any] | None = None,
         trust_summary: dict[str, Any] | None = None,
         indicator_series: pd.DataFrame | None = None,
+        display_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Path]:
         directory.mkdir(parents=True, exist_ok=True)
         account_audit = account_audit if account_audit is not None else pd.DataFrame()
@@ -452,6 +453,7 @@ class DailySignalReportWriter:
                 diagnostics=diagnostics, reproducibility=reproducibility,
             )
         indicator_series = indicator_series if indicator_series is not None else pd.DataFrame()
+        display_metadata = {"symbol_names": {}, **(display_metadata or {})}
 
         def with_columns(name: str, frame: pd.DataFrame) -> pd.DataFrame:
             expected = FRAME_COLUMNS[name]
@@ -530,10 +532,37 @@ class DailySignalReportWriter:
                 "symbol", "buy_count", "sell_count", "buy_notional", "sell_notional", "total_cost"
             ]).to_excel(writer, sheet_name="股票成交与成本", index=False)
             for sheet in writer.book.worksheets:
+                if sheet.title in {"signals", "orders", "positions", "candidates", "股票成交与成本"}:
+                    headers = [cell.value for cell in sheet[1]]
+                    if "symbol" in headers:
+                        symbol_column = headers.index("symbol") + 1
+                        name_column = sheet.max_column + 1
+                        sheet.cell(1, name_column, "股票名称（运行时快照）")
+                        for cells in sheet.iter_rows(min_row=2):
+                            symbol = cells[symbol_column - 1].value
+                            cells[name_column - 1].value = display_metadata["symbol_names"].get(str(symbol))
                 sheet.freeze_panes = "A2"
+                sheet.auto_filter.ref = sheet.dimensions
                 for cell in sheet[1]:
                     cell.font = Font(bold=True, color="FFFFFF")
                     cell.fill = PatternFill("solid", fgColor="173B5E")
+                money_columns = {
+                    "daily_nav": {"cash", "position_value", "portfolio_value", "total_cost"},
+                    "orders": {"notional", "cost", "cash_before", "cash_after", "commission_cost", "slippage_cost", "stamp_duty_cost"},
+                    "positions": {"market_value"},
+                    "股票成交与成本": {"buy_notional", "sell_notional", "total_cost"},
+                }.get(sheet.title, set())
+                for column in sheet.iter_cols(min_row=1, max_row=1):
+                    if column[0].value in money_columns:
+                        for cell in sheet.iter_cols(min_col=column[0].column, max_col=column[0].column, min_row=2):
+                            for value in cell:
+                                if isinstance(value.value, (int, float)):
+                                    value.number_format = (
+                                        '0.000E+00' if value.value and abs(value.value) < 0.0000005
+                                        else '#,##0.000000;[Red]-#,##0.000000;0.000000'
+                                        if value.value and abs(value.value) < 0.005
+                                        else '#,##0.00;[Red]-#,##0.00;0.00'
+                                    )
         signal_preview = _records(signals.tail(80))
         for row in signal_preview:
             try:
@@ -592,6 +621,7 @@ class DailySignalReportWriter:
                 if not indicator_series.empty and "symbol" in indicator_series
                 else []
             ),
+            display_metadata=display_metadata,
             terms=TERM_CATALOG,
             candidates=candidates.loc[candidates.get("selected", False)].tail(40).pipe(_records)
             if not candidates.empty

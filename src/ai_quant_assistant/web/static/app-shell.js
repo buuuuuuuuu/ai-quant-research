@@ -37,7 +37,8 @@
   );
   backdrop.addEventListener("click", () => setOpen(false, true));
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") setOpen(false, true);
+    if (e.key === "Escape" && toggle.getAttribute("aria-expanded") === "true")
+      setOpen(false, true);
     if (
       e.key === "Tab" &&
       mobile.matches &&

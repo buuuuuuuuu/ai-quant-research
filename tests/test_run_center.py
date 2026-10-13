@@ -9,7 +9,7 @@ from test_data_explorer import _explorer_database
 from test_web_workbench import _payload, _settings
 
 from ai_quant_assistant.api.app import create_app
-from ai_quant_assistant.api.run_center import RunCenter
+from ai_quant_assistant.api.run_center import DeletionConflict, RunCenter
 from ai_quant_assistant.api.run_repository import BacktestRunRepository
 from ai_quant_assistant.api.schemas import FactorBacktestRequest
 from ai_quant_assistant.storage.research_run_index import register_run
@@ -58,6 +58,93 @@ def test_history_pagination_status_and_task_index_dedup(center, monkeypatch):
     for kwargs in ({"kind": "' OR 1=1"}, {"status": "draft"}, {"page_size": 101}, {"page": 0}):
         with pytest.raises(ValueError):
             center.list(**kwargs)
+
+
+def test_delete_terminal_backtest_removes_aliases_artifacts_and_keeps_audit(center, tmp_path):
+    run_id = "factor-backtest-20240101T000000Z-1234abcd"
+    center.artifact_dir = tmp_path / "artifacts"
+    directory = center.artifact_dir / "backtests" / run_id
+    directory.mkdir(parents=True)
+    (directory / "report.html").write_text("saved report")
+    tasks = OperationTaskRepository(center.database)
+    task = tasks.create("backtest", spec=_payload())
+    tasks.update(task["task_id"], status="succeeded", run_id=run_id)
+    index(center, run_id=run_id)
+    with pytest.raises(DeletionConflict, match="身份"):
+        center.delete_backtest("index", run_id, expected_run_id="wrong", actor="test")
+    assert directory.is_dir()
+    result = center.delete_backtest("index", run_id, expected_run_id=run_id, actor="test")
+    assert result["deleted"] and not directory.exists()
+    with pytest.raises(KeyError):
+        BacktestRunRepository(center.artifact_dir).run_dir(run_id)
+    assert center.list()["total"] == 0
+    for source, record in (("index", run_id), ("task", task["task_id"])):
+        with pytest.raises(KeyError):
+            center.get(source, record)
+    with center.database.connect(read_only=True) as c:
+        audit = c.execute(
+            "SELECT actor,action,object_id FROM operation_audit WHERE event_id=?",
+            [result["audit_id"]],
+        ).fetchone()
+    assert audit == ("test", "backtest_deleted", run_id)
+
+
+def test_delete_refuses_active_and_dependent_tasks(center, tmp_path):
+    center.artifact_dir = tmp_path / "artifacts"
+    tasks = OperationTaskRepository(center.database)
+    queued = tasks.create("backtest", spec=_payload())
+    with pytest.raises(DeletionConflict, match="排队"):
+        center.delete_backtest(
+            "task", queued["task_id"], expected_run_id=queued["task_id"], actor="test"
+        )
+    assert center.get("task", queued["task_id"])["status"] == "queued"
+    run_id = "factor-backtest-20240101T000000Z-8765abcd"
+    tasks.update(queued["task_id"], status="succeeded", run_id=run_id)
+    index(center, run_id=run_id)
+    with center.database.connect() as c:
+        c.execute("UPDATE operation_task SET status='running' WHERE task_id=?", [queued["task_id"]])
+    with pytest.raises(DeletionConflict, match="关联任务"):
+        center.delete_backtest("index", run_id, expected_run_id=run_id, actor="test")
+    assert center.get("index", run_id)["run_id"] == run_id
+    with center.database.connect() as c:
+        c.execute(
+            "UPDATE operation_task SET status='succeeded' WHERE task_id=?", [queued["task_id"]]
+        )
+        c.execute(
+            """INSERT INTO research_plan (
+            plan_id,conversation_id,status,question,title,rationale,planner,task_id,run_id
+            ) VALUES ('plan-test','conversation-test','succeeded','q','title','reason','test',?,?)""",
+            [queued["task_id"], run_id],
+        )
+    with pytest.raises(DeletionConflict, match="研究计划"):
+        center.delete_backtest("index", run_id, expected_run_id=run_id, actor="test")
+    assert center.get("index", run_id)["run_id"] == run_id
+
+
+def test_delete_failed_unindexed_task_and_reject_other_types(center, tmp_path):
+    center.artifact_dir = tmp_path / "artifacts"
+    tasks = OperationTaskRepository(center.database)
+    task = tasks.create("backtest", spec=_payload())
+    tasks.update(task["task_id"], status="failed", error="fixture")
+    center.delete_backtest("task", task["task_id"], expected_run_id=task["task_id"], actor="test")
+    assert center.list()["total"] == 0
+    with pytest.raises(KeyError):
+        center.delete_backtest("screen", "x", expected_run_id="x", actor="test")
+
+
+def test_delete_daily_signal_run_only_uses_its_artifact_root(center, tmp_path):
+    center.artifact_dir = tmp_path / "artifacts"
+    run_id = "daily-signal-20240101T000000Z-1234abcd"
+    directory = center.artifact_dir / "daily-signals" / run_id
+    directory.mkdir(parents=True)
+    (directory / "orders.csv").write_text("symbol,shares\n")
+    other = center.artifact_dir / "backtests" / run_id
+    other.mkdir(parents=True)
+    index(center, run_id=run_id, kind="daily_signal")
+    center.delete_backtest("index", run_id, expected_run_id=run_id, actor="test")
+    assert not directory.exists()
+    assert other.is_dir()
+    assert center.list()["total"] == 0
 
 
 def test_copy_exact_costs_and_original_scope_read_only(center):
@@ -174,6 +261,14 @@ def test_pages_api_auth_and_original_urls(tmp_path):
             "/api/v1/run-center/record?source=task&record=x",
         ):
             assert client.get(path).status_code == 401
+        assert (
+            client.request(
+                "DELETE",
+                "/api/v1/run-center/record?source=task&record=x",
+                json={"expected_run_id": "x"},
+            ).status_code
+            == 401
+        )
         redirect = client.get("/backtests/detail?source=index&record=original")
         assert redirect.status_code == 303
         assert "source%3Dindex%26record%3Doriginal" in redirect.headers["location"]

@@ -555,8 +555,10 @@ class DailySignalStrategySpec:
             raise ValueError("daily signal strategy requires at least one six-digit symbol")
         if self.start_date >= self.end_date:
             raise ValueError("start_date must be earlier than end_date")
-        if not self.candidate_factors or len(self.candidate_factors) > 12:
-            raise ValueError("candidate_factors must contain between one and twelve factors")
+        if len(self.candidate_factors) > 12:
+            raise ValueError("candidate_factors must contain at most twelve factors")
+        if not self.candidate_factors and len(symbols) != 1:
+            raise ValueError("仅冻结一只股票时可以不配置候选因子；多股范围需要至少一项候选排序因子")
         if len({item.code for item in self.candidate_factors}) != len(self.candidate_factors):
             raise ValueError("candidate factor codes must be unique")
         if not 1 <= self.candidate_count <= len(symbols):

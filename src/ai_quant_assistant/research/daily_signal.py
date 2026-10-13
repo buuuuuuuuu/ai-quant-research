@@ -145,6 +145,13 @@ class DailySignalStrategyService:
         return result
 
     def _candidate_snapshot(self, spec, day, features) -> pd.DataFrame:
+        if not spec.candidate_factors:
+            # A frozen single-stock scope needs no cross-sectional ranking. Keep
+            # score and rank absent rather than inventing a numerical factor.
+            return pd.DataFrame(
+                [{"symbol": spec.symbols[0], "composite_score": None, "rank": None,
+                  "selected": True, "component_sources": "{}"}]
+            )
         values: dict[str, pd.Series] = {}
         sources: dict[str, pd.Series] = {}
         for component in spec.candidate_factors:
@@ -259,8 +266,8 @@ class DailySignalStrategyService:
         active_buy_signals: set[str] = set()
         last_prices: dict[str, float] = {}
         candidates: set[str] = set()
-        candidate_scores: dict[str, float] = {}
-        candidate_ranks: dict[str, int] = {}
+        candidate_scores: dict[str, float | None] = {}
+        candidate_ranks: dict[str, int | None] = {}
         completed_period: str | None = None
         skipped_candidate_updates: list[str] = []
         signals, orders, selections, positions, nav = [], [], [], [], []
@@ -385,7 +392,11 @@ class DailySignalStrategyService:
             pending_buys = [
                 order for order in pending_buys if order["planned_execution_date"] != current
             ]
-            for order in sorted(todays, key=lambda x: (-x["candidate_score"], x["symbol"])):
+            ordered_buys = (
+                sorted(todays, key=lambda x: (-x["candidate_score"], x["symbol"]))
+                if spec.candidate_factors else sorted(todays, key=lambda x: x["symbol"])
+            )
+            for order in ordered_buys:
                 symbol = order["symbol"]
                 row = day.loc[symbol] if symbol in day.index else None
                 reason = ""
@@ -575,7 +586,11 @@ class DailySignalStrategyService:
                     if next_day is not None:
                         pending_exits[symbol] = order
             reserved = len(holdings) + len(pending_buys)
-            for symbol in sorted(candidates, key=lambda x: (-candidate_scores[x], x)):
+            ranked_candidates = (
+                sorted(candidates, key=lambda x: (-candidate_scores[x], x))
+                if spec.candidate_factors else sorted(candidates)
+            )
+            for symbol in ranked_candidates:
                 matched, evidence = self._rules(
                     spec.buy_rules, spec.buy_rule_mode, features[symbol], current
                 )
@@ -736,6 +751,25 @@ class DailySignalStrategyService:
             spec=spec.to_dict(), metrics=metrics, nav=nav_frame, orders=orders_frame,
             diagnostics=diagnostics, reproducibility=reproducibility,
         )
+        # Snapshot mutable catalogue labels only for display. Prices and orders stay untouched.
+        symbol_names: dict[str, str] = {}
+        frozen_symbols = tuple(dict.fromkeys(str(symbol) for symbol in spec.symbols))
+        if frozen_symbols:
+            with self.database.connect(read_only=True) as connection:
+                rows = connection.execute(
+                    "SELECT symbol, name FROM security_master WHERE symbol IN ("
+                    + ",".join("?" for _ in frozen_symbols) + ")",
+                    list(frozen_symbols),
+                ).fetchall()
+            symbol_names = {
+                str(symbol): str(name).strip() for symbol, name in rows
+                if name and str(name).strip() and str(symbol) in frozen_symbols
+            }
+        display_metadata = {
+            "symbol_names": symbol_names,
+            "name_source": "security_master snapshot at run",
+            "captured_at": datetime.now(UTC).isoformat(),
+        }
         directory = self.artifact_dir / "daily-signals" / run_id
         artifacts = self.writer.write(
             directory,
@@ -751,6 +785,7 @@ class DailySignalStrategyService:
             reproducibility=reproducibility,
             trust_summary=trust_summary,
             indicator_series=indicator_frame,
+            display_metadata=display_metadata,
         )
         completed = datetime.now(UTC)
         payload = {
@@ -771,6 +806,7 @@ class DailySignalStrategyService:
             "diagnostics": diagnostics,
             "reproducibility": reproducibility,
             "trust_summary": trust_summary,
+            "display_metadata": display_metadata,
             "artifacts": {k: str(v) for k, v in artifacts.items()},
         }
         manifest = directory / "run.json"

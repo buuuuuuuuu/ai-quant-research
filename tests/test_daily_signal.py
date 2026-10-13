@@ -11,6 +11,7 @@ from test_factor_backtest import _database
 from test_web_workbench import _settings
 
 from ai_quant_assistant.api.app import create_app
+from ai_quant_assistant.api.run_repository import DailySignalRunRepository
 from ai_quant_assistant.api.schemas import DailySignalStrategyRequest
 from ai_quant_assistant.domain.models import (
     DailySignalRule,
@@ -22,6 +23,7 @@ from ai_quant_assistant.reports.daily_signal_writer import (
     daily_signal_chart,
     daily_signal_result_view,
 )
+from ai_quant_assistant.reports.presentation import display_money
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
 from ai_quant_assistant.research.daily_signal_audit import (
     build_account_audit,
@@ -31,6 +33,10 @@ from ai_quant_assistant.research.daily_signal_audit import (
 
 
 def test_daily_signal_request_has_actionable_chinese_validation():
+    base = _spec().to_dict()
+    base["candidate_factors"] = []
+    with pytest.raises(ValueError, match="仅冻结一只股票.*候选因子"):
+        DailySignalStrategyRequest.model_validate(base)
     base = _spec().to_dict()
     base["buy_rules"] = [
         {
@@ -69,6 +75,34 @@ def _run(tmp_path, spec=None):
     database = _database(tmp_path)
     service = DailySignalStrategyService(database=database, artifact_dir=tmp_path / "artifacts")
     return service.run(spec or _spec()), database
+
+
+def test_single_stock_without_factor_keeps_score_absent_and_executes_rules(tmp_path):
+    spec = _spec(symbols=("600519",), candidate_factors=())
+    request = DailySignalStrategyRequest.model_validate(spec.to_dict())
+    assert request.candidate_factors == []
+    result, _ = _run(tmp_path, spec)
+    selections = pd.read_csv(result["artifacts"]["candidate_selections_csv"], dtype={"symbol": str})
+    signals = pd.read_csv(result["artifacts"]["signals_csv"], dtype={"symbol": str})
+    orders = pd.read_csv(result["artifacts"]["orders_csv"], dtype={"symbol": str})
+    assert set(selections.symbol) == {"600519"}
+    assert selections.selected.all()
+    assert selections.composite_score.isna().all() and selections["rank"].isna().all()
+    assert not signals.empty and not orders.empty
+    assert signals.candidate_score.isna().all() and signals.candidate_rank.isna().all()
+    assert orders.candidate_score.isna().all() and orders.candidate_rank.isna().all()
+    report = open(result["artifacts"]["html_report"], encoding="utf-8").read()
+    assert "单股日线技术信号策略报告" in report
+    assert "未进行因子评分" in report
+    assert "根据候选因子未记录合成得分" not in report
+
+
+def test_multiple_stocks_still_require_factor_even_if_request_uses_pool():
+    request = DailySignalStrategyRequest.model_validate(
+        {**_spec().to_dict(), "symbols": None, "stock_pool_id": "pool-1", "candidate_factors": []}
+    )
+    with pytest.raises(ValueError, match="仅冻结一只股票"):
+        request.to_spec(resolved_symbols=("600519", "000001"))
 
 
 def test_rule_validation_and_cross_equal_boundary():
@@ -157,6 +191,24 @@ def test_new_run_records_trade_audit_account_checks_and_reproducibility(tmp_path
     indicators = pd.read_csv(result["artifacts"]["indicator_series_csv"], dtype={"symbol": str})
     assert set(indicators.symbol) == {"600519", "000001"}
     assert {"signal_close", "ma_1", "ma_2", "price_adjustment"}.issubset(indicators.columns)
+    assert result["display_metadata"]["symbol_names"]["600519"] == "测试公司600519"
+    with open(result["artifacts"]["html_report"], encoding="utf-8") as report:
+        assert "测试公司600519（600519）" in report.read()
+    with pd.ExcelFile(result["artifacts"]["excel"]) as workbook:
+        sheet = workbook.book["orders"]
+        headers = [cell.value for cell in sheet[1]]
+        column = headers.index("notional") + 1
+        assert isinstance(sheet.cell(2, column).value, (int, float))
+        assert sheet.cell(2, column).number_format.startswith("#,##0.00")
+        assert sheet.cell(1, sheet.max_column).value == "股票名称（运行时快照）"
+
+
+def test_money_display_keeps_zero_missing_negative_and_small_cost():
+    assert display_money(1234567.89) == "1,234,567.89 元"
+    assert display_money(-1234.56) == "-1,234.56 元"
+    assert display_money(0) == "0.00 元"
+    assert display_money(0.0001) == "0.000100 元"
+    assert display_money(float("nan")) == "未记录"
 
 
 def test_account_audit_detects_tampered_nav_without_repairing_input():
@@ -554,6 +606,49 @@ def test_daily_signal_html_escapes_unknown_display_codes(tmp_path):
     assert "未成交与等待退出" in html
 
 
+def test_price_day_lookup_uses_exact_saved_dates_and_bounded_chart(tmp_path):
+    run_id = "daily-signal-20240108T000000Z-00000001"
+    directory = tmp_path / "daily-signals" / run_id
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text(
+        json.dumps({"spec": {"symbols": ["600519"], "adjustment": "qfq"}}),
+        encoding="utf-8",
+    )
+    pd.DataFrame([
+        {"date": "2024-01-02", "symbol": "600519", "signal_close": 10.0, "ma_2": None, "price_adjustment": "qfq"},
+        {"date": "2024-01-03", "symbol": "600519", "signal_close": 11.0, "ma_2": 10.5, "price_adjustment": "qfq"},
+        {"date": "2024-01-04", "symbol": "600519", "signal_close": None, "ma_2": None, "price_adjustment": "qfq"},
+        {"date": "2024-01-05", "symbol": "600519", "signal_close": 15.0, "ma_2": 13.0, "price_adjustment": "qfq"},
+        {"date": "2024-01-08", "symbol": "600519", "signal_close": 16.0, "ma_2": 15.5, "price_adjustment": "qfq"},
+    ]).to_csv(directory / "indicator_series.csv", index=False)
+    pd.DataFrame([
+        {"signal_date": "2024-01-03", "symbol": "600519", "action": "buy", "signal_price": 11.0},
+        {"signal_date": "2024-01-03", "symbol": "600519", "action": "sell", "signal_price": 11.0},
+    ]).to_csv(directory / "signals.csv", index=False)
+    pd.DataFrame([
+        {"signal_date": "2024-01-03", "planned_execution_date": "2024-01-04", "execution_date": "2024-01-05", "symbol": "600519", "side": "buy", "status": "executed", "execution_price": 101.0, "cost": 2.0},
+        {"signal_date": "2024-01-03", "planned_execution_date": "2024-01-04", "execution_date": "2024-01-04", "symbol": "600519", "side": "sell", "status": "unfilled", "reason": "t_plus_one"},
+    ]).to_csv(directory / "orders.csv", index=False)
+    pd.DataFrame([{"date": "2024-01-04", "cash": 1000.0, "position_value": 0.0, "portfolio_value": 1000.0}]).to_csv(directory / "daily_nav.csv", index=False)
+    repository = DailySignalRunRepository(tmp_path)
+    chart = repository.price_signals(run_id, "600519", limit=3)
+    assert chart["date_index"] == ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"]
+    assert "2024-01-04" in chart["missing_dates"]["signal_close"]
+    assert chart["price_range"] == {"minimum": 10.0, "maximum": 16.0}
+    assert {row["date"] for row in chart["series"]} >= {"2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"}
+    day = repository.price_signal_day(run_id, "600519", date(2024, 1, 4))
+    assert day["price"]["signal_close"] is None
+    assert len(day["orders"]) == 2
+    assert day["signals"] == []
+    assert day["account"]["cash"] == 1000.0
+    signal_day = repository.price_signal_day(run_id, "600519", date(2024, 1, 3))
+    assert len(signal_day["signals"]) == 2
+    assert signal_day["orders"] == []
+    assert repository.price_signal_day(run_id, "600519", date(2024, 1, 6))["price"] is None
+    with pytest.raises(KeyError):
+        repository.price_signal_day(run_id, "000333", date(2024, 1, 4))
+
+
 def test_api_history_copy_report_and_read_only_configuration(tmp_path):
     database = _database(tmp_path)
     payload = _spec().to_dict()
@@ -594,8 +689,33 @@ def test_api_history_copy_report_and_read_only_configuration(tmp_path):
         price_payload = price_signals.json()
         assert price_payload["price_adjustment"] == "qfq"
         assert {row["symbol"] for row in price_payload["series"]} == {"600519"}
+        assert price_payload["date_index"][0] == price_payload["series"][0]["date"]
+        assert price_payload["date_index"][-1] == price_payload["series"][-1]["date"]
+        assert price_payload["price_range"]["minimum"] <= price_payload["price_range"]["maximum"]
         assert all("execution_price" not in row for row in price_payload["series"])
         assert price_payload["orders"][0]["execution_price"] is not None
+        signal_day = client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "2024-01-04"},
+        )
+        assert signal_day.status_code == 200
+        assert signal_day.json()["date"] == "2024-01-04"
+        assert signal_day.json()["signals"][0]["planned_execution_date"] == "2024-01-05"
+        execution_day = client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "2024-01-05"},
+        )
+        assert execution_day.status_code == 200
+        assert execution_day.json()["orders"][0]["execution_price"] == price_payload["orders"][0]["execution_price"]
+        assert execution_day.json()["account"]["date"] == "2024-01-05"
+        assert client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "999999", "date": "2024-01-05"},
+        ).status_code == 404
+        assert client.get(
+            f"/api/v1/daily-signal-runs/{run_id}/price-signals/day",
+            params={"symbol": "600519", "date": "not-a-date"},
+        ).status_code == 422
         assert (
             client.get(
                 f"/api/v1/daily-signal-runs/{run_id}/price-signals",

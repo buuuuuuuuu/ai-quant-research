@@ -35,6 +35,8 @@ const RunCenterUI = (() => {
   }
   function display(value, key) {
     if (value == null || value === "") return "未记录";
+    if (["initial_capital", "final_value", "portfolio_value", "cash", "position_value", "market_value", "notional", "cost", "total_cost", "total_transaction_cost", "commission_cost", "slippage_cost", "stamp_duty_cost", "cash_before", "cash_after", "buy_notional", "sell_notional"].includes(key) && typeof value === "number")
+      return amount(value);
     if (catalog.percent_fields?.includes(key) && typeof value === "number")
       return Number.isFinite(value) ? (value * 100).toFixed(2) + "%" : "未记录";
     if (["factor", "code"].includes(key)) return factorName(value);
@@ -97,10 +99,10 @@ const RunCenterUI = (() => {
       : "";
     return `${esc(identity)}${identity ? "<br>" : ""}${row.symbols.length ? `${row.symbols.length} 只 · ${esc(row.symbols.slice(0, 6).join(" "))}${row.symbols.length > 6 ? " …" : ""}` : "历史范围未知"}`;
   }
-  function table(rows) {
+  function table(rows, deletable = false) {
     if (!rows.length)
       return '<p class="empty-state">没有匹配的持久运行记录。</p>';
-    return `<table class="center-table"><thead><tr><th>类型 / 身份</th><th>冻结范围</th><th>研究区间</th><th>状态 / 时间</th><th>操作</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.label)}<small><code>${esc(r.run_id || r.record_id)}</code></small></td><td>${scope(r)}</td><td>${esc(known(r.start_date))}<small>至 ${esc(known(r.end_date))}</small></td><td>${esc(labels[r.status] || r.status)}<small>${r.started_at ? "开始" : "创建"}：${esc(known(r.started_at || r.created_at))}</small><small>完成：${esc(known(r.completed_at))}</small><small>耗时：${r.duration_seconds == null ? "未记录" : esc(r.duration_seconds) + " 秒"}</small></td><td><a href="${esc(r.detail_url)}">查看详情</a><br><a href="${esc(r.copy_url)}">复制参数</a></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="center-table"><thead><tr><th>类型 / 身份</th><th>冻结范围</th><th>研究区间</th><th>状态 / 时间</th><th>操作</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.label)}<small><code>${esc(r.run_id || r.record_id)}</code></small></td><td>${scope(r)}</td><td>${esc(known(r.start_date))}<small>至 ${esc(known(r.end_date))}</small></td><td>${esc(labels[r.status] || r.status)}<small>${r.started_at ? "开始" : "创建"}：${esc(known(r.started_at || r.created_at))}</small><small>完成：${esc(known(r.completed_at))}</small><small>耗时：${r.duration_seconds == null ? "未记录" : esc(r.duration_seconds) + " 秒"}</small></td><td><a href="${esc(r.detail_url)}">查看详情</a><br><a href="${esc(r.copy_url)}">复制参数</a>${deletable && ["daily_signal", "factor_backtest"].includes(r.kind) && ["succeeded", "failed", "cancelled"].includes(r.status) && ["index", "task"].includes(r.source) ? `<br><button type="button" class="center-delete-button" data-delete-backtest data-source="${esc(r.source)}" data-record="${esc(r.record_id)}" data-run-id="${esc(r.run_id || r.record_id)}" data-label="${esc(r.label)}">删除记录与报告</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
   }
   const titles = {
     symbols: "冻结股票代码",
@@ -205,7 +207,7 @@ const RunCenterUI = (() => {
     if (item.action_kind === "edit_field" && item.field)
       return `<button type="button" data-preflight-action="focus-field" data-field="${esc(item.field)}">修改${esc(titles[item.field] || item.field)}</button>`;
     if (["data_plan", "inspect_price_gaps", "verify_price_gaps"].includes(item.action_kind))
-      return '<button type="button" data-preflight-action="show-plan">查看处理计划（只生成计划、不联网）</button>';
+      return '<button type="button" data-preflight-action="show-plan">生成并查看处理计划（只生成计划、不联网）</button>';
     if (item.action_kind === "edit_candidate_factors")
       return '<button type="button" data-preflight-action="focus-section" data-target="center-daily-candidates">修改候选因子</button>';
     return "";
@@ -270,7 +272,7 @@ const RunCenterUI = (() => {
       return `${known(start)} 至 ${known(end)}`;
     };
     const checkTable = checks.length
-      ? `<section><h3>默认检查结果</h3><div class="table-shell"><table class="preflight-checks"><thead><tr><th>对象</th><th>检查项</th><th>口径 / 因子</th><th>需要覆盖</th><th>本地覆盖</th><th>状态与原因</th></tr></thead><tbody>${checks
+      ? `<section><h3>默认检查结果</h3><div class="preflight-filter" data-preflight-filter hidden><span data-preflight-filter-label tabindex="-1"></span><button type="button" data-clear-problem-filter>显示全部检查</button></div><div class="table-shell"><table class="preflight-checks"><thead><tr><th>对象</th><th>检查项</th><th>口径 / 因子</th><th>需要覆盖</th><th>本地覆盖</th><th>状态与原因</th></tr></thead><tbody>${checks
           .slice(0, 100)
           .map((item) => {
             const detail = item.metric
@@ -290,7 +292,7 @@ const RunCenterUI = (() => {
             const gapDetails = gaps ? `<details><summary>查看缺失日期与分类</summary><ul>${gaps}</ul>${item.gap_details_truncated ? `<p>另有 ${esc(item.gap_details_truncated)} 条未显示。</p>` : ""}${verifyLink}</details>` : "";
             const problemAction = item.dataset === "daily_bar" && item.status !== "ready" && /^[0-9]{6}$/.test(item.symbol || "")
               ? `<button type="button" data-show-problem="${esc(item.symbol)}">只看这只股票的问题</button> <button type="button" data-exclude-problem="${esc(item.symbol)}">从本次研究排除</button>` : "";
-            return `<tr><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small>${gapDetails}${problemAction}</td></tr>`;
+            return `<tr data-check-symbol="${esc(item.symbol || "")}" data-check-status="${esc(item.status || "")}"><td>${esc(known(item.symbol || item.security_id))}${listing}</td><td>${esc(datasetLabels[item.dataset] || item.dataset || "未知检查")}</td><td>${esc(detail)}</td><td>${esc(range(item, "required"))}</td><td>${esc(localRange)}${missing}</td><td><strong>${esc(statusLabels[item.status] || item.status || "未知")}</strong><small>${esc(item.reason || "未提供原因")}</small>${gapDetails}${problemAction}</td></tr>`;
           })
           .join("")}</tbody></table></div>${checks.length > 100 ? "<p>仅展示前 100 项检查。</p>" : ""}</section>`
       : "";
@@ -419,6 +421,8 @@ const RunCenterUI = (() => {
     const issues = [];
     const add = (code, message, target, field = null, fix = null) =>
       issues.push({ code, message, target, field, fix });
+    if ((!Array.isArray(params.candidate_factors) || !params.candidate_factors.length) && scopeSize !== 1)
+      add("empty_candidate_factors", "只有冻结范围恰好一只股票时，才可以不设置候选因子。多股范围请增加候选排序因子；调整后重新检查本地数据。", "center-daily-candidates");
     if (!params.buy_rules?.length) add("empty_buy_rules", "买入规则为空。空规则不会被解释为始终满足，请至少添加一条买入规则；修改后需要重新检查数据。", "center-daily-buy");
     if (!params.sell_rules?.length) add("empty_sell_rules", "卖出规则为空。现有引擎要求至少一条卖出规则；修改后需要重新检查数据。", "center-daily-sell");
     for (const [side, rules] of [["买入", params.buy_rules || []], ["卖出", params.sell_rules || []]])
@@ -443,11 +447,16 @@ const RunCenterUI = (() => {
     return dailySignalIssues(params, scopeSize).map((item) => item.message);
   }
 
-  function dailySignalSummary(params = {}) {
+  function dailySignalSummary(params = {}, scopeSize = params.symbols?.length) {
     const refresh = catalog.enums[params.candidate_refresh] || params.candidate_refresh || "未知频率";
-    const factors = (params.candidate_factors || []).map((item) => `${factorName(item.code)}${item.direction === "desc" ? "从高到低" : "从低到高"}（相对权重 ${known(item.weight)}）`).join("、") || "候选因子未配置";
+    const factors = (params.candidate_factors || []).map((item) => `${factorName(item.code)}${item.direction === "desc" ? "从高到低" : "从低到高"}（相对权重 ${known(item.weight)}）`).join("、");
     const rules = (side) => (params[side + "_rules"] || []).map(ruleText).join("；") || "未配置";
-    return `${refresh}更新候选股票，根据${factors}合成得分，选择前 ${known(params.candidate_count)} 只。候选名单更新与每日信号检查是两个过程。每天收盘后检查候选股票；买入规则${enumName(params.buy_rule_mode)}：${rules("buy")}。满足时生成买入指令，最早在下一交易日开盘按滑点、费用、整手和资金约束尝试成交。卖出规则${enumName(params.sell_rule_mode)}：${rules("sell")}；${params.exit_on_candidate_drop ? "退出候选名单时也生成卖出指令" : "退出候选名单后继续持有，直到出现卖出信号"}。卖出受限时保留退出意图并继续尝试，回测结束不会隐含强制平仓。`;
+    const selection = factors
+      ? `${refresh}更新候选股票，根据${factors}合成得分，选择前 ${known(params.candidate_count)} 只。候选名单更新与每日信号检查是两个过程。`
+      : scopeSize === 1
+        ? "单只冻结股票直接参与每日信号检查，不使用候选因子排序；候选得分和排名不适用。"
+        : "尚未配置候选因子；仅单只冻结股票可以跳过排序，多股范围须先添加候选因子。";
+    return `${selection}每天收盘后检查候选股票；买入规则${enumName(params.buy_rule_mode)}：${rules("buy")}。满足时生成买入指令，最早在下一交易日开盘按滑点、费用、整手和资金约束尝试成交。卖出规则${enumName(params.sell_rule_mode)}：${rules("sell")}；${params.exit_on_candidate_drop ? "退出候选名单时也生成卖出指令" : "退出候选名单后继续持有，直到出现卖出信号"}。卖出受限时保留退出意图并继续尝试，回测结束不会隐含强制平仓。`;
   }
 
   function dailySignalTimeline(signals = [], orders = []) {
@@ -478,7 +487,7 @@ const RunCenterUI = (() => {
       const group = status === "executed" ? "executed" : ["retry_next_trading_day", "pending"].includes(order?.next_action) ? "retry" : "unfilled";
       return (!filters.symbol || symbol === filters.symbol) && (!filters.side || side === filters.side) && (!filters.status || group === filters.status) && (!filters.reason || order?.reason === filters.reason) && (!filters.execution_date || order?.execution_date === filters.execution_date);
     }).slice(0, 100);
-    return `<div class="table-shell"><table class="signal-timeline"><thead><tr><th>信号</th><th>候选 / 触发依据</th><th>计划执行</th><th>成交或未成交</th><th>后续处理</th></tr></thead><tbody>${selected.map(({ signal, order }) => `<tr><td><strong>${esc(enumName(order?.side || signal?.action))}</strong> · ${esc(known(signal?.signal_date || order?.signal_date))}<small>${esc(known(order?.symbol || signal?.symbol))} · 收盘价 ${esc(known(signal?.signal_price ?? order?.signal_price))}</small></td><td>资格：${esc(display(signal?.candidate_eligible, "candidate_eligible"))}<small>排名 ${esc(known(signal?.candidate_rank ?? order?.candidate_rank))} · 得分 ${esc(known(signal?.candidate_score ?? order?.candidate_score))}</small><details><summary>触发依据</summary><code>${esc(known(signal?.rule_evidence))}</code></details></td><td>${esc(known(order?.planned_execution_date || signal?.planned_execution_date))}<small>信号确认后最早在该日开盘尝试</small></td><td><strong>${esc(enumName(order?.status || signal?.status))}</strong><small>模拟成交日 ${esc(known(order?.execution_date))} · 开盘参考价 ${esc(known(order?.execution_price))} · 数量 ${esc(known(order?.shares ?? signal?.planned_shares))}</small><small>${order?.reason ? esc(enumName(order.reason)) : "没有保存未成交原因"}</small></td><td>${esc(order?.next_action ? enumName(order.next_action) : "未记录")}</td></tr>`).join("") || '<tr><td colspan="5">没有符合筛选条件的已保存记录；不推算缺失字段。</td></tr>'}</tbody></table></div><p>当前仅展示匹配结果前 100 条；接口最多读取每类最近 2,000 条，完整数据请下载原 CSV。</p>`;
+    return `<div class="table-shell"><table class="signal-timeline"><thead><tr><th>信号</th><th>候选 / 触发依据</th><th>计划执行</th><th>成交或未成交</th><th>后续处理</th></tr></thead><tbody>${selected.map(({ signal, order }) => `<tr><td><strong>${esc(enumName(order?.side || signal?.action))}</strong> · ${esc(known(signal?.signal_date || order?.signal_date))}<small>${esc(stockLabel(order?.symbol || signal?.symbol))} · 收盘价 ${esc(known(signal?.signal_price ?? order?.signal_price))}</small></td><td>资格：${esc(display(signal?.candidate_eligible, "candidate_eligible"))}<small>排名 ${esc(known(signal?.candidate_rank ?? order?.candidate_rank))} · 得分 ${esc(known(signal?.candidate_score ?? order?.candidate_score))}</small><details><summary>触发依据</summary><code>${esc(known(signal?.rule_evidence))}</code></details></td><td>${esc(known(order?.planned_execution_date || signal?.planned_execution_date))}<small>信号确认后最早在该日开盘尝试</small></td><td><strong>${esc(enumName(order?.status || signal?.status))}</strong><small>模拟成交日 ${esc(known(order?.execution_date))} · 开盘参考价 ${esc(known(order?.execution_price))} · 数量 ${esc(known(order?.shares ?? signal?.planned_shares))}</small><small>${order?.reason ? esc(enumName(order.reason)) : "没有保存未成交原因"}</small></td><td>${esc(order?.next_action ? enumName(order.next_action) : "未记录")}</td></tr>`).join("") || '<tr><td colspan="5">没有符合筛选条件的已保存记录；不推算缺失字段。</td></tr>'}</tbody></table></div><p>当前仅展示匹配结果前 100 条；接口最多读取每类最近 2,000 条，完整数据请下载原 CSV。</p>`;
   }
   function termHelp(key, label = null) {
     const item = catalog.terms?.[key];
@@ -487,8 +496,30 @@ const RunCenterUI = (() => {
     const visible = label === null ? item.label : label;
     return `<details class="term-help" data-term="${esc(key)}"><summary>${esc(visible)}<button type="button" aria-label="查看${esc(item.label)}解释" aria-expanded="false">?</button></summary><div class="term-card"><button class="term-close" type="button" data-term-close aria-label="关闭${esc(item.label)}解释">关闭</button><strong>${esc(item.professional)}</strong><p>${esc(item.short)}</p><p><b>口径：</b>${esc(item.calculation)}</p><p><b>例子：</b>${esc(item.example)}</p><p><b>限制：</b>${esc(item.limitations)}</p><code>${esc(item.code)}</code></div></details>`;
   }
+  let termDismissBound = false;
+  let priceDismissBound = false;
+  let activePriceDismiss = null;
   function wireTermHelp(root = document) {
+    if (!termDismissBound && typeof document.addEventListener === "function") {
+      const closeTerms = (except = null, restoreFocus = false) => {
+        document.querySelectorAll("details.term-help[open]").forEach((details) => {
+          if (details === except) return;
+          details.open = false;
+          const button = details.querySelector("button[aria-expanded]");
+          button?.setAttribute("aria-expanded", "false");
+          if (restoreFocus && details.contains(document.activeElement)) button?.focus();
+        });
+      };
+      document.addEventListener("click", (event) =>
+        closeTerms(event.target.closest?.("details.term-help") || null));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeTerms(null, true);
+      });
+      termDismissBound = true;
+    }
     root.querySelectorAll?.("details.term-help").forEach((details) => {
+      if (details.dataset.termWired) return;
+      details.dataset.termWired = "true";
       const button = details.querySelector?.("button[aria-expanded]");
       if (!button) return;
       const sync = () => button.setAttribute("aria-expanded", details.open ? "true" : "false");
@@ -503,10 +534,20 @@ const RunCenterUI = (() => {
   }
   const finite = (value) =>
     typeof value === "number" && Number.isFinite(value) ? value : null;
-  const amount = (value) =>
-    finite(value) == null
-      ? "未记录"
-      : Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const amount = (value) => {
+    const number = finite(value);
+    if (number == null) return "未记录";
+    if (number !== 0 && Math.abs(number) < 0.005)
+      return (Math.abs(number) >= 0.0000005 ? number.toLocaleString("zh-CN", { minimumFractionDigits: 6, maximumFractionDigits: 6 }) : number.toExponential(3)) + " 元";
+    return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " 元";
+  };
+  let displayNames = {};
+  let displayNameSource = "historical_unrecorded";
+  const stockLabel = (symbol) => {
+    const code = known(symbol);
+    const name = displayNames[code];
+    return name ? `${name}（${code}）` : `${code}（名称未记录）`;
+  };
   const percent = (value) =>
     finite(value) == null ? "未记录" : (Number(value) * 100).toFixed(2) + "%";
   function navChartModel(rows = [], selectedIndex = 0, width = 900, height = 340, xTickCount = 6) {
@@ -608,17 +649,27 @@ const RunCenterUI = (() => {
     const scope = trust.scope || {}, preflight = trust.preflight || {}, drawdown = trust.drawdown_period || {};
     const excluded = scope.excluded || [];
     const rows = (trust.per_symbol || []).slice(0, 500);
-    return `<section class="daily-trust"><h3>数据完整性与研究限制</h3><dl class="center-meta account-grid"><div><dt>冻结范围 / 原股票池</dt><dd>${esc(known(scope.frozen_count))} 只 · ${esc(known(scope.source_pool_id || scope.pool_id))} / ${esc(known(scope.source_pool_revision || scope.pool_revision))}</dd></div><div><dt>研究交易日 / 预热起点</dt><dd>${esc(known(trust.effective_trading_days))} 日 / ${esc(known(trust.warmup_start))}</dd></div><div><dt>提交时数据预检</dt><dd>${preflight.checked_at ? `${preflight.ready === true ? "通过" : "未通过"} · ${esc(known(preflight.checked_at))} · 阻断 ${esc(known(preflight.blocker_count))}` : "未记录"}</dd></div><div><dt>基准覆盖</dt><dd>${esc(known(preflight.benchmark?.status))} · ${esc(known(preflight.benchmark?.reason))}</dd></div><div><dt>账户核对</dt><dd>${esc(known(trust.account_audit?.status))} · 异常 ${esc(known(trust.account_audit?.failure_count))}</dd></div><div><dt>信号 / 指令 / 成交 / 未成交</dt><dd>${[trust.signal_count, trust.order_count, trust.executed_count, trust.unfilled_count].map(known).map(esc).join(" / ")}</dd></div><div><dt>交易成本 / 初始资金</dt><dd>${esc(percent(trust.cost_to_initial_capital))}</dd></div><div><dt>参数哈希 / 代码版本</dt><dd>${esc(known(trust.parameter_sha256))} / ${esc(known(trust.git_commit_sha))}</dd></div></dl><details><summary>提交时缺口核验明细（按股票和口径）</summary><div class="table-shell"><table><thead><tr><th>股票</th><th>口径</th><th>已核验停牌</th><th>仍无法核验</th></tr></thead><tbody>${(preflight.gap_checks || []).slice(0, 1000).map((item) => `<tr><td>${esc(known(item.symbol))}</td><td>${esc(known(item.adjustment))}</td><td>${esc(known(item.counts?.verified_suspension))}</td><td>${esc(known(item.counts?.unverified_gap))}</td></tr>`).join("") || '<tr><td colspan="4">未记录提交时的逐口径缺口信息。</td></tr>'}</tbody></table></div></details><p>${excluded.length ? `本次未包含：${excluded.map((item) => `${esc(item.symbol)}（${esc(item.reason)}）`).join("；")}。原股票的数据问题仍未修复。` : "本次未主动排除问题股票。"}</p><p>${esc(trust.limitation || "静态股票池可能存在幸存者偏差。")}</p><h3>收益与回撤的已保存事实</h3><p>最大回撤区间：${esc(known(drawdown.peak_date))} 至 ${esc(known(drawdown.trough_date))}；幅度 ${esc(percent(drawdown.magnitude))}。区间端点账户快照见下方原始数据；这些持仓不代表造成回撤的因果归因。</p><p>交易总成本 / 期末净收益绝对值：${esc(percent(trust.cost_to_abs_net_gain))}。单笔盈亏和各股票收益贡献当前数据不足，未推算。</p><details><summary>按股票查看已成交金额与成本</summary><div class="table-shell"><table><thead><tr><th>股票</th><th>买入 / 卖出笔数</th><th>买入金额</th><th>卖出金额</th><th>累计成本</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(known(r.symbol))}</td><td>${esc(known(r.buy_count))} / ${esc(known(r.sell_count))}</td><td>${esc(amount(r.buy_notional))}</td><td>${esc(amount(r.sell_notional))}</td><td>${esc(amount(r.total_cost))}</td></tr>`).join("") || '<tr><td colspan="5">没有已记录成交。</td></tr>'}</tbody></table></div><p>完整事实摘要可下载 trust_summary.json；未成交不计入成交金额。</p></details></section>`;
+    return `<section class="daily-trust"><h3>数据完整性与研究限制</h3><dl class="center-meta account-grid"><div><dt>冻结范围 / 原股票池</dt><dd>${esc(known(scope.frozen_count))} 只 · ${esc(known(scope.source_pool_id || scope.pool_id))} / ${esc(known(scope.source_pool_revision || scope.pool_revision))}</dd></div><div><dt>研究交易日 / 预热起点</dt><dd>${esc(known(trust.effective_trading_days))} 日 / ${esc(known(trust.warmup_start))}</dd></div><div><dt>提交时数据预检</dt><dd>${preflight.checked_at ? `${preflight.ready === true ? "通过" : "未通过"} · ${esc(known(preflight.checked_at))} · 阻断 ${esc(known(preflight.blocker_count))}` : "未记录"}</dd></div><div><dt>基准覆盖</dt><dd>${esc(known(preflight.benchmark?.status))} · ${esc(known(preflight.benchmark?.reason))}</dd></div><div><dt>账户核对</dt><dd>${esc(known(trust.account_audit?.status))} · 异常 ${esc(known(trust.account_audit?.failure_count))}</dd></div><div><dt>信号 / 指令 / 成交 / 未成交</dt><dd>${[trust.signal_count, trust.order_count, trust.executed_count, trust.unfilled_count].map(known).map(esc).join(" / ")}</dd></div><div><dt>交易成本 / 初始资金</dt><dd>${esc(percent(trust.cost_to_initial_capital))}</dd></div><div><dt>参数哈希 / 代码版本</dt><dd>${esc(known(trust.parameter_sha256))} / ${esc(known(trust.git_commit_sha))}</dd></div></dl><details><summary>提交时缺口核验明细（按股票和口径）</summary><div class="table-shell"><table><thead><tr><th>股票</th><th>口径</th><th>已核验停牌</th><th>仍无法核验</th></tr></thead><tbody>${(preflight.gap_checks || []).slice(0, 1000).map((item) => `<tr><td>${esc(stockLabel(item.symbol))}</td><td>${esc(known(item.adjustment))}</td><td>${esc(known(item.counts?.verified_suspension))}</td><td>${esc(known(item.counts?.unverified_gap))}</td></tr>`).join("") || '<tr><td colspan="4">未记录提交时的逐口径缺口信息。</td></tr>'}</tbody></table></div></details><p>${excluded.length ? `本次未包含：${excluded.map((item) => `${esc(item.symbol)}（${esc(item.reason)}）`).join("；")}。原股票的数据问题仍未修复。` : "本次未主动排除问题股票。"}</p><p>${esc(trust.limitation || "静态股票池可能存在幸存者偏差。")}</p><h3>收益与回撤的已保存事实</h3><p>最大回撤区间：${esc(known(drawdown.peak_date))} 至 ${esc(known(drawdown.trough_date))}；幅度 ${esc(percent(drawdown.magnitude))}。区间端点账户快照见下方原始数据；这些持仓不代表造成回撤的因果归因。</p><p>交易总成本 / 期末净收益绝对值：${esc(percent(trust.cost_to_abs_net_gain))}。单笔盈亏和各股票收益贡献当前数据不足，未推算。</p><details><summary>按股票查看已成交金额与成本</summary><div class="table-shell"><table><thead><tr><th>股票</th><th>买入 / 卖出笔数</th><th>买入金额</th><th>卖出金额</th><th>累计成本</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(stockLabel(r.symbol))}</td><td>${esc(known(r.buy_count))} / ${esc(known(r.sell_count))}</td><td>${esc(amount(r.buy_notional))}</td><td>${esc(amount(r.sell_notional))}</td><td>${esc(amount(r.total_cost))}</td></tr>`).join("") || '<tr><td colspan="5">没有已记录成交。</td></tr>'}</tbody></table></div><p>完整事实摘要可下载 trust_summary.json；未成交不计入成交金额。</p></details></section>`;
   }
-  function renderExecutedTrades(rows, filters = {}) {
-    const selected = rows.filter((row) => (!filters.symbol || row.symbol === filters.symbol) && (!filters.side || row.side === filters.side) && (!filters.execution_date || row.execution_date === filters.execution_date)).slice(0, 100);
-    return `<div class="table-shell"><table><thead><tr><th>信号日</th><th>计划执行日</th><th>实际成交日</th><th>股票</th><th>动作</th><th>数量（股）</th><th>信号收盘价</th><th>开盘参考价</th><th>成交金额</th><th>本次交易成本</th><th>候选排名 / 得分</th><th>状态 / 后续</th><th>核对资金与持仓</th></tr></thead><tbody>${selected.map((r) => `<tr><td>${esc(known(r.signal_date))}</td><td>${esc(known(r.planned_execution_date))}</td><td>${esc(known(r.execution_date))}</td><td>${esc(known(r.symbol))}</td><td>${esc(enumName(r.side))}</td><td>${esc(known(r.shares))}</td><td>${esc(known(r.signal_price))}</td><td>${esc(known(r.execution_price))}</td><td>${esc(amount(r.notional))}</td><td>${esc(amount(r.cost))}</td><td>${esc(known(r.candidate_rank))} / ${esc(known(r.candidate_score))}</td><td>${esc(enumName(r.status))}<small>${esc(r.next_action ? enumName(r.next_action) : "未记录")}</small></td><td><details class="trade-audit"><summary>展开核对</summary><dl><div><dt>成交前 / 后现金</dt><dd>${esc(amount(r.cash_before))} → ${esc(amount(r.cash_after))}</dd></div><div><dt>成交前 / 后持仓</dt><dd>${esc(known(r.position_shares_before))} → ${esc(known(r.position_shares_after))} 股</dd></div><div><dt>佣金</dt><dd>${esc(amount(r.commission_cost))}</dd></div><div><dt>滑点成本</dt><dd>${esc(amount(r.slippage_cost))}</dd></div><div><dt>卖出印花税</dt><dd>${esc(amount(r.stamp_duty_cost))}</dd></div><div><dt>费用合计</dt><dd>${esc(amount(r.cost))}</dd></div><div><dt>关联信号</dt><dd>${esc(known(r.signal_id))}</dd></div></dl><p>成交后现金是完成本次模拟交易并扣除本次费用后的账户现金；开盘参考价仍为未复权口径。</p></details></td></tr>`).join("") || '<tr><td colspan="13">没有符合筛选条件的实际模拟成交；未成交不会放入本表。</td></tr>'}</tbody></table></div><p>当前仅展示前 100 条匹配记录；完整数据请下载 orders.csv 或 Excel。</p>`;
+  function renderExecutedTrades(rows = [], state = {}) {
+    const headers = [
+      ["信号日", null], ["计划执行日", null], ["实际成交日", "execution_date"],
+      ["股票", "symbol"], ["动作", "side"], ["数量（股）", "shares"],
+      ["信号收盘价", null], ["开盘参考价", null], ["成交金额", "notional"],
+      ["本次交易成本", "cost"], ["候选排名 / 得分", null],
+      ["状态 / 后续", null], ["核对资金与持仓", null],
+    ];
+    const heading = headers.map(([label, key]) => `<th scope="col"${state.sort === key ? ` aria-sort="${state.direction === "asc" ? "ascending" : "descending"}"` : ""}>${key ? `<button type="button" data-execution-sort="${key}" aria-label="按${label}${key === "symbol" ? "代码" : ""}排序">${label} ${state.sort === key ? state.direction === "asc" ? "↑" : "↓" : "↕"}</button><button type="button" class="execution-filter-trigger" data-execution-filter aria-label="筛选成交记录" aria-controls="center-execution-filter-panel" aria-expanded="false">▾</button>` : label}</th>`).join("");
+    const content = rows.map((r) => `<tr class="trade-row trade-${r.side === "buy" ? "buy" : r.side === "sell" ? "sell" : "other"}"><td>${esc(known(r.signal_date))}</td><td>${esc(known(r.planned_execution_date))}</td><td>${esc(known(r.execution_date))}</td><td>${esc(stockLabel(r.symbol))}</td><td><span class="trade-side">${esc(enumName(r.side))}</span></td><td>${esc(known(r.shares))}</td><td>${esc(known(r.signal_price))}</td><td>${esc(known(r.execution_price))}</td><td>${esc(amount(r.notional))}</td><td>${esc(amount(r.cost))}</td><td>${esc(known(r.candidate_rank))} / ${esc(known(r.candidate_score))}</td><td>${esc(enumName(r.status))}<small>${esc(r.next_action ? enumName(r.next_action) : "未记录")}</small></td><td><details class="trade-audit"><summary>展开核对</summary><dl><div><dt>成交前 / 后现金</dt><dd>${esc(amount(r.cash_before))} → ${esc(amount(r.cash_after))}</dd></div><div><dt>成交前 / 后持仓</dt><dd>${esc(known(r.position_shares_before))} → ${esc(known(r.position_shares_after))} 股</dd></div><div><dt>佣金</dt><dd>${esc(amount(r.commission_cost))}</dd></div><div><dt>滑点成本</dt><dd>${esc(amount(r.slippage_cost))}</dd></div><div><dt>卖出印花税</dt><dd>${esc(amount(r.stamp_duty_cost))}</dd></div><div><dt>费用合计</dt><dd>${esc(amount(r.cost))}</dd></div><div><dt>关联信号</dt><dd>${esc(known(r.signal_id))}</dd></div></dl><p>成交后现金是完成本次模拟交易并扣除本次费用后的账户现金；开盘参考价仍为未复权口径。</p></details></td></tr>`).join("");
+    const total = Number.isInteger(state.total) ? state.total : rows.length;
+    const page = state.page || 1, pageSize = state.page_size || 50;
+    return `<div class="table-shell"><table class="execution-table"><thead><tr>${heading}</tr></thead><tbody>${content || '<tr><td colspan="13">没有符合筛选条件的实际模拟成交；未成交不会放入本表。</td></tr>'}</tbody></table></div><div class="execution-pagination"><span role="status">${state.error ? esc(state.error) : `匹配 ${total} 笔 · 第 ${page} / ${Math.max(1, Math.ceil(total / pageSize))} 页 · 本页 ${rows.length} 笔`}</span><button type="button" data-execution-page="prev" ${page <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-execution-page="next" ${page * pageSize >= total ? "disabled" : ""}>下一页</button><a href="${esc(state.download || "#")}">下载完整 orders.csv</a></div>`;
   }
   function renderFinalPositions(rows) {
-    return `<div class="table-shell"><table><thead><tr><th>股票</th><th>数量（股）</th><th>回测结束日估值价格</th><th>回测结束日持仓市值</th><th>占期末总资产</th><th>候选排名 / 得分</th><th>等待退出</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(known(r.symbol))}</td><td>${esc(known(r.shares))}</td><td>${esc(known(r.price))}</td><td>${esc(amount(r.market_value))}</td><td>${esc(percent(r.asset_ratio))}</td><td>${esc(known(r.candidate_rank))} / ${esc(known(r.candidate_score))}</td><td>${r.pending_exit === true ? "是" : r.pending_exit === false ? "否" : "未记录"}</td></tr>`).join("") || '<tr><td colspan="7">没有已保存的回测结束日持仓。</td></tr>'}</tbody></table></div>`;
+    return `<div class="table-shell"><table><thead><tr><th>股票</th><th>数量（股）</th><th>回测结束日估值价格</th><th>回测结束日持仓市值</th><th>占期末总资产</th><th>候选排名 / 得分</th><th>等待退出</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(stockLabel(r.symbol))}</td><td>${esc(known(r.shares))}</td><td>${esc(known(r.price))}</td><td>${esc(amount(r.market_value))}</td><td>${esc(percent(r.asset_ratio))}</td><td>${esc(known(r.candidate_rank))} / ${esc(known(r.candidate_score))}</td><td>${r.pending_exit === true ? "是" : r.pending_exit === false ? "否" : "未记录"}</td></tr>`).join("") || '<tr><td colspan="7">没有已保存的回测结束日持仓。</td></tr>'}</tbody></table></div>`;
   }
   function renderUnfilledOrders(rows) {
-    return `<div class="table-shell"><table><thead><tr><th>股票</th><th>动作</th><th>信号日</th><th>计划执行日</th><th>计划/记录数量</th><th>未成交原因</th><th>指令状态</th><th>是否失效</th><th>是否重试</th><th>后续处理</th></tr></thead><tbody>${rows.slice(0, 100).map((r) => `<tr><td>${esc(known(r.symbol))}</td><td>${esc(enumName(r.side))}</td><td>${esc(known(r.signal_date))}</td><td>${esc(known(r.planned_execution_date))}</td><td>${esc(known(r.shares))}</td><td>${esc(r.reason ? enumName(r.reason) : "未记录")}</td><td>${esc(enumName(r.status))}</td><td>${r.next_action === "expired" ? "是" : "否"}</td><td>${r.next_action === "retry_next_trading_day" ? "是" : "否"}</td><td>${esc(r.next_action ? enumName(r.next_action) : "未记录")}</td></tr>`).join("") || '<tr><td colspan="10">没有未成交或等待重试的已保存指令。</td></tr>'}</tbody></table></div><p>未成交不是“成交数量为 0”的真实交易；原因和后续处理直接读取保存记录。</p>`;
+    return `<div class="table-shell"><table><thead><tr><th>股票</th><th>动作</th><th>信号日</th><th>计划执行日</th><th>计划/记录数量</th><th>未成交原因</th><th>指令状态</th><th>是否失效</th><th>是否重试</th><th>后续处理</th></tr></thead><tbody>${rows.slice(0, 100).map((r) => `<tr><td>${esc(stockLabel(r.symbol))}</td><td>${esc(enumName(r.side))}</td><td>${esc(known(r.signal_date))}</td><td>${esc(known(r.planned_execution_date))}</td><td>${esc(known(r.shares))}</td><td>${esc(r.reason ? enumName(r.reason) : "未记录")}</td><td>${esc(enumName(r.status))}</td><td>${r.next_action === "expired" ? "是" : "否"}</td><td>${r.next_action === "retry_next_trading_day" ? "是" : "否"}</td><td>${esc(r.next_action ? enumName(r.next_action) : "未记录")}</td></tr>`).join("") || '<tr><td colspan="10">没有未成交或等待重试的已保存指令。</td></tr>'}</tbody></table></div><p>未成交不是“成交数量为 0”的真实交易；原因和后续处理直接读取保存记录。</p>`;
   }
   function renderDailyAccounts(rows) {
     const selected = rows.slice(-200);
@@ -645,23 +696,46 @@ const RunCenterUI = (() => {
   function priceChartModel(payload = {}, selectedIndex = 0, width = 900, height = 380, xTickCount = 6) {
     const series = Array.isArray(payload.series) ? payload.series : [];
     const lineKeys = series.length ? Object.keys(series[0]).filter((key) => key === "signal_close" || /^ma_\d+$/.test(key)) : [];
+    const dates = (Array.isArray(payload.date_index) && payload.date_index.length ? payload.date_index : series.map((row) => row.date))
+      .map((value) => String(value).slice(0, 10));
     const values = series.flatMap((row) => lineKeys.map((key) => finite(row[key]))).filter((value) => value != null);
-    if (!series.length || !values.length) return { empty: true, series, lineKeys };
+    for (const bound of [payload.price_range?.minimum, payload.price_range?.maximum]) {
+      const value = finite(bound);
+      if (value != null) values.push(value);
+    }
+    if (!dates.length) return { empty: true, series, lineKeys, dates };
+    const noValues = !values.length;
     const plot = { left: 76, right: width - 24, top: 34, bottom: height - 88 };
-    let low = Math.min(...values), high = Math.max(...values);
+    let low = noValues ? 0 : Math.min(...values), high = noValues ? 1 : Math.max(...values);
     const padding = Math.max((high - low) * .08, Math.max(Math.abs(low), Math.abs(high), 1) * .01);
     low -= padding; high += padding;
     const span = high - low || 1;
-    const x = (index) => plot.left + (plot.right - plot.left) * index / Math.max(1, series.length - 1);
+    const x = (index) => plot.left + (plot.right - plot.left) * index / Math.max(1, dates.length - 1);
     const y = (value) => plot.top + (plot.bottom - plot.top) * (high - value) / span;
-    const dateIndex = new Map(series.map((row, index) => [String(row.date).slice(0, 10), index]));
+    const dateIndex = new Map(dates.map((date, index) => [date, index]));
+    const savedRows = new Map(series.map((row) => [String(row.date).slice(0, 10), row]));
     const segments = {};
     lineKeys.forEach((key) => {
       let chunk = []; const chunks = [];
-      series.forEach((row, index) => {
+      const missing = new Set(payload.missing_dates?.[key] || []);
+      const missingPrefix = [0];
+      dates.forEach((date) => missingPrefix.push(missingPrefix[missingPrefix.length - 1] + (missing.has(date) ? 1 : 0)));
+      let previous = null;
+      series.forEach((row) => {
+        const index = dateIndex.get(String(row.date).slice(0, 10));
+        if (index == null) return;
         const value = finite(row[key]);
-        if (value == null) { if (chunk.length) chunks.push(chunk.join(" ")); chunk = []; }
-        else chunk.push(`${x(index).toFixed(2)},${y(value).toFixed(2)}`);
+        if (value == null) {
+          if (chunk.length) chunks.push(chunk.join(" "));
+          chunk = []; previous = null;
+        } else {
+          if (previous != null && missingPrefix[index] - missingPrefix[previous + 1] > 0) {
+            if (chunk.length) chunks.push(chunk.join(" "));
+            chunk = [];
+          }
+          chunk.push(`${x(index).toFixed(2)},${y(value).toFixed(2)}`);
+          previous = index;
+        }
       });
       if (chunk.length) chunks.push(chunk.join(" "));
       segments[key] = chunks;
@@ -677,24 +751,75 @@ const RunCenterUI = (() => {
         if (index != null) events.push({ kind, date: row[field], index, row });
       }
     });
-    const count = Math.min(Math.max(2, xTickCount), series.length);
-    const indexes = [...new Set(Array.from({ length: count }, (_, index) => Math.round(index * (series.length - 1) / Math.max(1, count - 1))))];
-    const safeIndex = Math.max(0, Math.min(series.length - 1, Number(selectedIndex) || 0));
-    return { empty: false, width, height, plot, series, lineKeys, segments, events, selectedIndex: safeIndex, selected: series[safeIndex], x, y,
-      xTicks: indexes.map((index) => ({ x: x(index), label: String(series[index].date).slice(0, 10) })),
-      yTicks: Array.from({ length: 6 }, (_, index) => { const value = low + span * index / 5; return { y: y(value), label: value.toFixed(3) }; }),
+    const count = Math.min(Math.max(2, xTickCount), dates.length);
+    const indexes = [...new Set(Array.from({ length: count }, (_, index) => Math.round(index * (dates.length - 1) / Math.max(1, count - 1))))];
+    const safeIndex = Math.max(0, Math.min(dates.length - 1, Number(selectedIndex) || 0));
+    return { empty: false, noValues, width, height, plot, series, dates, lineKeys, segments, events, selectedIndex: safeIndex, selected: savedRows.get(dates[safeIndex]) || null, x, y,
+      xTicks: indexes.map((index) => ({ x: x(index), label: dates[index] })),
+      yTicks: noValues ? [] : Array.from({ length: 6 }, (_, index) => { const value = low + span * index / 5; return { y: y(value), label: value.toFixed(3) }; }),
     };
   }
-  function renderPriceSignalChart(payload, selectedIndex = 0, xTickCount = 6) {
+  function renderPriceSignalChart(payload, selectedIndex = 0, xTickCount = 6, eventFilter = "all", selectedDay = null) {
     const model = priceChartModel(payload, selectedIndex, 900, 380, xTickCount);
-    if (model.empty) return '<p class="empty-state">没有可绘制的已保存价格指标数据。</p>';
+    if (model.empty) return `<p class="empty-state">没有可绘制的已保存价格指标数据。</p>${model.dates.length ? `<div id="center-price-peek" class="price-day-peek"><strong>${esc(model.dates[Math.max(0, Math.min(model.dates.length - 1, Number(selectedIndex) || 0))])}</strong><p>正在读取当天保存的事件…</p></div>` : ""}`;
     const colors = ["price-close", "price-ma-one", "price-ma-two", "price-ma-other"];
     const lines = model.lineKeys.map((key, keyIndex) => model.segments[key].map((points) => `<polyline class="price-line ${colors[Math.min(keyIndex, colors.length - 1)]}" points="${esc(points)}"/>`).join("")).join("");
     const eventY = { "buy-signal": model.plot.bottom + 18, "sell-signal": model.plot.bottom + 31, planned: model.plot.bottom + 44, executed: model.plot.bottom + 57, blocked: model.plot.bottom + 70 };
-    const markers = model.events.map((event) => `<circle class="price-event ${esc(event.kind)}" cx="${model.x(event.index)}" cy="${eventY[event.kind]}" r="5"><title>${esc(event.kind)} · ${esc(String(event.date).slice(0, 10))}</title></circle>`).join("");
-    const selectedDate = String(model.selected.date).slice(0, 10);
-    const selectedEvents = model.events.filter((event) => String(event.date).slice(0, 10) === selectedDate);
-    return `<div class="price-chart-heading"><div><h3>${esc(payload.symbol)} · 价格、MA 与信号</h3><p>价格与 MA 使用${esc(enumName(payload.price_adjustment, "adjustment"))}信号口径。未复权开盘参考价只在事件卡中显示，不放到本价格轴。</p></div><div class="price-chart-legend">${model.lineKeys.map((key, index) => `<span><i class="${colors[Math.min(index, colors.length - 1)]}"></i>${esc(key === "signal_close" ? "信号收盘价" : key.toUpperCase().replace("_", "(" ) + ")")}</span>`).join("")}<span><i class="event-key"></i>事件日期</span></div></div><div class="price-chart-shell"><svg role="img" aria-label="${esc(payload.symbol)} 收盘价、移动平均线和信号执行日期" viewBox="0 0 ${model.width} ${model.height}">${model.yTicks.map((tick) => `<line class="nav-grid" x1="${model.plot.left}" x2="${model.plot.right}" y1="${tick.y}" y2="${tick.y}"/><text class="nav-tick" text-anchor="end" x="${model.plot.left - 9}" y="${tick.y + 4}">${esc(tick.label)}</text>`).join("")}<line class="nav-axis" x1="${model.plot.left}" x2="${model.plot.right}" y1="${model.plot.bottom}" y2="${model.plot.bottom}"/><line class="nav-axis" x1="${model.plot.left}" x2="${model.plot.left}" y1="${model.plot.top}" y2="${model.plot.bottom}"/>${model.xTicks.map((tick) => `<text class="nav-tick" text-anchor="middle" x="${tick.x}" y="${model.plot.bottom + 84}">${esc(tick.label)}</text>`).join("")}<text class="nav-axis-title" text-anchor="middle" transform="translate(17 ${(model.plot.top + model.plot.bottom) / 2}) rotate(-90)">价格（信号复权口径）</text>${lines}${markers}<line class="nav-selection" x1="${model.x(model.selectedIndex)}" x2="${model.x(model.selectedIndex)}" y1="${model.plot.top}" y2="${model.plot.bottom + 72}"/></svg></div><div class="price-selected-card" aria-live="polite"><strong>${esc(selectedDate)}</strong>${model.lineKeys.map((key) => `<span>${esc(key === "signal_close" ? "信号收盘价" : key.toUpperCase())}：${esc(known(model.selected[key]))}</span>`).join("")}${selectedEvents.map((event) => `<span>${esc(event.kind)}：${esc(enumName(event.row.side || event.row.action || event.row.status))} · 未复权开盘参考价 ${esc(known(event.row.execution_price))} · ${esc(event.row.reason ? enumName(event.row.reason) : "无额外原因")}</span>`).join("") || "<span>该日没有已保存的信号或指令事件。</span>"}</div>`;
+    const shownEvents = model.events.filter((event) => eventFilter === "all" || (eventFilter === "signals" && event.kind.endsWith("signal")) || (eventFilter === "executed" && event.kind === "executed"));
+    const markerNames = { "buy-signal": "买入信号", "sell-signal": "卖出信号", planned: "计划执行", executed: "实际成交", blocked: "执行受限" };
+    const selectedDate = model.dates[model.selectedIndex];
+    if (selectedDay?.date === selectedDate && selectedDay.price) model.selected = selectedDay.price;
+    const markers = shownEvents.map((event) => `<g data-price-event-date="${esc(String(event.date).slice(0, 10))}"><circle class="price-event ${esc(event.kind)}${selectedDate === String(event.date).slice(0, 10) ? " selected" : ""}" cx="${model.x(event.index)}" cy="${eventY[event.kind]}" r="${selectedDate === String(event.date).slice(0, 10) ? 7 : 5}"/><circle class="price-event-hit" cx="${model.x(event.index)}" cy="${eventY[event.kind]}" r="14"><title>${esc(markerNames[event.kind])} · ${esc(String(event.date).slice(0, 10))}</title></circle></g>`).join("");
+    const selectedPoints = model.lineKeys.map((key, index) => finite(model.selected?.[key]) == null || model.noValues ? "" : `<circle class="price-selected-point ${colors[Math.min(index, colors.length - 1)]}" cx="${model.x(model.selectedIndex)}" cy="${model.y(Number(model.selected[key]))}" r="${key === "signal_close" ? 6 : 5}"/>`).join("");
+    const peekSide = model.selectedIndex < model.dates.length / 2 ? "right" : "left";
+    return `<div class="price-chart-heading"><div><h3>${esc(payload.symbol)} · 价格、MA 与信号</h3><p>价格与 MA 使用${esc(enumName(payload.price_adjustment, "adjustment"))}信号口径。未复权开盘参考价只在事件卡中显示，不放到本价格轴。</p></div><div class="price-chart-legend">${model.lineKeys.map((key, index) => `<span><i class="${colors[Math.min(index, colors.length - 1)]}"></i>${esc(key === "signal_close" ? "信号收盘价" : key.toUpperCase().replace("_", "(" ) + ")")}</span>`).join("")}<span><i class="event-key"></i>事件日期</span></div></div><p class="price-chart-hint">点击曲线附近或事件圆点查看当天详情；键盘左右键可切换日期。</p><div class="price-chart-stage"><div class="price-chart-shell"><svg role="img" aria-label="${esc(payload.symbol)} 收盘价、移动平均线和信号执行日期；点击选择实际交易日期" viewBox="0 0 ${model.width} ${model.height}">${model.yTicks.map((tick) => `<line class="nav-grid" x1="${model.plot.left}" x2="${model.plot.right}" y1="${tick.y}" y2="${tick.y}"/><text class="nav-tick" text-anchor="end" x="${model.plot.left - 9}" y="${tick.y + 4}">${esc(tick.label)}</text>`).join("")}<line class="nav-axis" x1="${model.plot.left}" x2="${model.plot.right}" y1="${model.plot.bottom}" y2="${model.plot.bottom}"/><line class="nav-axis" x1="${model.plot.left}" x2="${model.plot.left}" y1="${model.plot.top}" y2="${model.plot.bottom}"/>${model.xTicks.map((tick) => `<text class="nav-tick" text-anchor="middle" x="${tick.x}" y="${model.plot.bottom + 84}">${esc(tick.label)}</text>`).join("")}<text class="nav-axis-title" text-anchor="middle" transform="translate(17 ${(model.plot.top + model.plot.bottom) / 2}) rotate(-90)">价格（信号复权口径）</text>${lines}<rect data-price-plot="1" class="price-hit-area" x="${model.plot.left}" y="${model.plot.top}" width="${model.plot.right - model.plot.left}" height="${model.plot.bottom - model.plot.top + 72}"/>${markers}<line class="nav-selection" x1="${model.x(model.selectedIndex)}" x2="${model.x(model.selectedIndex)}" y1="${model.plot.top}" y2="${model.plot.bottom + 72}"/>${selectedPoints}<rect class="nav-date-bg" x="${Math.max(model.plot.left, Math.min(model.x(model.selectedIndex) - 47, model.plot.right - 94))}" y="${model.plot.top + 3}" width="94" height="23" rx="4"/><text class="nav-date-label" text-anchor="middle" x="${Math.max(model.plot.left + 47, Math.min(model.x(model.selectedIndex), model.plot.right - 47))}" y="${model.plot.top + 19}">${esc(selectedDate)}</text></svg></div><div id="center-price-peek" class="price-day-peek ${peekSide}" aria-live="polite"><strong>${esc(selectedDate)}</strong><p>正在读取当天已保存的价格、信号与指令…</p></div></div>`;
+  }
+  function priceFieldName(key) {
+    return key === "signal_close" ? "信号口径收盘价" : `MA(${key.slice(3)})`;
+  }
+  function renderPriceDayPreview(day = {}) {
+    const price = day.price || {};
+    const keys = Object.keys(price).filter((key) => key === "signal_close" || /^ma_\d+$/.test(key));
+    const signals = day.signals || [], orders = day.orders || [];
+    const actual = orders.filter((row) => String(row.execution_date || "").slice(0, 10) === day.date);
+    const planned = orders.filter((row) => String(row.planned_execution_date || "").slice(0, 10) === day.date);
+    return `<strong>${esc(known(day.date))} · ${esc(known(day.symbol))}</strong><p>${signals.length ? `当天产生 ${signals.length} 条新信号` : "当天没有保存的新买卖信号"}；${actual.length ? `有 ${actual.length} 笔指令实际尝试或成交` : planned.length ? `有 ${planned.length} 笔计划执行的指令` : "没有保存的执行事件"}。</p><dl>${keys.map((key) => `<div><dt>${esc(priceFieldName(key))}</dt><dd>${esc(known(price[key]))}</dd></div>`).join("") || "<div><dt>信号价格</dt><dd>当天无记录</dd></div>"}</dl><button type="button" data-price-open-day>查看完整详情</button>`;
+  }
+  function renderSavedRuleEvidence(value) {
+    try {
+      const rules = JSON.parse(value);
+      if (Array.isArray(rules)) return `<ul class="price-day-events">${rules.map((item) => `<li><strong>${esc(ruleText(item.rule))}</strong>：${item.matched === true ? "已满足" : item.matched === false ? "未满足" : "匹配状态未记录"}<p>已保存的指标：${Object.entries(item.values || {}).map(([key, number]) => `${esc(key)} ${esc(known(number))}`).join("；") || "未记录"}</p></li>`).join("")}</ul>`;
+    } catch (_) { /* Older runs may store plain evidence codes. */ }
+    return value == null || value === "" ? "未记录" : `<code>${esc(value)}</code>（暂无中文说明）`;
+  }
+  function renderPriceDayDetail(day = {}) {
+    const price = day.price || {}, signals = day.signals || [], orders = day.orders || [];
+    const keys = Object.keys(price).filter((key) => key === "signal_close" || /^ma_\d+$/.test(key));
+    const signalItems = signals.map((row) => `<li><strong>${esc(enumName(row.action))}信号</strong><p>信号收盘价：${esc(known(row.signal_price))}；候选排名 / 得分：${esc(known(row.candidate_rank))} / ${esc(known(row.candidate_score))}；计划执行日：${esc(known(row.planned_execution_date))}</p><details><summary>查看保存的触发依据</summary>${renderSavedRuleEvidence(row.rule_evidence)}</details></li>`).join("");
+    const orderItems = orders.map((row) => {
+      const planned = String(row.planned_execution_date || "").slice(0, 10) === day.date;
+      const attempted = String(row.execution_date || "").slice(0, 10) === day.date;
+      const executed = attempted && row.status === "executed";
+      const stage = `${planned ? "当日计划执行" : ""}${planned && attempted ? " · " : ""}${attempted ? executed ? "当日实际成交" : "当日尝试但未成交" : ""}`;
+      const audit = executed ? `<details><summary>核对这笔成交的资金与持仓</summary><dl><div><dt>成交金额</dt><dd>${esc(amount(row.notional))}</dd></div><div><dt>本次交易成本</dt><dd>${esc(amount(row.cost))}</dd></div><div><dt>成交前 / 后现金</dt><dd>${esc(amount(row.cash_before))} → ${esc(amount(row.cash_after))}</dd></div><div><dt>成交前 / 后持仓（股）</dt><dd>${esc(known(row.position_shares_before))} → ${esc(known(row.position_shares_after))}</dd></div><div><dt>佣金 / 滑点 / 卖出印花税</dt><dd>${[row.commission_cost, row.slippage_cost, row.stamp_duty_cost].map(amount).map(esc).join(" / ")}</dd></div></dl></details>` : "";
+      return `<li><strong>${esc(enumName(row.side))} · ${esc(stage || "保存的指令")}</strong><p>关联信号日：${esc(known(row.signal_date))}；计划执行日：${esc(known(row.planned_execution_date))}；实际尝试/成交日：${esc(known(row.execution_date))}</p><p>保存的指令状态：${esc(enumName(row.status))}；${attempted ? `本次尝试数量：${esc(known(row.shares))} 股；不复权开盘参考价：${esc(known(row.execution_price))}` : "当天尚无实际尝试记录"}</p>${executed ? audit : attempted ? `<p>未成交原因：${esc(row.reason ? enumName(row.reason) : "未记录")}；后续处理：${esc(row.next_action ? enumName(row.next_action) : "未记录")}</p>` : "<p>这是计划日期，最终执行状态请查看实际尝试日。</p>"}</li>`;
+    }).join("");
+    const account = day.account;
+    return `<div class="price-day-detail-heading"><div><p class="eyebrow">已保存的逐日记录</p><h3>${esc(known(day.date))} · ${esc(stockLabel(day.symbol))}</h3></div><button type="button" data-price-close-day aria-label="关闭当天详情">关闭</button></div><p>价格和 MA 为信号所用复权口径。指令中的 execution_price 是不复权开盘参考价，不绘制到价格轴。</p><section><h4>当天价格和均线</h4><dl class="center-meta">${keys.map((key) => `<div><dt>${esc(priceFieldName(key))}</dt><dd>${esc(known(price[key]))}</dd></div>`).join("") || "<div><dt>信号价格</dt><dd>当天无记录</dd></div>"}</dl></section><section><h4>收盘后确认的信号（${signals.length}）</h4><ul class="price-day-events">${signalItems || "<li>当天没有保存的新买卖信号。</li>"}</ul></section><section><h4>计划、尝试与成交（${orders.length} 笔指令）</h4><ul class="price-day-events">${orderItems || "<li>当天没有保存的计划或执行指令。</li>"}</ul></section>${account ? `<details><summary>查看整个账户的当日快照</summary><dl class="center-meta"><div><dt>现金</dt><dd>${esc(amount(account.cash))}</dd></div><div><dt>持仓市值</dt><dd>${esc(amount(account.position_value))}</dd></div><div><dt>账户总资产</dt><dd>${esc(amount(account.portfolio_value))}</dd></div><div><dt>累计交易成本</dt><dd>${esc(amount(account.total_cost))}</dd></div></dl><p>这是整个账户的保存结果，不代表该股票的单笔盈亏。</p></details>` : "<p>当天账户快照未记录。</p>"}${day.truncated ? "<p class=\"page-notice\">当日事件超过有界预览上限，请下载原始 CSV 核对完整记录。</p>" : ""}`;
+  }
+  function nearestPriceDateIndex(dates, requested) {
+    if (!dates.length) return -1;
+    const target = Date.parse(requested + "T00:00:00Z");
+    if (!Number.isFinite(target)) return -1;
+    let low = 0, high = dates.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (dates[mid] < requested) low = mid + 1;
+      else high = mid;
+    }
+    if (low === 0) return 0;
+    if (low === dates.length) return dates.length - 1;
+    return target - Date.parse(dates[low - 1] + "T00:00:00Z") <= Date.parse(dates[low] + "T00:00:00Z") - target ? low - 1 : low;
   }
   function field(key, value, schema) {
     const alternatives = schema.anyOf || [schema];
@@ -705,7 +830,7 @@ const RunCenterUI = (() => {
     if (key === "factors")
       return `<div class="factor-editor" data-factor-editor><p>因子组合：相对权重为合成得分输入，不代表资金百分比。</p><div id="center-factor-rows">${value.map(factorRow).join("")}</div><button id="center-factor-add" type="button">增加因子</button></div>`;
     if (key === "candidate_factors")
-      return `<div class="factor-editor" data-candidate-editor><p>return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
+      return `<div class="factor-editor" data-candidate-editor><p>冻结范围只有一只股票时，可删除所有候选因子，该股票直接参与每日买卖信号检查。多只股票仍须至少一个候选因子来排序；MA 买卖信号决定何时交易。return_N 为 N 日涨跌幅；ma_deviation_N 为收盘价相对 MA(N) 偏离率。权重不是资金比例。</p><datalist id="candidate-factor-codes">${Object.keys(catalog.factors).map(k => `<option value="${esc(k)}">`).join("")}<option value="return_20"><option value="ma_deviation_20"></datalist><div id="center-candidate-factor-rows">${value.map(candidateFactorRow).join("")}</div><button id="center-candidate-factor-add" type="button">增加候选因子</button></div>`;
     if (["buy_rules", "sell_rules"].includes(key)) {
       const side = key === "buy_rules" ? "buy" : "sell";
       return `<div class="signal-rule-editor" data-signal-editor="${side}"><p>${side === "buy" ? "买入" : "卖出"}规则使用当日收盘后已完成的数据。</p><div id="center-${side}-rule-rows">${value.map(x => signalRuleRow(x, side)).join("")}</div><button data-rule-add="${side}" type="button">增加${side === "buy" ? "买入" : "卖出"}规则</button></div>`;
@@ -1002,6 +1127,9 @@ const RunCenterUI = (() => {
       renderReproducibility,
       priceChartModel,
       renderPriceSignalChart,
+      renderPriceDayPreview,
+      renderPriceDayDetail,
+      nearestPriceDateIndex,
       factorName,
       strategyName,
       display,
@@ -1068,7 +1196,7 @@ const RunCenterUI = (() => {
       const p = await get("/api/v1/run-center?" + q);
       if (own !== sequence) return;
       total = p.total;
-      $("center-list").innerHTML = table(p.items);
+      $("center-list").innerHTML = table(p.items, true);
       $("center-notice").className = "muted";
       $("center-notice").textContent = p.notice || "";
       $("center-page").textContent = `第 ${page} 页 · ${total} 条`;
@@ -1221,12 +1349,13 @@ const RunCenterUI = (() => {
       $("center-result").insertAdjacentHTML("beforeend", fragment);
       if (row.kind === "daily_signal") {
         const timeline = dailySignalTimeline(data.signals || [], data.orders || []);
+        displayNames = data.display_metadata?.symbol_names || {};
+        displayNameSource = data.display_metadata?.name_source || "historical_unrecorded";
         const view = dailyResultView(data, row.spec || data.spec || {});
         const reasons = [...new Set((data.orders || []).map((item) => item.reason).filter(Boolean))].sort();
         const symbols = [...new Set(timeline.map((item) => item.order?.symbol || item.signal?.symbol).filter(Boolean))].sort();
         const chartSymbols = [...new Set((data.spec?.symbols || row.spec?.symbols || symbols).map(String))].sort();
-        const executionDates = [...new Set(view.executed.map((item) => item.execution_date).filter(Boolean))].sort();
-        const custom = `<section class="daily-result-layout">${renderTrustSummary(data.trust_summary)}<article class="daily-nav-panel"><div id="center-nav-chart">${renderNavChart(view.series, 0, typeof window !== "undefined" && window.innerWidth <= 480 ? 3 : 6)}</div><label class="nav-slider-label">选择交易日 <input id="center-chart-position" type="range" min="0" max="${Math.max(0, view.series.length - 1)}" value="0" step="1" aria-label="选择净值图交易日"></label></article>${renderAccountOverview(view)}${renderAuditSummary(data.diagnostics?.account_audit || {}, data.account_audit || [])}${renderReproducibility(data.reproducibility || {})}<section class="price-signal-panel"><div class="price-controls"><h3>价格与信号</h3><label>选择股票<select id="center-price-symbol">${chartSymbols.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}</select></label></div><div id="center-price-chart">${chartSymbols.length ? "正在读取有界价格指标数据…" : "该历史运行没有可选的冻结股票记录。"}</div><label class="nav-slider-label" id="center-price-slider-label" hidden>选择日期 <input id="center-price-position" type="range" min="0" max="0" value="0" step="1" aria-label="选择价格信号图日期"></label></section><section class="daily-executions"><h3>实际成交明细 ${termHelp("execution")}</h3><form id="center-execution-filters" class="center-filters"><label>股票<select id="center-execution-symbol"><option value="">全部</option>${symbols.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}</select></label><label>买入/卖出<select id="center-execution-side"><option value="">全部</option><option value="buy">买入</option><option value="sell">卖出</option></select></label><label>成交日期<select id="center-execution-date"><option value="">全部</option>${executionDates.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}</select></label></form><div id="center-execution-list">${renderExecutedTrades(view.executed)}</div></section><section class="daily-final-positions"><h3>回测结束日持仓</h3>${renderFinalPositions(view.finalPositions)}</section><section class="daily-unfilled"><h3>未成交与等待退出 ${termHelp("unfilled")} ${termHelp("t_plus_one")}</h3>${renderUnfilledOrders(view.unfilled)}</section><section class="daily-timeline"><h3>信号 → 指令 → 成交或未成交</h3><form id="center-timeline-filters" class="center-filters"><label>股票<select id="center-timeline-symbol"><option value="">全部</option>${symbols.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("")}</select></label><label>动作<select id="center-timeline-side"><option value="">全部</option><option value="buy">买入</option><option value="sell">卖出</option></select></label><label>结果<select id="center-timeline-status"><option value="">全部</option><option value="executed">已成交</option><option value="unfilled">未成交/失效</option><option value="retry">等待重试</option></select></label><label>实际成交日<input id="center-timeline-date" type="date"></label><label>未成交原因<select id="center-timeline-reason"><option value="">全部</option>${reasons.map((value) => `<option value="${esc(value)}">${esc(enumName(value))}</option>`).join("")}</select></label></form><div id="center-timeline-list">${renderDailyTimeline(timeline)}</div></section><details class="daily-account-table"><summary>每日账户变化</summary>${renderDailyAccounts(view.series)}</details><details><summary>每日账户核对（有界预览）</summary>${renderValue(data.account_audit || [])}</details><details><summary>原始信号、候选和完整诊断</summary>${renderValue({ signals: data.signals, candidates: data.candidates, diagnostics: data.diagnostics, reproducibility: data.reproducibility })}</details></section>`;
+        const custom = `<section class="daily-result-layout">${renderTrustSummary(data.trust_summary)}<article class="daily-nav-panel"><div id="center-nav-chart">${renderNavChart(view.series, 0, typeof window !== "undefined" && window.innerWidth <= 480 ? 3 : 6)}</div><label class="nav-slider-label">选择交易日 <input id="center-chart-position" type="range" min="0" max="${Math.max(0, view.series.length - 1)}" value="0" step="1" aria-label="选择净值图交易日"></label></article>${renderAccountOverview(view)}${renderAuditSummary(data.diagnostics?.account_audit || {}, data.account_audit || [])}${renderReproducibility(data.reproducibility || {})}<section class="price-signal-panel"><div class="price-controls"><h3>价格与信号</h3><label>选择股票<select id="center-price-symbol">${chartSymbols.map((value) => `<option value="${esc(value)}">${esc(stockLabel(value))}</option>`).join("")}</select></label><label>查看区间<select id="center-price-window"><option value="year">近一年</option><option value="all" selected>全部区间</option></select></label><label>图中事件<select id="center-price-events"><option value="all">全部事件</option><option value="signals">只看信号</option><option value="executed">只看成交</option></select></label></div><div id="center-price-chart" role="group" tabindex="0" aria-label="价格与信号图。点击图中日期或用左右方向键切换。">${chartSymbols.length ? "正在读取有界价格指标数据…" : "该历史运行没有可选的冻结股票记录。"}</div><div id="center-price-navigation" class="price-day-navigation" hidden><button id="center-price-prev" type="button">上一交易日</button><label>跳转到日期 <input id="center-price-date" type="date" aria-label="跳转到价格图日期"></label><button id="center-price-next" type="button">下一交易日</button><span id="center-price-date-status" role="status"></span></div><label class="nav-slider-label" id="center-price-slider-label" hidden>选择日期 <input id="center-price-position" type="range" min="0" max="0" value="0" step="1" aria-label="选择价格信号图日期"></label><section id="center-price-detail" class="price-day-detail" tabindex="-1" aria-label="当天完整详情" hidden></section></section><section class="daily-executions"><h3>实际成交明细 ${termHelp("execution")}</h3><p class="muted">${displayNameSource === "current_catalog_not_historical" ? "历史运行未保存名称：中文名来自当前证券目录，可能不是运行时名称。" : displayNameSource === "historical_unrecorded" ? "历史运行没有可靠的中文名记录；显示代码，不推断运行时名称。" : "股票名称为运行时保存的目录快照；名称缺失时显示代码。"} 点击表头可排序或打开筛选。只显示实际成交，筛选覆盖本次运行的完整订单文件。</p><div id="center-execution-filter-panel" class="execution-filter-panel" hidden><form id="center-execution-filters"><p>筛选整个运行的已成交记录。可以同时选择多个条件。</p><label>搜索股票名称或代码<input id="center-execution-search" type="search" placeholder="输入股票名称或代码"></label><label>股票（可多选）<select id="center-execution-symbol" multiple size="5" aria-label="筛选多个股票">${chartSymbols.map((value) => `<option value="${esc(value)}">${esc(stockLabel(value))}</option>`).join("")}</select></label><label>买入或卖出<select id="center-execution-side"><option value="">全部</option><option value="buy">买入</option><option value="sell">卖出</option></select></label><label>成交日期从<input id="center-execution-from" type="date"></label><label>至<input id="center-execution-to" type="date"></label><label>成交金额至少（元）<input id="center-execution-min" type="number" step="any" min="0"></label><label>最多（元）<input id="center-execution-max" type="number" step="any" min="0"></label><div class="execution-filter-actions"><button type="submit">应用筛选</button><button type="button" id="center-execution-reset">清除筛选</button><button type="button" id="center-execution-close">关闭</button></div></form></div><div id="center-execution-list">${renderExecutedTrades([], { total: 0, download: `/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/downloads/orders.csv` })}</div></section><section class="daily-final-positions"><h3>回测结束日持仓</h3>${renderFinalPositions(view.finalPositions)}</section><section class="daily-unfilled"><h3>未成交与等待退出 ${termHelp("unfilled")} ${termHelp("t_plus_one")}</h3>${renderUnfilledOrders(view.unfilled)}</section><section class="daily-timeline"><h3>信号 → 指令 → 成交或未成交</h3><form id="center-timeline-filters" class="center-filters"><label>股票<select id="center-timeline-symbol"><option value="">全部</option>${symbols.map((value) => `<option value="${esc(value)}">${esc(stockLabel(value))}</option>`).join("")}</select></label><label>动作<select id="center-timeline-side"><option value="">全部</option><option value="buy">买入</option><option value="sell">卖出</option></select></label><label>结果<select id="center-timeline-status"><option value="">全部</option><option value="executed">已成交</option><option value="unfilled">未成交/失效</option><option value="retry">等待重试</option></select></label><label>实际成交日<input id="center-timeline-date" type="date"></label><label>未成交原因<select id="center-timeline-reason"><option value="">全部</option>${reasons.map((value) => `<option value="${esc(value)}">${esc(enumName(value))}</option>`).join("")}</select></label></form><div id="center-timeline-list">${renderDailyTimeline(timeline)}</div></section><details class="daily-account-table"><summary>每日账户变化</summary>${renderDailyAccounts(view.series)}</details><details><summary>每日账户核对（有界预览）</summary>${renderValue(data.account_audit || [])}</details><details><summary>原始信号、候选和完整诊断</summary>${renderValue({ signals: data.signals, candidates: data.candidates, diagnostics: data.diagnostics, reproducibility: data.reproducibility })}</details></section>`;
         $("center-result").insertAdjacentHTML("afterbegin", custom);
         const redrawChart = () => {
           const slider = $("center-chart-position");
@@ -1236,41 +1365,259 @@ const RunCenterUI = (() => {
         $("center-chart-position").addEventListener("input", redrawChart);
         if (typeof window.addEventListener === "function") window.addEventListener("resize", redrawChart, { passive: true });
         let priceRequest = 0;
+        let priceDayRequest = 0;
         let pricePayload = null;
+        let priceDay = null;
+        let priceDates = [];
+        const priceDayCache = new Map();
+        const priceDetail = $("center-price-detail");
+        const closePriceDetail = (restoreFocus = true) => {
+          priceDetail.hidden = true;
+          if (restoreFocus) $("center-price-chart")?.focus?.({ preventScroll: true });
+        };
+        activePriceDismiss = {
+          click(event) {
+            if (own !== sequence || priceDetail.hidden || priceDetail.contains?.(event.target)) return;
+            // The preview's button opens this panel during the same bubbling click.
+            if (event.target.closest?.("[data-price-open-day]")) return;
+            closePriceDetail(false);
+          },
+          keydown(event) {
+            if (own !== sequence || priceDetail.hidden || event.key !== "Escape") return;
+            closePriceDetail(priceDetail.contains?.(document.activeElement) === true);
+          },
+        };
+        if (!priceDismissBound && typeof document.addEventListener === "function") {
+          document.addEventListener("click", (event) => activePriceDismiss?.click(event));
+          document.addEventListener("keydown", (event) => activePriceDismiss?.keydown(event));
+          priceDismissBound = true;
+        }
+        const setPriceDay = (day) => {
+          priceDay = day;
+          redrawPriceChart();
+          const peek = $("center-price-peek");
+          if (peek) peek.innerHTML = renderPriceDayPreview(day);
+          if (!priceDetail.hidden) priceDetail.innerHTML = renderPriceDayDetail(day);
+        };
         const redrawPriceChart = () => {
           if (!pricePayload) return;
-          $("center-price-chart").innerHTML = renderPriceSignalChart(pricePayload, Number($("center-price-position").value), typeof window !== "undefined" && window.innerWidth <= 480 ? 3 : 6);
+          $("center-price-chart").innerHTML = renderPriceSignalChart(
+            pricePayload, Number($("center-price-position").value),
+            typeof window !== "undefined" && window.innerWidth <= 480 ? 3 : window.innerWidth <= 800 ? 5 : 7,
+            $("center-price-events").value, priceDay,
+          );
+          if (priceDay && priceDay.date === priceDates[Number($("center-price-position").value)]) {
+            const peek = $("center-price-peek");
+            if (peek) peek.innerHTML = renderPriceDayPreview(priceDay);
+          }
+        };
+        const selectPriceIndex = async (index) => {
+          if (!pricePayload || !priceDates.length) return;
+          const selected = Math.min(priceDates.length - 1, Math.max(0, Number(index) || 0));
+          const day = priceDates[selected];
+          $("center-price-position").value = String(selected);
+          $("center-price-position").setAttribute?.("aria-valuetext", day);
+          $("center-price-date").value = day;
+          $("center-price-chart").setAttribute?.("aria-label", `价格与信号图，已选中 ${day}；左右方向键切换实际交易日。`);
+          $("center-price-date-status").textContent = `已选中 ${day}。`;
+          $("center-price-prev").disabled = selected === 0;
+          $("center-price-next").disabled = selected === priceDates.length - 1;
+          priceDay = null;
+          redrawPriceChart();
+          if (!priceDetail.hidden) priceDetail.innerHTML = '<button type="button" data-price-close-day>关闭</button><p>正在读取当天已保存的记录…</p>';
+          const request = ++priceDayRequest;
+          const symbol = $("center-price-symbol").value;
+          if (priceDayCache.has(day)) {
+            setPriceDay(priceDayCache.get(day));
+            return;
+          }
+          try {
+            const result = await get(`/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/price-signals/day?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(day)}`);
+            if (own !== sequence || request !== priceDayRequest || $("center-price-symbol")?.value !== symbol || priceDates[Number($("center-price-position").value)] !== day) return;
+            priceDayCache.set(day, result);
+            if (priceDayCache.size > 24) priceDayCache.delete(priceDayCache.keys().next().value);
+            setPriceDay(result);
+          } catch (error) {
+            if (own !== sequence || request !== priceDayRequest) return;
+            const message = `当天详情暂时无法读取：${esc(error.message)}。可重选日期重试。`;
+            const peek = $("center-price-peek");
+            if (peek) peek.innerHTML = `<strong>${esc(day)}</strong><p class="negative">${message}</p>`;
+            if (!priceDetail.hidden) priceDetail.innerHTML = `<button type="button" data-price-close-day>关闭</button><p class="negative">${message}</p>`;
+          }
         };
         const loadPriceChart = async () => {
           const symbol = $("center-price-symbol")?.value;
           if (!symbol) return;
           const request = ++priceRequest;
+          ++priceDayRequest;
+          pricePayload = null;
+          priceDay = null;
+          priceDates = [];
+          priceDayCache.clear();
+          priceDetail.hidden = true;
           $("center-price-chart").textContent = "正在读取该股票的有界价格指标与事件…";
           $("center-price-slider-label").hidden = true;
+          $("center-price-navigation").hidden = true;
           try {
-            const payload = await get(`/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/price-signals?symbol=${encodeURIComponent(symbol)}&limit=1200`);
+            const payload = await get(`/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/price-signals?symbol=${encodeURIComponent(symbol)}&limit=1200&window=${encodeURIComponent($("center-price-window").value)}`);
             if (own !== sequence || request !== priceRequest || $("center-price-symbol")?.value !== symbol) return;
             pricePayload = payload;
-            $("center-price-position").max = String(Math.max(0, payload.series.length - 1));
-            $("center-price-position").value = "0";
-            $("center-price-slider-label").hidden = payload.series.length < 2;
-            redrawPriceChart();
+            priceDates = (Array.isArray(payload.date_index) && payload.date_index.length ? payload.date_index : (payload.series || []).map((item) => item.date)).map((value) => String(value).slice(0, 10));
+            $("center-price-position").max = String(Math.max(0, priceDates.length - 1));
+            $("center-price-slider-label").hidden = priceDates.length < 2;
+            $("center-price-navigation").hidden = !priceDates.length;
+            $("center-price-date").min = priceDates[0] || "";
+            $("center-price-date").max = priceDates[priceDates.length - 1] || "";
+            const eventDates = [...(payload.signals || []).map((item) => item.signal_date), ...(payload.orders || []).flatMap((item) => [item.planned_execution_date, item.execution_date])]
+              .map((value) => String(value || "").slice(0, 10)).filter((value) => priceDates.includes(value));
+            const latestEvent = eventDates.sort().at(-1);
+            await selectPriceIndex(latestEvent ? priceDates.indexOf(latestEvent) : priceDates.length - 1);
           } catch (error) {
             if (own === sequence && request === priceRequest) $("center-price-chart").innerHTML = `<p class="empty-state">${esc(error.message)}。旧运行可能没有价格指标产物；不会从当前行情倒推。</p>`;
           }
         };
         $("center-price-symbol")?.addEventListener("change", loadPriceChart);
-        $("center-price-position")?.addEventListener("input", redrawPriceChart);
+        $("center-price-window")?.addEventListener("change", loadPriceChart);
+        $("center-price-events")?.addEventListener("change", redrawPriceChart);
+        $("center-price-position")?.addEventListener("input", (event) => selectPriceIndex(event.target.value));
+        $("center-price-prev")?.addEventListener("click", () => selectPriceIndex(Number($("center-price-position").value) - 1));
+        $("center-price-next")?.addEventListener("click", () => selectPriceIndex(Number($("center-price-position").value) + 1));
+        $("center-price-date")?.addEventListener("change", (event) => {
+          const index = nearestPriceDateIndex(priceDates, event.target.value);
+          if (index < 0) return;
+          selectPriceIndex(index);
+          if (priceDates[index] !== event.target.value) $("center-price-date-status").textContent = `该日期无记录，已定位到 ${priceDates[index]}。`;
+        });
+        $("center-price-chart")?.addEventListener("click", (event) => {
+          const eventMarker = event.target.closest?.("[data-price-event-date]");
+          if (eventMarker) {
+            const date = eventMarker.getAttribute("data-price-event-date");
+            const index = priceDates.indexOf(date);
+            if (index >= 0) selectPriceIndex(index);
+            return;
+          }
+          if (event.target.closest?.("[data-price-open-day]")) {
+            priceDetail.hidden = false;
+            priceDetail.innerHTML = priceDay ? renderPriceDayDetail(priceDay) : '<button type="button" data-price-close-day>关闭</button><p>正在读取当天已保存的记录…</p>';
+            priceDetail.focus?.({ preventScroll: true });
+            return;
+          }
+          if (!event.target.closest?.("[data-price-plot]")) return;
+          const svg = event.target.ownerSVGElement;
+          const bounds = svg?.getBoundingClientRect?.();
+          if (!bounds?.width || !Number.isFinite(event.clientX)) return;
+          const plot = priceChartModel(pricePayload, 0).plot;
+          const x = (event.clientX - bounds.left) * 900 / bounds.width;
+          selectPriceIndex(Math.round((x - plot.left) * (priceDates.length - 1) / (plot.right - plot.left)));
+        });
+        $("center-price-chart")?.addEventListener("keydown", (event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          selectPriceIndex(Number($("center-price-position").value) + (event.key === "ArrowRight" ? 1 : -1));
+        });
+        priceDetail.addEventListener("click", (event) => {
+          if (event.target.closest?.("[data-price-close-day]")) closePriceDetail();
+        });
         if (typeof window.addEventListener === "function") window.addEventListener("resize", redrawPriceChart, { passive: true });
         if (chartSymbols.length) loadPriceChart();
-        const updateExecutions = () => {
-          $("center-execution-list").innerHTML = renderExecutedTrades(view.executed, {
-            symbol: $("center-execution-symbol").value,
-            side: $("center-execution-side").value,
-            execution_date: $("center-execution-date").value,
-          });
+        const executionState = { page: 1, page_size: 50, sort: "execution_date", direction: "desc", total: 0, rows: [], filters: {} };
+        let executionRequest = 0;
+        const executionList = $("center-execution-list");
+        const executionPanel = $("center-execution-filter-panel");
+        const executionDownload = `/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/downloads/orders.csv`;
+        const drawExecutions = (error = "") => {
+          executionList.innerHTML = renderExecutedTrades(executionState.rows, { ...executionState, download: executionDownload, error });
+          (executionList.querySelectorAll?.("[data-execution-filter]") || []).forEach((button) => button.setAttribute("aria-expanded", String(!executionPanel.hidden)));
         };
-        $("center-execution-filters").addEventListener("change", updateExecutions);
+        const loadExecutions = async () => {
+          const request = ++executionRequest;
+          const params = new URLSearchParams({ page: String(executionState.page), page_size: String(executionState.page_size), sort: executionState.sort, direction: executionState.direction, ...executionState.filters });
+          executionList.setAttribute?.("aria-busy", "true");
+          executionList.querySelector?.("[role=status]")?.replaceChildren?.(document.createTextNode("正在筛选完整成交记录…"));
+          try {
+            const result = await get(`/api/v1/daily-signal-runs/${encodeURIComponent(row.run_id)}/executed-orders?${params}`);
+            if (own !== sequence || request !== executionRequest) return;
+            executionState.rows = result.rows || [];
+            executionState.total = result.total;
+            drawExecutions();
+          } catch (error) {
+            if (own !== sequence || request !== executionRequest) return;
+            executionState.rows = [];
+            drawExecutions(`读取成交记录失败：${String(error?.message || error)}。请重试或下载 CSV。`);
+          } finally {
+            if (own === sequence && request === executionRequest) executionList.removeAttribute?.("aria-busy");
+          }
+        };
+        const closeExecutionPanel = () => {
+          executionPanel.hidden = true;
+          (executionList.querySelectorAll?.("[data-execution-filter]") || []).forEach((button) => button.setAttribute("aria-expanded", "false"));
+        };
+        executionList.addEventListener("click", (event) => {
+          const sort = event.target.closest?.("[data-execution-sort]")?.dataset.executionSort;
+          if (sort) {
+            executionState.direction = executionState.sort === sort && executionState.direction === "asc" ? "desc" : "asc";
+            executionState.sort = sort;
+            executionState.page = 1;
+            loadExecutions();
+          }
+          if (event.target.closest?.("[data-execution-filter]")) {
+            executionPanel.hidden = !executionPanel.hidden;
+            (executionList.querySelectorAll?.("[data-execution-filter]") || []).forEach((button) => button.setAttribute("aria-expanded", String(!executionPanel.hidden)));
+            if (!executionPanel.hidden) $("center-execution-search").focus({ preventScroll: true });
+          }
+          const page = event.target.closest?.("[data-execution-page]")?.dataset.executionPage;
+          if (page) {
+            executionState.page += page === "next" ? 1 : -1;
+            loadExecutions();
+          }
+        });
+        $("center-execution-search").addEventListener("input", (event) => {
+          const term = event.target.value.trim().toLowerCase();
+          [...$("center-execution-symbol").options].forEach((option) => { option.hidden = !!term && !option.textContent.toLowerCase().includes(term); });
+        });
+        $("center-execution-filters").addEventListener("submit", (event) => {
+          event.preventDefault();
+          const from = $("center-execution-from").value, to = $("center-execution-to").value;
+          const min = $("center-execution-min").value, max = $("center-execution-max").value;
+          if ((from && to && from > to) || (min !== "" && max !== "" && Number(min) > Number(max))) {
+            executionPanel.querySelector("p").textContent = "起始日期或最低金额不能晚于、高于结束日期或最高金额。";
+            return;
+          }
+          const selectedSymbols = [...$("center-execution-symbol").selectedOptions].map((option) => option.value);
+          const search = $("center-execution-search").value.trim().toLowerCase();
+          const searchedSymbols = search && !selectedSymbols.length
+            ? chartSymbols.filter((symbol) => stockLabel(symbol).toLowerCase().includes(search))
+            : selectedSymbols;
+          if (search && !searchedSymbols.length) {
+            executionPanel.querySelector("p").textContent = "没有匹配的运行股票，请修改名称或代码后再筛选。";
+            return;
+          }
+          executionState.filters = Object.fromEntries(Object.entries({
+            symbols: searchedSymbols.join(","),
+            side: $("center-execution-side").value,
+            date_from: from, date_to: to, min_notional: min, max_notional: max,
+          }).filter(([, value]) => value !== ""));
+          executionState.page = 1;
+          closeExecutionPanel();
+          loadExecutions();
+        });
+        $("center-execution-reset").addEventListener("click", () => {
+          $("center-execution-filters").reset();
+          [...$("center-execution-symbol").options].forEach((option) => { option.hidden = false; option.selected = false; });
+          executionState.filters = {};
+          executionState.page = 1;
+          closeExecutionPanel();
+          loadExecutions();
+        });
+        $("center-execution-close").addEventListener("click", closeExecutionPanel);
+        document.addEventListener("click", (event) => {
+          if (own !== sequence || executionPanel.hidden || executionPanel.contains?.(event.target) || event.target.closest?.("[data-execution-filter]")) return;
+          closeExecutionPanel();
+        });
+        document.addEventListener("keydown", (event) => {
+          if (own === sequence && event.key === "Escape" && !executionPanel.hidden) closeExecutionPanel();
+        });
+        loadExecutions();
         const updateTimeline = () => {
           $("center-timeline-list").innerHTML = renderDailyTimeline(timeline, {
             symbol: $("center-timeline-symbol").value,
@@ -1419,7 +1766,7 @@ const RunCenterUI = (() => {
     const invalidField = form?.querySelector?.('[aria-invalid="true"]');
     const issueSection = form?.querySelector?.(".field-errors")?.closest?.("fieldset, details");
     const blocked = checked && !(checked.report.ready === true || checked.report.status === "ready");
-    const target = invalidField || issueSection || (blocked ? $("center-preflight-result") : $("center-daily-errors"));
+    const target = invalidField || (issueSection?.id === "center-daily-candidates" ? $("center-candidate-factor-add") : issueSection) || (blocked ? $("center-preflight-result") : $("center-daily-errors"));
     if (target?.tagName === "DETAILS") target.open = true;
     moveTo(target);
   }
@@ -1469,11 +1816,17 @@ const RunCenterUI = (() => {
       const message = $("error-" + input.id);
       if (message) message.textContent = "";
     }
+    $("center-candidate-factor-add")?.removeAttribute?.("aria-invalid");
+    $("center-candidate-factor-add")?.removeAttribute?.("aria-describedby");
   }
   function renderDailyIssues(issues) {
     clearDailyIssues();
     const groups = new Map();
     for (const issue of issues) {
+      if (issue.code === "empty_candidate_factors") {
+        $("center-candidate-factor-add")?.setAttribute?.("aria-invalid", "true");
+        $("center-candidate-factor-add")?.setAttribute?.("aria-describedby", "center-candidate-feedback");
+      }
       const feedback = {
         "center-scope-section": "center-scope-feedback",
         "center-daily-candidates": "center-candidate-feedback",
@@ -1502,7 +1855,7 @@ const RunCenterUI = (() => {
     try {
       const params = readParams($("center-copy-form"), copy.params);
       const scopeSize = scopePending ? undefined : params.stock_pool_id ? copy.scope?.length : params.symbols?.length;
-      $("center-daily-summary-text").textContent = dailySignalSummary(params);
+      $("center-daily-summary-text").textContent = dailySignalSummary(params, scopeSize);
       const issues = dailySignalIssues(params, scopeSize);
       renderDailyIssues(issues);
       $("center-daily-errors").innerHTML = issues.length
@@ -1807,7 +2160,8 @@ const RunCenterUI = (() => {
       }
       const jump = e.target.closest?.("[data-go-to]");
       if (jump) {
-        const target = $(jump.dataset.goTo);
+        const target = jump.dataset.goTo === "center-daily-candidates" && $("center-candidate-factor-add")
+          ? $("center-candidate-factor-add") : $(jump.dataset.goTo);
         if (target?.tagName === "DETAILS") target.open = true;
         moveTo(target);
         return;
@@ -1819,16 +2173,34 @@ const RunCenterUI = (() => {
       }
     });
     $("center-preflight-result").addEventListener("click", (event) => {
+      const preflightRoot = $("center-preflight-result");
+      if (event.target.closest?.("[data-clear-problem-filter]")) {
+        const filter = preflightRoot.querySelector("[data-preflight-filter]");
+        preflightRoot.querySelectorAll(".preflight-checks tbody tr").forEach((row) => { row.hidden = false; });
+        const selected = filter?.dataset.symbol;
+        filter.hidden = true;
+        [...preflightRoot.querySelectorAll("[data-show-problem]")]
+          .find((button) => button.dataset.showProblem === selected)?.focus?.({ preventScroll: true });
+        return;
+      }
       const symbolButton = event.target.closest?.("[data-show-problem],[data-exclude-problem]");
       if (symbolButton && checked?.report) {
         const symbol = symbolButton.dataset.showProblem || symbolButton.dataset.excludeProblem;
         const issues = (checked.report.checks || []).filter((item) => item.symbol === symbol && item.status !== "ready");
         if (!issues.length) return;
-        for (const row of $("center-preflight-result").querySelectorAll("tr")) {
-          row.hidden = !row.textContent.includes(symbol) && !row.querySelector("th");
-          if (row.textContent.includes(symbol)) row.querySelector("details")?.setAttribute("open", "");
-        }
         if (symbolButton.dataset.showProblem) {
+          const rows = [...preflightRoot.querySelectorAll(".preflight-checks tbody tr")];
+          const matches = rows.filter((row) => row.dataset.checkSymbol === symbol && row.dataset.checkStatus !== "ready");
+          rows.forEach((row) => {
+            row.hidden = !matches.includes(row);
+            if (!row.hidden) row.querySelector("details")?.setAttribute("open", "");
+          });
+          const filter = preflightRoot.querySelector("[data-preflight-filter]");
+          if (filter) {
+            filter.hidden = false;
+            filter.dataset.symbol = symbol;
+            filter.querySelector("[data-preflight-filter-label]").textContent = `只看 ${symbol}：显示 ${matches.length} 项检查（包含不同复权口径）；可点击“显示全部检查”恢复。`;
+          }
           showFeedback("center-action-feedback", `${symbol}：${issues.map((item) => item.reason || "问题原因未记录").join("；")}。可以查看日期和证据，或主动排除并重新预检。`, { scroll: false });
           return;
         }
@@ -1882,7 +2254,9 @@ const RunCenterUI = (() => {
         moveTo($(action.dataset.target));
       } else if (action.dataset.preflightAction === "show-plan") {
         moveTo($("center-data-plan"), { focus: false, scroll: true });
-        $("center-plan-create")?.focus?.();
+        if (dataPlan?.input?.parameters && paramsKey(dataPlan.input.parameters) === paramsKey(currentParams()))
+          $("center-plan-status")?.focus?.({ preventScroll: true });
+        else planAction("create");
       }
     });
     $("center-missing-confirm").parentElement.hidden =
@@ -2240,7 +2614,7 @@ const RunCenterUI = (() => {
         $("center-plan-confirm").hidden = true;
         $("center-plan-retry").hidden = true;
         $("center-plan-refresh").hidden = true;
-        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“查看处理计划”只会冻结参数并判断下一步是补行情还是核验证据，不会联网。</p>';
+        $("center-plan-status").innerHTML = '<p>当前预检存在缺口。点击“生成并查看处理计划”只会冻结参数并判断下一步是补行情还是核验证据，不会联网。</p>';
       }
     } catch (e) {
       if (own === planSequence) fail(e, { target: "center-action-feedback", focus: true, scroll: true });
@@ -2265,7 +2639,7 @@ const RunCenterUI = (() => {
         throw Error("请先通过当前参数的数据预检");
       if (!execute && $("center-review")?.querySelector) {
         $("center-review-content").innerHTML =
-          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
+          `<p>${esc(copy.label)} · ${copy.source_run_id ? "来源 " + esc(copy.source_run_id) : "新建配置"}</p><p>${params.stock_pool_id ? `冻结股票池 ${esc(params.stock_pool_id)} · revision ${esc(params.stock_pool_revision)} · ${copy.scope.length} 只` : `明确股票范围 ${esc((params.symbols || [params.symbol]).join(" "))}`}</p>${copy.kind === "daily_signal" ? `<h4>策略摘要</h4><p>${esc(dailySignalSummary(params, params.stock_pool_id ? copy.scope?.length : params.symbols?.length))}</p>` : ""}${renderValue(params)}<p>成本单位 bp；相对因子权重不是资金百分比。${copy.kind === "daily_signal" ? "信号收盘确认、最早下一交易日开盘尝试；买单当日失效，受限卖出继续重试，期末不强平。" : "执行假设沿用原模型。"}</p>`;
         $("center-review").hidden = false;
         moveTo($("center-review"));
         return;
@@ -2423,6 +2797,32 @@ const RunCenterUI = (() => {
       for (const k of ["kind", "status"])
         $("center-" + k).value = query.get(k) || "";
       if (submittedTaskId) $("center-kind").value = "daily_signal";
+      $("center-list").addEventListener("click", async (event) => {
+        const button = event.target.closest?.("[data-delete-backtest]");
+        if (!button || button.disabled) return;
+        const { source, record, runId, label } = button.dataset;
+        if (!window.confirm(`确认永久删除${label} ${runId}？该运行的历史记录、报告及下载文件将无法恢复；操作审计会保留。排队或运行中的任务不能删除。`)) return;
+        button.disabled = true;
+        const feedback = $("center-history-feedback");
+        feedback.textContent = "正在删除…";
+        try {
+          const query = new URLSearchParams({ source, record });
+          await get(`/api/v1/run-center/record?${query}`, {
+            method: "DELETE", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expected_run_id: runId }),
+          });
+          if (submittedTaskId === record) {
+            submittedTaskId = null;
+            $("center-submitted-task").innerHTML = "";
+          }
+          feedback.textContent = `已删除 ${label} ${runId} 的记录与报告。`;
+          if (page > 1 && total % 20 === 1) page--;
+          await history();
+        } catch (error) {
+          button.disabled = false;
+          feedback.textContent = `删除失败：${error.message}`;
+        }
+      });
       $("center-submitted-task").addEventListener("click", async (event) => {
         if (event.target.closest?.("[data-refresh-daily-task]")) {
           submittedTaskPolls = 0;
@@ -2480,5 +2880,6 @@ const RunCenterUI = (() => {
     factorName,
     strategyName,
     termHelp,
+    wireTermHelp,
   };
 })();

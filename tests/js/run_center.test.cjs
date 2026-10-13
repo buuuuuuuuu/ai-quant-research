@@ -80,7 +80,7 @@ function harness(
     location,
     URLSearchParams,
     structuredClone,
-    window: { confirm: () => true, history: { replaceState() {} } },
+    window: { confirm: options.confirm || (() => true), history: { replaceState() {} } },
     fetch: async (url, options = {}) => {
       calls.push({ url, options });
       const p = await responder(url, options);
@@ -119,6 +119,37 @@ test("history escapes values and preserves zeros and unknown times", () => {
   assert.ok(html.includes("历史范围未知"));
   assert.ok(html.includes("0 秒"));
   assert.ok(!html.includes("<script>"));
+});
+test("delete is offered only for terminal backtests and escapes identity", () => {
+  const terminal = { ...row('task-<bad>'), kind: 'daily_signal', status: 'succeeded' };
+  const html = ui.table([terminal, row('running'), { ...terminal, kind: 'screen' }], true);
+  assert.equal((html.match(/data-delete-backtest/g) || []).length, 1);
+  assert.match(html, /task-&lt;bad&gt;/);
+  assert.match(html, /删除记录与报告/);
+});
+test("delete requires confirmation, keeps inline errors, then refreshes history", async () => {
+  let accepted = false;
+  let deleted = false;
+  const h = harness('/backtests/history', async (_url, options) => {
+    if (options.method === 'DELETE') {
+      if (!accepted) throw Error('cancelled call must not run');
+      deleted = true;
+      return { deleted: true };
+    }
+    return { items: deleted ? [] : [{ ...row('task-1'), status: 'failed' }], total: deleted ? 0 : 1 };
+  }, { confirm: () => accepted });
+  await tick();
+  const button = { dataset: { source: 'task', record: 'task-1', runId: 'task-1', label: '财务因子回测' }, disabled: false };
+  const click = h.element('center-list').listeners.click;
+  await click({ target: { closest: () => button } });
+  assert.equal(h.calls.filter(c => c.options.method === 'DELETE').length, 0);
+  accepted = true;
+  await click({ target: { closest: () => button } });
+  const request = h.calls.find(c => c.options.method === 'DELETE');
+  assert.equal(request.url, '/api/v1/run-center/record?source=task&record=task-1');
+  assert.equal(JSON.parse(request.options.body).expected_run_id, 'task-1');
+  assert.match(h.element('center-history-feedback').textContent, /已删除/);
+  assert.match(h.element('center-list').innerHTML, /没有匹配/);
 });
 test("overview reuses one bounded dashboard read without creating plans or choosing another pool", async () => {
   for (const error of [false, true]) {
@@ -442,6 +473,54 @@ test("Chinese display preserves codes and unknown factor names remain escaped", 
     ["600519", "000001"],
   );
 });
+
+test("term explanations dismiss on outside click and Escape without stealing focus", async () => {
+  const h = harness("/backtests");
+  await tick();
+  const doc = h.context.document;
+  const listeners = {};
+  const makeTerm = () => {
+    const button = {
+      attributes: {}, focused: false,
+      setAttribute(key, value) { this.attributes[key] = value; },
+      focus() { this.focused = true; },
+    };
+    const close = { addEventListener() {} };
+    const details = {
+      open: false, dataset: {}, listeners: {},
+      querySelector(selector) { return selector === "button[aria-expanded]" ? button : close; },
+      addEventListener(name, handler) { this.listeners[name] = handler; },
+      contains(target) { return target === close; },
+    };
+    return { details, button, close };
+  };
+  const first = makeTerm(), second = makeTerm();
+  const terms = [first.details, second.details];
+  doc.addEventListener = (name, handler) => { listeners[name] = handler; };
+  doc.querySelectorAll = (selector) => selector === "details.term-help[open]" ? terms.filter((term) => term.open) : terms;
+  const root = { querySelectorAll: () => terms };
+  h.ui.wireTermHelp(root);
+  h.ui.wireTermHelp(root);
+  first.details.open = true;
+  listeners.click({ target: { closest: () => first.details } });
+  assert.equal(first.details.open, true);
+  second.details.open = true;
+  listeners.click({ target: { closest: () => second.details } });
+  assert.equal(first.details.open, false);
+  assert.equal(second.details.open, true);
+  doc.activeElement = second.close;
+  listeners.keydown({ key: "Escape" });
+  assert.equal(second.details.open, false);
+  assert.equal(second.button.attributes["aria-expanded"], "false");
+  assert.equal(second.button.focused, true);
+  first.details.open = true;
+  first.button.focused = false;
+  doc.activeElement = null;
+  listeners.click({ target: { closest: () => null } });
+  assert.equal(first.details.open, false);
+  assert.equal(first.button.focused, false);
+});
+
 test("factor rows read exact codes, directions and relative weights without percent conversion", () => {
   const original = {
     factors: [{ code: "roe", weight: 2, direction: "desc" }],
@@ -650,8 +729,25 @@ test("daily templates only contain legal rule parameters and do not contain scop
   for (const template of Object.values(ui.dailyTemplates)) {
     assert.equal("symbols" in template, false);
     assert.equal("stock_pool_id" in template, false);
-    assert.equal(ui.validateDailySignal({ ...template, candidate_count: 2, max_positions: 1 }, 2).length, 0);
+    assert.equal(ui.validateDailySignal({ ...template, candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }], candidate_count: 2, max_positions: 1 }, 2).length, 0);
   }
+});
+
+test("single stock permits no factor while multi-stock still needs one", () => {
+  const params = {
+    candidate_factors: [], candidate_count: 1, max_positions: 1,
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules,
+    sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+  };
+  const issues = ui.dailySignalIssues(params, 2);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, "empty_candidate_factors");
+  assert.equal(issues[0].target, "center-daily-candidates");
+  assert.match(issues[0].message, /多股范围.*增加候选排序因子/);
+  assert.deepEqual(ui.dailySignalIssues(params, 1), []);
+  assert.match(ui.dailySignalSummary(params, 1), /单只冻结股票直接参与每日信号检查/);
+  assert.doesNotMatch(ui.dailySignalSummary(params), /合成得分/);
+  assert.equal(ui.dailySignalIssues({ ...params, candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }] }, 1).length, 0);
 });
 
 test("daily validation and summary explain periods, weights, and next-open execution", () => {
@@ -700,7 +796,7 @@ test("preflight groups duplicate root causes and renders typed actions", () => {
   const html = ui.renderPreflight(report);
   assert.match(html, /2 类问题 · 23 项原始检查未通过/);
   assert.match(html, /data-field="end_date"/);
-  assert.match(html, /查看处理计划（只生成计划、不联网）/);
+  assert.match(html, /生成并查看处理计划（只生成计划、不联网）/);
   assert.doesNotMatch(html, /重复项/);
 });
 
@@ -913,19 +1009,165 @@ test("price signal chart keeps adjusted prices separate from raw execution event
   assert.deepEqual(model.events.map((item) => item.kind), ["buy-signal", "planned", "executed"]);
   const html = ui.renderPriceSignalChart(payload, 3);
   assert.match(html, /价格（信号复权口径）/);
-  assert.match(html, /未复权开盘参考价 101/);
+  assert.match(html, /点击曲线附近或事件圆点/);
+  assert.match(html, /data-price-event-date="2024-01-05"/);
+  assert.match(html, /price-selected-point/);
   assert.match(html, /price-event executed/);
-  assert.doesNotMatch(html, /101\.00,[0-9.]+/);
+  assert.doesNotMatch(html, /101\.00/);
+});
+
+test("price chart selects actual saved dates across sampling and missing prices", () => {
+  const payload = {
+    symbol: "600519", price_adjustment: "qfq", price_range: { minimum: 10, maximum: 16 },
+    date_index: ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"],
+    missing_dates: { signal_close: ["2024-01-04"], ma_2: ["2024-01-03", "2024-01-04"] },
+    series: [
+      { date: "2024-01-02", signal_close: 10, ma_2: null },
+      { date: "2024-01-05", signal_close: 15, ma_2: 13 },
+      { date: "2024-01-08", signal_close: 16, ma_2: 14 },
+    ],
+    signals: [{ signal_date: "2024-01-03", action: "buy" }, { signal_date: "2024-01-03", action: "sell" }],
+    orders: [{ planned_execution_date: "2024-01-04", execution_date: "2024-01-05", status: "executed", execution_price: 108 }],
+  };
+  const model = ui.priceChartModel(payload, 1);
+  assert.equal(model.selected, null); // The exact unsampled row is read by the day endpoint.
+  assert.equal(model.dates[0], "2024-01-02");
+  assert.equal(model.dates.at(-1), "2024-01-08");
+  assert.equal(model.segments.signal_close.length, 2);
+  assert.equal(model.events.filter((event) => event.date === "2024-01-03").length, 2);
+  const html = ui.renderPriceSignalChart(payload, 1, 3, "all", { date: "2024-01-03", price: { signal_close: 11 } });
+  assert.match(html, /price-selected-point price-close/);
+  assert.match(html, /2024-01-03/);
+  assert.doesNotMatch(html, /108\.00/);
+  assert.equal(ui.nearestPriceDateIndex(payload.date_index, "2024-01-06"), 3);
+});
+
+test("day detail separates saved signals, planned instructions, executions and missing values", () => {
+  const day = {
+    date: "2024-01-03", symbol: "600519", price: { signal_close: null, ma_2: 11 },
+    signals: [{ action: "buy", signal_price: null, rule_evidence: '<script>alert(1)</script>', planned_execution_date: "2024-01-04" }],
+    orders: [
+      { signal_date: "2024-01-02", planned_execution_date: "2024-01-03", execution_date: "2024-01-04", side: "buy", status: "executed", execution_price: 101, shares: 100 },
+      { signal_date: "2024-01-02", planned_execution_date: "2024-01-03", execution_date: "2024-01-03", side: "sell", status: "unfilled", reason: "t_plus_one", shares: null },
+    ], account: null,
+  };
+  const html = ui.renderPriceDayDetail(day);
+  assert.match(html, /当天尚无实际尝试记录/);
+  assert.match(html, /当日尝试但未成交/);
+  assert.match(html, /当天账户快照未记录/);
+  assert.match(html, /未记录/);
+  assert.doesNotMatch(html, /101\.00/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(ui.renderPriceDayPreview(day), /当天产生 1 条新信号/);
+  const explained = ui.renderPriceDayDetail({ ...day, signals: [{ action: "buy", rule_evidence: JSON.stringify([{ rule: { kind: "ma_cross", operator: "cross_above", short_window: 5, long_window: 20 }, matched: true, values: { ma_5: 10, ma_20: 9 } }]) }] });
+  assert.match(explained, /MA5从下方向上穿越 MA20/);
+  assert.match(explained, /ma_5 10/);
+});
+
+test("day selection ignores an older date response and keeps the newer card", async () => {
+  let releaseOld;
+  const record = { ...row("daily"), kind: "daily_signal", label: "日线信号策略", status: "succeeded", run_id: "daily-signal-20240108T000000Z-00000001", spec: { symbols: ["600519"], initial_capital: 1000 }, result: {} };
+  const chart = {
+    symbol: "600519", price_adjustment: "qfq", date_index: ["2024-01-02", "2024-01-03"],
+    series: [{ date: "2024-01-02", signal_close: 10 }, { date: "2024-01-03", signal_close: 11 }],
+    signals: [{ signal_date: "2024-01-03", action: "buy" }], orders: [],
+  };
+  const h = harness("/backtests/detail", (url) => {
+    if (url.includes("/run-center/record?")) return record;
+    if (url.endsWith("/daily-signal-20240108T000000Z-00000001")) return { spec: record.spec, series: [], orders: [], signals: [], positions: [], diagnostics: {} };
+    if (url.includes("/price-signals/day")) {
+      const date = new URL(url, "http://local.test").searchParams.get("date");
+      if (date === "2024-01-02") return new Promise((resolve) => { releaseOld = resolve; });
+      return { date, symbol: "600519", price: { signal_close: 11 }, signals: [{ action: "buy" }], orders: [], account: null };
+    }
+    if (url.includes("/price-signals?")) return chart;
+    return {};
+  });
+  h.element("center-price-symbol").value = "600519";
+  h.element("center-price-window").value = "all";
+  h.element("center-price-events").value = "all";
+  h.element("center-price-detail").hidden = true;
+  const documentListeners = {};
+  h.context.document.addEventListener = (name, handler) => { (documentListeners[name] ||= []).push(handler); };
+  h.context.document.querySelectorAll = () => [];
+  await h.ui.detail("source=index&record=daily");
+  await tick();
+  assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
+  h.element("center-price-position").listeners.input({ target: { value: "0" } });
+  await tick();
+  h.element("center-price-position").listeners.input({ target: { value: "1" } });
+  await tick();
+  releaseOld({ date: "2024-01-02", symbol: "600519", price: { signal_close: 10 }, signals: [], orders: [], account: null });
+  await tick();
+  assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
+  assert.equal(h.element("center-price-position").value, "1");
+  assert.equal(h.element("center-price-date").value, "2024-01-03");
+  h.element("center-price-chart").listeners.click({
+    clientX: 76,
+    target: { closest: (selector) => selector === "[data-price-plot]" ? {} : null,
+      ownerSVGElement: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } },
+  });
+  assert.equal(h.element("center-price-position").value, "0");
+  h.element("center-price-chart").listeners.click({
+    target: { closest: (selector) => selector === "[data-price-event-date]" ? { getAttribute: () => "2024-01-03" } : null },
+  });
+  assert.equal(h.element("center-price-position").value, "1");
+  const panel = h.element("center-price-detail"), chartElement = h.element("center-price-chart");
+  panel.contains = (target) => target === panel;
+  chartElement.focus = () => { chartElement.focused = true; };
+  chartElement.listeners.click({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  assert.equal(panel.hidden, false);
+  for (const listener of documentListeners.click || []) listener({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  assert.equal(panel.hidden, false, "opening click must not immediately dismiss the detail");
+  for (const listener of documentListeners.click || []) listener({ target: { closest: () => null } });
+  assert.equal(panel.hidden, true);
+  assert.equal(chartElement.focused, undefined, "outside click must not steal focus");
+  chartElement.listeners.click({ target: { closest: (selector) => selector === "[data-price-open-day]" ? {} : null } });
+  h.context.document.activeElement = panel;
+  for (const listener of documentListeners.keydown || []) listener({ key: "Escape" });
+  assert.equal(panel.hidden, true);
+  assert.equal(chartElement.focused, true, "Escape from the panel returns focus to the chart");
+});
+
+test("event-only chart does not invent a signal price", () => {
+  const html = ui.renderPriceSignalChart({
+    symbol: "600519", date_index: ["2024-01-02"],
+    series: [{ date: "2024-01-02", signal_close: null }],
+    signals: [], orders: [{ execution_date: "2024-01-02", status: "unfilled" }],
+  });
+  assert.match(html, /price-event blocked/);
+  assert.doesNotMatch(html, /price-selected-point/);
+  assert.match(html, /价格（信号复权口径）/);
 });
 
 test("trade audit and account audit use saved values and preserve unknowns", () => {
   const trade = ui.renderExecutedTrades([{ symbol: "600519", side: "buy", status: "executed", shares: 100, notional: 1000, cost: 3, cash_before: 2000, cash_after: 997, position_shares_before: 0, position_shares_after: 100, commission_cost: 1, slippage_cost: 2, stamp_duty_cost: 0, signal_id: "signal-000001" }]);
-  assert.match(trade, /2,000\.00 → 997\.00/);
+  assert.match(trade, /2,000\.00 元 → 997\.00 元/);
+  assert.match(trade, /trade-buy/);
+  assert.match(trade, /data-execution-sort="notional"/);
   assert.match(trade, /signal-000001/);
   const audit = ui.renderAuditSummary({ status: "warning", checked_dates: 1, check_count: 6, failure_count: 1, failures: [{ date: "2024-01-02", check: "cash_plus_positions_equals_total_assets", expected_value: 100, actual_value: 101, difference: 1, tolerance: 0.000001 }] });
   assert.match(audit, /完成但有差异/);
   assert.match(audit, /cash_plus_positions_equals_total_assets/);
   assert.match(ui.renderReproducibility({ git_commit_sha: null }), /未记录/);
+});
+
+test("trade table exposes bounded sortable columns and separates buy and sell", () => {
+  const html = ui.renderExecutedTrades([
+    { symbol: '600519', side: 'buy', status: 'executed', notional: 1234567.89, cost: 0.0001 },
+    { symbol: '000001', side: 'sell', status: 'executed', notional: -1234.56, cost: 0 },
+  ], { total: 2100, page: 2, page_size: 50, sort: 'notional', direction: 'desc' });
+  assert.match(html, /trade-buy/);
+  assert.match(html, /trade-sell/);
+  assert.match(html, /1,234,567\.89 元/);
+  assert.match(html, /-1,234\.56 元/);
+  assert.match(html, /0\.000100 元/);
+  assert.match(html, /0\.00 元/);
+  assert.match(html, /aria-sort="descending"/);
+  assert.match(html, /匹配 2100 笔 · 第 2 \/ 42 页/);
+  assert.match(html, /600519（名称未记录）/);
+  assert.doesNotMatch(html, /<script>/);
 });
 
 test("data plan separates completed gaps from real download failures", () => {
@@ -975,6 +1217,51 @@ test("preflight merges identical none and qfq gaps only in the display layer", (
   const html = ui.renderPreflight(report);
   assert.match(html, /1 组；底层 2 项/);
   assert.match(html, /data-exclude-problem="000333"/);
+  assert.match(html, /data-check-symbol="000333"/);
+  assert.match(html, /data-clear-problem-filter/);
+});
+
+test("problem action creates a read-only plan once and the symbol filter can be cleared", async () => {
+  const params = {
+    symbols: ["000333", "600022"], start_date: "2025-01-01", end_date: "2025-12-31",
+    candidate_factors: [{ code: "roe", weight: 1, direction: "desc" }], candidate_count: 1, max_positions: 1,
+    buy_rules: ui.dailyTemplates.ma_cross.buy_rules, sell_rules: ui.dailyTemplates.ma_cross.sell_rules,
+  };
+  const report = { ready: false, status: "blocked", complete: false,
+    checks: [{ symbol: "000333", dataset: "daily_bar", status: "missing", reason: "缺口待核验" }],
+    recommendations: [{ code: "price_gaps", title: "待核验", action_kind: "data_plan" }] };
+  const h = harness("/backtests/daily-signals", (url) => {
+    if (url.includes("/configuration?")) return { kind: "daily_signal", label: "日线信号策略", params, schema: { properties: {} }, warnings: [], missing_fields: [], scope: params.symbols };
+    if (url.includes("/stock-pools?")) return [];
+    if (url === "/api/v1/research-data/preflight") return report;
+    if (url === "/api/v1/research-data/plans") return { plan_id: "data-plan-1", status: "draft", input: { parameters: params, resolved_symbols: params.symbols }, items: [], report };
+    throw Error(`unexpected request ${url}`);
+  });
+  await tick();
+  await tick();
+  await h.element("center-preflight").listeners.click();
+  assert.match(h.element("center-preflight-result").innerHTML, /缺口待核验/);
+  const root = h.element("center-preflight-result");
+  const rows = ["000333", "000333", "000333", "600022"].map((symbol, index) => ({ dataset: { checkSymbol: symbol, checkStatus: index === 2 ? "ready" : "missing" }, hidden: false, querySelector: () => null }));
+  const trigger = { dataset: { showProblem: "000333" }, focused: false, focus() { this.focused = true; } };
+  const label = { textContent: "" };
+  const filter = { hidden: true, dataset: {}, querySelector: () => label };
+  root.querySelector = (selector) => selector === "[data-preflight-filter]" ? filter : null;
+  root.querySelectorAll = (selector) => selector === ".preflight-checks tbody tr" ? rows : selector === "[data-show-problem]" ? [trigger] : [];
+  root.listeners.click({ target: { closest: (selector) => selector.includes("data-show-problem") ? trigger : null } });
+  assert.deepEqual(rows.map((item) => item.hidden), [false, false, true, true]);
+  assert.equal(filter.hidden, false);
+  assert.match(label.textContent, /2 项检查/);
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-clear-problem-filter]" ? {} : null } });
+  assert.deepEqual(rows.map((item) => item.hidden), [false, false, false, false]);
+  assert.equal(filter.hidden, true);
+  assert.equal(trigger.focused, true);
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-preflight-action]" ? { dataset: { preflightAction: "show-plan" } } : null } });
+  await tick();
+  root.listeners.click({ target: { closest: (selector) => selector === "[data-preflight-action]" ? { dataset: { preflightAction: "show-plan" } } : null } });
+  await tick();
+  assert.equal(h.calls.filter((call) => call.url === "/api/v1/research-data/plans").length, 1);
+  assert.equal(h.calls.filter((call) => call.url.includes("/confirm") || call.url.includes("/verify-gaps")).length, 0);
 });
 
 test("trust summary escapes excluded reasons and keeps unknown values unrecorded", () => {

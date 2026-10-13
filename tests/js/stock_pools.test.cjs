@@ -6,6 +6,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const source = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/workbench.js"), "utf8").split("function operationTime")[0];
+const eventSource = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/workbench.js"), "utf8");
 
 class Element {
   constructor(id) {
@@ -114,6 +115,22 @@ test("Pydantic details are readable and HTML error strings remain text", async (
   await h.element("#stock-pool-add").listeners.click();
   assert.equal(h.messages[1].textContent, "body.symbols: at most 200 <script>");
   assert.equal(h.messages[1].innerHTML, "");
+});
+
+test("document event review failure stays next to its button and permits retry", async () => {
+  const h = harness(async () => ({status: 422, payload: {detail: "证据不完整 <script>"}}));
+  vm.runInContext(eventSource.slice(eventSource.indexOf("function renderDocumentEvents"), eventSource.indexOf("async function renderDocumentWorkspace")), h.context);
+  const feedback = h.element("#event-review-feedback");
+  const button = new Element("review-button");
+  button.closest = () => ({querySelector: () => feedback});
+  await h.context.reviewDocumentEvent("event-1", "accepted", "doc-1", button);
+  assert.equal(h.calls[0].url, "/api/v1/document-events/event-1/review");
+  assert.match(feedback.textContent, /审核未保存：证据不完整 <script>。请检查后重试/);
+  assert.equal(feedback.innerHTML, "");
+  assert.equal(feedback.attributes.role, "alert");
+  assert.equal(feedback.classList.contains("negative"), true);
+  assert.equal(button.disabled, false);
+  assert.equal(h.element("#document-event-task-status").textContent, "");
 });
 
 test("failed explicit sync is handled instead of an unhandled rejection", async () => {

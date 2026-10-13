@@ -8,7 +8,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from ai_quant_assistant.reports.presentation import install_filters
+from ai_quant_assistant.reports.presentation import display_money, install_filters
 
 
 class FactorBacktestReportWriter:
@@ -27,7 +27,7 @@ class FactorBacktestReportWriter:
 
     @staticmethod
     def _money(value: Any) -> str:
-        return "-" if value is None or pd.isna(value) else f"{float(value):,.2f}"
+        return display_money(value)
 
     @staticmethod
     def _chart_points(nav: pd.DataFrame, column: str) -> str:
@@ -95,6 +95,15 @@ class FactorBacktestReportWriter:
                 for column in sheet.columns:
                     width = min(max(len(str(cell.value or "")) for cell in column) + 2, 42)
                     sheet.column_dimensions[column[0].column_letter].width = max(10, width)
+                    if column[0].value in {"cash", "position_value", "portfolio_value", "total_cost", "cost", "notional", "market_value"}:
+                        for cell in column[1:]:
+                            if isinstance(cell.value, (int, float)):
+                                cell.number_format = (
+                                    '0.000E+00' if cell.value and abs(cell.value) < 0.0000005
+                                    else '#,##0.000000;[Red]-#,##0.000000;0.000000'
+                                    if cell.value and abs(cell.value) < 0.005
+                                    else '#,##0.00;[Red]-#,##0.00;0.00'
+                                )
         html = self.environment.get_template("factor_backtest.html.j2").render(
             spec=spec,
             metrics=metrics,

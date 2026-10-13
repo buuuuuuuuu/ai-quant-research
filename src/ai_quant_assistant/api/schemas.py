@@ -324,7 +324,7 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
     start_date: date = date(2015, 1, 1)
     end_date: date = Field(default_factory=date.today)
     candidate_factors: list[CandidateFactorRequest] = Field(
-        default_factory=lambda: [CandidateFactorRequest(code="roe")], min_length=1, max_length=12
+        default_factory=lambda: [CandidateFactorRequest(code="roe")], max_length=12
     )
     candidate_count: int = Field(default=20, ge=1, le=500)
     candidate_refresh: Literal["daily", "monthly", "quarterly"] = "monthly"
@@ -387,6 +387,11 @@ class DailySignalStrategyRequest(StockPoolSelectableRequest):
 
     def to_spec(self, *, resolved_symbols=None, stock_pool=None) -> DailySignalStrategySpec:
         scope = tuple(resolved_symbols or self.symbols or ())
+        if not self.candidate_factors and len(set(scope)) != 1:
+            raise ValueError(
+                "仅冻结一只股票时可以不配置候选因子；当前范围不是一只股票。"
+                "请缩小范围或增加候选排序因子，修改后重新检查本地数据"
+            )
         if scope and self.candidate_count > len(set(scope)):
             raise ValueError(
                 f"候选数量当前为 {self.candidate_count}，冻结股票范围只有 {len(set(scope))} 只。"

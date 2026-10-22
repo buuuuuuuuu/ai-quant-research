@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "安全漏洞 / Security vulnerabilities"
+    url: https://github.com/buuuuuuuuu/ai-quant-research/blob/main/SECURITY.md
+    about: "请先确认私密报告渠道，不要公开利用细节 / Check the private reporting route before disclosing details."
+  - name: "离线示例 / Offline synthetic demo"
+    url: https://github.com/buuuuuuuuu/ai-quant-research/tree/main/examples/offline-demo
+    about: "无需真实行情或 API Key 的复现起点 / Reproduce without real market data or API keys."

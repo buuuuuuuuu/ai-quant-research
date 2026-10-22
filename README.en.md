@@ -2,7 +2,7 @@
 
 **A local-first workspace for A-share data, strategy experiments and auditable backtests.**
 
-[简体中文](README.md) · [Offline example](examples/offline-demo/README.md) · [Contributing](CONTRIBUTING.md)
+[简体中文](README.md) · [Offline example](examples/offline-demo/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 [![CI](https://github.com/buuuuuuuuu/ai-quant-research/actions/workflows/ci.yml/badge.svg)](https://github.com/buuuuuuuuu/ai-quant-research/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)

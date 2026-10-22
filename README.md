@@ -69,7 +69,7 @@ uv run python examples/offline-demo/demo.py --output .demo/first --serve
 | 财务、实验与事件 | [财务因子](docs/factor-backtest.md) · [多因子实验](docs/factor-lab.md) · [事件研究](docs/golden-path.md) |
 | 数据与范围 | [股票池](docs/stock-pools.md) · [数据字典](docs/data-dictionary.md) |
 | 完整操作与架构 | [详细操作参考](docs/usage-reference.md) · [架构](docs/architecture.md) |
-| 贡献与许可 | [贡献指南](CONTRIBUTING.md) · [依赖许可核对](THIRD_PARTY_NOTICES.md) |
+| 贡献与许可 | [贡献指南](CONTRIBUTING.md) · [安全报告](SECURITY.md) · [依赖许可核对](THIRD_PARTY_NOTICES.md) |
 
 ## 开发与测试
 

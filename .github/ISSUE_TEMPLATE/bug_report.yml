@@ -1,0 +1,49 @@
+name: "问题反馈 / Bug report"
+description: "提交可复现的功能、数据检查或界面问题 / Report a reproducible problem."
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全漏洞请先阅读 [SECURITY.md](https://github.com/buuuuuuuuu/ai-quant-research/blob/main/SECURITY.md)，不要在公开 Issue 中披露利用细节。
+        For vulnerabilities, follow SECURITY.md. Never upload credentials, production databases, account records, or unredacted logs.
+  - type: input
+    id: version
+    attributes:
+      label: "版本或提交 SHA / Version or commit SHA"
+      description: "可使用 git rev-parse HEAD；不知道时请填写未知 / Use unknown if unavailable."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "环境 / Environment"
+      description: "操作系统、Python、浏览器、安装方式及 Schema（如已知）；不要贴 .env / OS, Python, browser, install method, schema if known. No .env files."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "复现步骤 / Steps to reproduce"
+      description: "优先使用离线合成示例。数据问题请写股票代码、区间、none/qfq、检查分类；不要上传无权再分发的数据。 / Prefer synthetic fixtures; include symbol, dates, adjustment and check classification when relevant."
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: "预期与实际结果 / Expected and actual behavior"
+      description: "区分未开始、排队、同步完成但仍有缺口和真实失败；不必重复尝试下载。 / Describe the actual task/data state."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "脱敏日志或截图 / Sanitized logs or screenshots"
+      description: "可选；删除用户名、路径、主机地址、Token、Cookie 和个人财务信息。 / Optional; redact identifiers, paths, hosts, tokens, cookies and personal financial data."
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: "提交前 / Before submitting"
+      options:
+        - label: "我已移除敏感信息，且本 Issue 不包含未公开漏洞细节。 / No secrets or undisclosed vulnerability details are included."
+          required: true

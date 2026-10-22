@@ -1,0 +1,13 @@
+{
+  "description": "Local-first A-share research and backtesting with point-in-time financial data, auditable trades, and reproducible reports.",
+  "topics": [
+    "a-share",
+    "backtesting",
+    "data-quality",
+    "duckdb",
+    "financial-research",
+    "python",
+    "quantitative-finance",
+    "reproducible-research"
+  ]
+}

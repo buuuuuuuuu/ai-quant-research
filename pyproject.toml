@@ -5,7 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "ai-quant-research"
 version = "0.2.0"
-description = "A-share AI quant research assistant V1 skeleton and interim-report event-study golden path"
+description = "Local-first A-share research, daily-signal backtesting and auditable reports"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

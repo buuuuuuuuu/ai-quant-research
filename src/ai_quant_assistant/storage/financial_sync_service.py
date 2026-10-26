@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -254,6 +255,17 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
         ]
 
     @staticmethod
+    def _metrics_unchanged(previous: dict[str, float], incoming: dict[str, float]) -> bool:
+        # Upstream ratios are recomputed per request, so the last digits of the
+        # same published fact can drift; only material restatements are conflicts.
+        if previous.keys() != incoming.keys():
+            return False
+        return all(
+            math.isclose(previous[code], incoming[code], rel_tol=1e-6, abs_tol=1e-6)
+            for code in previous
+        )
+
+    @staticmethod
     def _report_id(security_id: str, period_end: Any, published_at: Any) -> str:
         payload = (
             f"{security_id}:{pd.Timestamp(period_end).date().isoformat()}:"
@@ -323,7 +335,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                         [report[0]],
                     ).fetchall())
                     incoming = {row[4]: row[5] for row in metric_rows if row[0] == report[0]}
-                    if old[0] != report[3] or previous != incoming:
+                    if old[0] != report[3] or not self._metrics_unchanged(previous, incoming):
                         raise ValueError(
                             f"financial version conflict: {report[0]}; changed facts require "
                             "a separately verified publication time; historical version retained"

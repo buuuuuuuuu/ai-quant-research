@@ -849,6 +849,27 @@ def test_financial_same_publication_conflict_retains_values_and_raw_bytes(tmp_pa
         assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
 
 
+def test_financial_float_noise_in_same_publication_is_not_a_conflict(tmp_path, monkeypatch):
+    provider = FakeFinancialProvider(provider_notice=True)
+    _, financial, db = _services(tmp_path, provider)
+    spec = FinancialSyncSpec(date(2024, 1, 1), date(2024, 12, 31), ("600519",), resume=False)
+    assert financial.run(spec)["status"] == "published"
+    with db.connect(read_only=True) as c:
+        before = c.execute("SELECT * FROM financial_metric ORDER BY ALL").fetchall()
+    original = provider.get_financial_indicators
+
+    def rounded(*args):
+        frame = original(*args)
+        frame["book_value_per_share"] = frame["book_value_per_share"] * (1 + 7e-8)
+        return frame
+
+    monkeypatch.setattr(provider, "get_financial_indicators", rounded)
+    result = financial.run(spec)
+    assert result["status"] == "published", result["errors"]
+    with db.connect(read_only=True) as c:
+        assert c.execute("SELECT * FROM financial_metric ORDER BY ALL").fetchall() == before
+
+
 def test_stale_finance_cache_and_ambiguous_publication_are_not_published(tmp_path, monkeypatch):
     provider = FakeFinancialProvider()
     research, financial, db = _services(tmp_path, provider)

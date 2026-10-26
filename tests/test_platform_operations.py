@@ -292,7 +292,7 @@ def test_web_incremental_sync_exposes_background_progress_and_dataset_status(tmp
     }
 
 
-def test_failed_incremental_sync_preserves_provider_error_in_task_history(tmp_path) -> None:
+def test_partial_incremental_sync_records_provider_error_in_task_history(tmp_path) -> None:
     class BrokenProvider(FakeFinancialProvider):
         def get_trading_calendar(self):
             raise ConnectionError("upstream trading calendar unavailable")
@@ -310,13 +310,84 @@ def test_failed_incremental_sync_preserves_provider_error_in_task_history(tmp_pa
         operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
     )
 
-    with pytest.raises(RuntimeError, match="calendar unavailable"):
+    result = service.run(as_of=date(2024, 8, 20))
+
+    failed = repository.list(task_type="sync")[0]
+    assert result["status"] == "partial"
+    assert result["failed_datasets"] == ["daily_bar"]
+    assert failed["status"] == "failed"
+    assert failed["progress"] == 80
+    assert "calendar unavailable" in failed["error"]
+    assert database.status()["relations"]["published_financial_metric"] > 0
+
+
+def test_failed_benchmark_stage_does_not_skip_remaining_datasets(tmp_path) -> None:
+    class BrokenBenchmarkProvider(FakeFinancialProvider):
+        def get_benchmark_prices(self, symbol, start_date, end_date):
+            raise ConnectionError("benchmark upstream unavailable")
+
+    settings = _settings(tmp_path, sync_symbols=("600519",))
+    database = LocalDatabase(settings.duckdb_path, DataLayout.from_root(settings.data_dir))
+    database.initialize()
+    _enroll_price_fixture(database)
+    repository = OperationTaskRepository(database)
+    service = IncrementalSyncService(
+        database=database,
+        settings=settings,
+        provider=BrokenBenchmarkProvider(provider_notice=True),
+        tasks=repository,
+        operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
+    )
+
+    result = service.run(as_of=date(2024, 8, 20))
+
+    stored = repository.get(result["task_id"])
+    relations = database.status()["relations"]
+    assert result["status"] == "partial"
+    assert result["failed_datasets"] == ["benchmark_daily_bar"]
+    assert stored["status"] == "failed"
+    assert "benchmark_daily_bar" in stored["error"]
+    assert relations["published_daily_bar"] > 0
+    assert relations["published_announcement"] > 0
+    assert relations["published_financial_metric"] > 0
+
+
+def test_incremental_sync_fails_only_when_no_dataset_can_be_published(tmp_path) -> None:
+    class DeadProvider(FakeFinancialProvider):
+        def get_trading_calendar(self):
+            raise ConnectionError("calendar upstream unavailable")
+
+        def get_benchmark_prices(self, symbol, start_date, end_date):
+            raise ConnectionError("benchmark upstream unavailable")
+
+        def get_report_announcements(self, symbol, start_date, end_date, report_type):
+            raise ConnectionError("announcement upstream unavailable")
+
+        def get_interim_announcements(self, symbol, start_date, end_date):
+            raise ConnectionError("announcement upstream unavailable")
+
+        def get_financial_indicators(self, symbol, start_date, end_date):
+            raise ConnectionError("financial upstream unavailable")
+
+    settings = _settings(tmp_path, sync_symbols=("600519",))
+    database = LocalDatabase(settings.duckdb_path, DataLayout.from_root(settings.data_dir))
+    database.initialize()
+    _enroll_price_fixture(database)
+    repository = OperationTaskRepository(database)
+    service = IncrementalSyncService(
+        database=database,
+        settings=settings,
+        provider=DeadProvider(provider_notice=True),
+        tasks=repository,
+        operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
+    )
+
+    with pytest.raises(RuntimeError, match="no dataset could be published"):
         service.run(as_of=date(2024, 8, 20))
 
     failed = repository.list(task_type="sync")[0]
     assert failed["status"] == "failed"
-    assert failed["progress"] == 10
-    assert "calendar unavailable" in failed["error"]
+    assert "no dataset could be published" in failed["error"]
 
 
 def test_backup_is_consistent_verified_and_visible_in_web_dashboard(tmp_path) -> None:

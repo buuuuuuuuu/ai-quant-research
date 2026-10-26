@@ -142,6 +142,7 @@ class IncrementalSyncService:
                 task_id, owner_id=owner_id, progress=value, message=message
             ):
                 raise RuntimeError("stock pool sync task lease is no longer owned by this worker")
+        result: dict[str, Any] | None = None
         try:
             with self.operation_lock.hold():
                 self.database.initialize()
@@ -219,20 +220,16 @@ class IncrementalSyncService:
                     for dataset, stage in stages.items()
                     if stage.get("status") not in {"published", "succeeded"}
                 ]
-                if len(failed_datasets) == len(stages):
-                    raise RuntimeError(
-                        "no dataset could be published: "
-                        + "; ".join(
-                            self._stage_failure_detail(dataset, stages[dataset])
-                            for dataset in failed_datasets
-                        )
-                    )
+                all_stages_failed = len(failed_datasets) == len(stages)
                 failure_detail = "; ".join(
                     self._stage_failure_detail(dataset, stages[dataset])
                     for dataset in failed_datasets
                 )
                 result = {
-                    "status": "succeeded" if not failed_datasets else "partial",
+                    "status": (
+                        "failed" if all_stages_failed else "partial" if failed_datasets
+                        else "succeeded"
+                    ),
                     "task_id": task_id,
                     "as_of": today.isoformat(),
                     "symbols": list(selected_symbols),
@@ -246,18 +243,27 @@ class IncrementalSyncService:
                     "stages": stages,
                     "failed_datasets": failed_datasets,
                 }
+                if all_stages_failed:
+                    # A failed stage may still have published some partitions.
+                    # Keep the full result even when all four stages have errors.
+                    raise RuntimeError(
+                        "全部同步阶段均有失败，已发布的数据予以保留：" + failure_detail
+                    )
             if failed_datasets:
-                message = "同步完成，部分数据集存在失败分区"
+                message = "本次处理已结束，部分数据集存在失败分区；已发布的数据予以保留"
                 if owner_id is None:
                     self.tasks.update(
                         task_id,
                         status="failed",
+                        progress=100,
+                        result_json=result,
                         message=message,
                         error=failure_detail,
                         completed_at=datetime.now(UTC).isoformat(),
                     )
                 elif not self.tasks.fail(
-                    task_id, owner_id=owner_id, message=message, error=failure_detail
+                    task_id, owner_id=owner_id, message=message, error=failure_detail,
+                    result=result, progress=100,
                 ):
                     raise RuntimeError("stock pool sync task completion was fenced")
                 if self.audit is not None:
@@ -305,6 +311,7 @@ class IncrementalSyncService:
                     message="增量同步失败",
                     error=str(exc),
                     completed_at=datetime.now(UTC).isoformat(),
+                    **({"result_json": result, "progress": 100} if result is not None else {}),
                 )
             else:
                 self.tasks.fail(
@@ -312,6 +319,8 @@ class IncrementalSyncService:
                     owner_id=owner_id,
                     message="增量同步失败",
                     error=str(exc),
+                    result=result,
+                    progress=100 if result is not None else None,
                 )
             if self.audit is not None:
                 self.audit.record(

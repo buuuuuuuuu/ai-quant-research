@@ -825,7 +825,10 @@ def test_v15_migration_preserves_all_tables_repeatable_and_rollback(db, monkeypa
         }
 
 
-def test_financial_same_publication_conflict_retains_values_and_raw_bytes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("metric,delta", [("roe", 100), ("revenue", 1), ("book_value_per_share", 0.001)])
+def test_financial_same_publication_conflict_retains_values_and_raw_bytes(
+    tmp_path, monkeypatch, metric, delta
+):
     provider = FakeFinancialProvider(provider_notice=True)
     _, financial, db = _services(tmp_path, provider)
     spec = FinancialSyncSpec(date(2024, 1, 1), date(2024, 12, 31), ("600519",), resume=False)
@@ -837,7 +840,7 @@ def test_financial_same_publication_conflict_retains_values_and_raw_bytes(tmp_pa
 
     def changed(*args):
         frame = original(*args)
-        frame["roe"] += 100
+        frame[metric] += delta
         return frame
 
     monkeypatch.setattr(provider, "get_financial_indicators", changed)
@@ -850,17 +853,25 @@ def test_financial_same_publication_conflict_retains_values_and_raw_bytes(tmp_pa
 
 
 def test_financial_float_noise_in_same_publication_is_not_a_conflict(tmp_path, monkeypatch):
-    provider = FakeFinancialProvider(provider_notice=True)
+    class RecomputedBpsProvider(FakeFinancialProvider):
+        def get_financial_indicators(self, *args):
+            frame = super().get_financial_indicators(*args)
+            frame["book_value_per_share"] = 83.6092746779
+            return frame
+
+    provider = RecomputedBpsProvider(provider_notice=True)
     _, financial, db = _services(tmp_path, provider)
     spec = FinancialSyncSpec(date(2024, 1, 1), date(2024, 12, 31), ("600519",), resume=False)
     assert financial.run(spec)["status"] == "published"
     with db.connect(read_only=True) as c:
         before = c.execute("SELECT * FROM financial_metric ORDER BY ALL").fetchall()
+        reports = c.execute("SELECT * FROM financial_report ORDER BY ALL").fetchall()
+        raw = c.execute("SELECT raw_path,raw_sha256 FROM financial_sync_partition").fetchall()
     original = provider.get_financial_indicators
 
     def rounded(*args):
         frame = original(*args)
-        frame["book_value_per_share"] = frame["book_value_per_share"] * (1 + 7e-8)
+        frame["book_value_per_share"] = 83.609269004268
         return frame
 
     monkeypatch.setattr(provider, "get_financial_indicators", rounded)
@@ -868,6 +879,9 @@ def test_financial_float_noise_in_same_publication_is_not_a_conflict(tmp_path, m
     assert result["status"] == "published", result["errors"]
     with db.connect(read_only=True) as c:
         assert c.execute("SELECT * FROM financial_metric ORDER BY ALL").fetchall() == before
+        assert c.execute("SELECT * FROM financial_report ORDER BY ALL").fetchall() == reports
+    for path, sha in raw:
+        assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == sha
 
 
 def test_stale_finance_cache_and_ambiguous_publication_are_not_published(tmp_path, monkeypatch):

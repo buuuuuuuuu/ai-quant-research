@@ -256,14 +256,24 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
 
     @staticmethod
     def _metrics_unchanged(previous: dict[str, float], incoming: dict[str, float]) -> bool:
-        # Upstream ratios are recomputed per request, so the last digits of the
-        # same published fact can drift; only material restatements are conflicts.
+        # Only BPS has a reproduced provider recomputation drift (about 6.8e-8
+        # relative). This narrow allowance is NOT a general materiality threshold:
+        # amount/ratio fields remain exact, and BPS drift is capped in CNY/share.
         if previous.keys() != incoming.keys():
             return False
-        return all(
-            math.isclose(previous[code], incoming[code], rel_tol=1e-6, abs_tol=1e-6)
-            for code in previous
-        )
+        for code, old in previous.items():
+            new = incoming[code]
+            if not math.isfinite(old) or not math.isfinite(new):
+                return False
+            if old == new:
+                continue
+            if code != "book_value_per_share":
+                return False
+            if abs(old - new) > 1e-5 or not math.isclose(
+                old, new, rel_tol=1e-7, abs_tol=1e-8
+            ):
+                return False
+        return True
 
     @staticmethod
     def _report_id(security_id: str, period_end: Any, published_at: Any) -> str:

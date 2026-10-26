@@ -292,7 +292,8 @@ def test_web_incremental_sync_exposes_background_progress_and_dataset_status(tmp
     }
 
 
-def test_partial_incremental_sync_records_provider_error_in_task_history(tmp_path) -> None:
+@pytest.mark.parametrize("owner_id", [None, "sync-test-worker"])
+def test_partial_incremental_sync_records_provider_error_in_task_history(tmp_path, owner_id) -> None:
     class BrokenProvider(FakeFinancialProvider):
         def get_trading_calendar(self):
             raise ConnectionError("upstream trading calendar unavailable")
@@ -310,13 +311,18 @@ def test_partial_incremental_sync_records_provider_error_in_task_history(tmp_pat
         operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
     )
 
-    result = service.run(as_of=date(2024, 8, 20))
+    task = repository.create("sync", spec={"as_of": "2024-08-20"})
+    result = service.run(as_of=date(2024, 8, 20), task_id=task["task_id"], owner_id=owner_id)
 
     failed = repository.list(task_type="sync")[0]
     assert result["status"] == "partial"
     assert result["failed_datasets"] == ["daily_bar"]
     assert failed["status"] == "failed"
-    assert failed["progress"] == 80
+    assert failed["progress"] == 100
+    reopened = OperationTaskRepository(database).get(task["task_id"])
+    assert reopened["result"] == json.loads(json.dumps(result, default=str))
+    assert reopened["result"]["stages"]["financial_metric"]["batch_id"]
+    assert reopened["completed_at"]
     assert "calendar unavailable" in failed["error"]
     assert database.status()["relations"]["published_financial_metric"] > 0
 
@@ -352,7 +358,8 @@ def test_failed_benchmark_stage_does_not_skip_remaining_datasets(tmp_path) -> No
     assert relations["published_financial_metric"] > 0
 
 
-def test_incremental_sync_fails_only_when_no_dataset_can_be_published(tmp_path) -> None:
+@pytest.mark.parametrize("owner_id", [None, "sync-test-worker"])
+def test_incremental_sync_preserves_all_failed_stage_results(tmp_path, owner_id) -> None:
     class DeadProvider(FakeFinancialProvider):
         def get_trading_calendar(self):
             raise ConnectionError("calendar upstream unavailable")
@@ -382,12 +389,17 @@ def test_incremental_sync_fails_only_when_no_dataset_can_be_published(tmp_path) 
         operation_lock=ExclusiveOperationLock(settings.data_dir / ".operations.lock"),
     )
 
-    with pytest.raises(RuntimeError, match="no dataset could be published"):
-        service.run(as_of=date(2024, 8, 20))
+    task = repository.create("sync", spec={"as_of": "2024-08-20"})
+    with pytest.raises(RuntimeError, match="全部同步阶段均有失败"):
+        service.run(as_of=date(2024, 8, 20), task_id=task["task_id"], owner_id=owner_id)
 
     failed = repository.list(task_type="sync")[0]
     assert failed["status"] == "failed"
-    assert "no dataset could be published" in failed["error"]
+    assert "全部同步阶段均有失败" in failed["error"]
+    assert failed["progress"] == 100
+    assert failed["result"]["status"] == "failed"
+    assert len(failed["result"]["failed_datasets"]) == 4
+    assert all(stage["errors"] for stage in failed["result"]["stages"].values())
 
 
 def test_backup_is_consistent_verified_and_visible_in_web_dashboard(tmp_path) -> None:

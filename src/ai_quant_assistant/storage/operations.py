@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -142,6 +142,7 @@ class IncrementalSyncService:
                 task_id, owner_id=owner_id, progress=value, message=message
             ):
                 raise RuntimeError("stock pool sync task lease is no longer owned by this worker")
+        result: dict[str, Any] | None = None
         try:
             with self.operation_lock.hold():
                 self.database.initialize()
@@ -178,50 +179,105 @@ class IncrementalSyncService:
                 )
                 stages: dict[str, dict[str, Any]] = {}
                 report(10, "按本地管理范围同步各股票历史缺口")
-                stages["daily_bar"] = self._managed_market_stage(today, symbols)
-                self._require_published("daily_bar", stages["daily_bar"])
+                stages["daily_bar"] = self._run_stage(
+                    "daily_bar", self._managed_market_stage, today, symbols
+                )
                 report(35, "同步指数基准行情")
-                stages["benchmark_daily_bar"] = research.sync_benchmarks(
+                stages["benchmark_daily_bar"] = self._run_stage(
+                    "benchmark_daily_bar",
+                    research.sync_benchmarks,
                     BenchmarkSyncSpec(
                         start_date=benchmark_start,
                         end_date=today,
                         symbols=(self.settings.sync_benchmark_symbol,),
-                    )
+                    ),
                 )
-                self._require_published("benchmark_daily_bar", stages["benchmark_daily_bar"])
                 report(60, "同步上市公司公告")
-                stages["announcement"] = research.sync_announcements(
+                stages["announcement"] = self._run_stage(
+                    "announcement",
+                    research.sync_announcements,
                     AnnouncementSyncSpec(
                         start_date=announcement_start,
                         end_date=today,
                         symbols=selected_symbols,
                         report_types=REPORT_TYPES,
-                    )
+                    ),
                 )
-                self._require_published("announcement", stages["announcement"])
                 report(80, "同步 Point-in-Time 财务指标")
-                stages["financial_metric"] = financial.run(
+                stages["financial_metric"] = self._run_stage(
+                    "financial_metric",
+                    financial.run,
                     FinancialSyncSpec(
                         start_date=financial_start,
                         end_date=today,
                         symbols=selected_symbols,
-                    )
+                    ),
                 )
-                self._require_published("financial_metric", stages["financial_metric"])
+                # Every dataset publishes independently: one symbol's blocked
+                # partition must not stop the remaining datasets from updating.
+                failed_datasets = [
+                    dataset
+                    for dataset, stage in stages.items()
+                    if stage.get("status") not in {"published", "succeeded"}
+                ]
+                all_stages_failed = len(failed_datasets) == len(stages)
+                failure_detail = "; ".join(
+                    self._stage_failure_detail(dataset, stages[dataset])
+                    for dataset in failed_datasets
+                )
                 result = {
-                    "status": "succeeded",
+                    "status": (
+                        "failed" if all_stages_failed else "partial" if failed_datasets
+                        else "succeeded"
+                    ),
                     "task_id": task_id,
                     "as_of": today.isoformat(),
                     "symbols": list(selected_symbols),
                     "provider": self.provider.name,
                     "windows": {
-                        "daily_bar": stages["daily_bar"]["windows"],
+                        "daily_bar": stages["daily_bar"].get("windows", {}),
                         "benchmark_daily_bar": benchmark_start.isoformat(),
                         "announcement": announcement_start.isoformat(),
                         "financial_metric": financial_start.isoformat(),
                     },
                     "stages": stages,
+                    "failed_datasets": failed_datasets,
                 }
+                if all_stages_failed:
+                    # A failed stage may still have published some partitions.
+                    # Keep the full result even when all four stages have errors.
+                    raise RuntimeError(
+                        "全部同步阶段均有失败，已发布的数据予以保留：" + failure_detail
+                    )
+            if failed_datasets:
+                message = "本次处理已结束，部分数据集存在失败分区；已发布的数据予以保留"
+                if owner_id is None:
+                    self.tasks.update(
+                        task_id,
+                        status="failed",
+                        progress=100,
+                        result_json=result,
+                        message=message,
+                        error=failure_detail,
+                        completed_at=datetime.now(UTC).isoformat(),
+                    )
+                elif not self.tasks.fail(
+                    task_id, owner_id=owner_id, message=message, error=failure_detail,
+                    result=result, progress=100,
+                ):
+                    raise RuntimeError("stock pool sync task completion was fenced")
+                if self.audit is not None:
+                    self.audit.record(
+                        "sync_completed",
+                        outcome="warning",
+                        object_type="operation_task",
+                        object_id=task_id,
+                        details={
+                            "symbols": list(selected_symbols),
+                            "failed_datasets": failed_datasets,
+                        },
+                    )
+                return result
             if owner_id is None:
                 self.tasks.update(
                     task_id,
@@ -255,6 +311,7 @@ class IncrementalSyncService:
                     message="增量同步失败",
                     error=str(exc),
                     completed_at=datetime.now(UTC).isoformat(),
+                    **({"result_json": result, "progress": 100} if result is not None else {}),
                 )
             else:
                 self.tasks.fail(
@@ -262,6 +319,8 @@ class IncrementalSyncService:
                     owner_id=owner_id,
                     message="增量同步失败",
                     error=str(exc),
+                    result=result,
+                    progress=100 if result is not None else None,
                 )
             if self.audit is not None:
                 self.audit.record(
@@ -337,9 +396,23 @@ class IncrementalSyncService:
         return anchor - timedelta(days=max(1, lookback_days))
 
     @staticmethod
-    def _require_published(dataset: str, result: dict[str, Any]) -> None:
-        if result.get("status") not in {"published", "succeeded"}:
-            raise RuntimeError(f"{dataset} synchronization failed: {result.get('errors') or result}")
+    def _run_stage(
+        dataset: str, action: Callable[..., dict[str, Any]], *arguments: Any
+    ) -> dict[str, Any]:
+        try:
+            return action(*arguments)
+        except Exception as exc:  # noqa: BLE001 - isolate one dataset from the others
+            logger.exception("%s synchronization stage raised", dataset)
+            return {"status": "failed", "errors": [{"error": str(exc)}]}
+
+    @staticmethod
+    def _stage_failure_detail(dataset: str, stage: dict[str, Any]) -> str:
+        errors = stage.get("errors") or []
+        if not errors:
+            return f"{dataset}: status {stage.get('status')}"
+        first = errors[0]
+        message = first.get("error") if isinstance(first, dict) else str(first)
+        return f"{dataset}: {len(errors)} failure(s) recorded, first: {message}"
 
 
 class DatabaseBackupService:

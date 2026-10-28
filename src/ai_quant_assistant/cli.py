@@ -990,6 +990,10 @@ def main() -> None:
             )
             payload = service.run(as_of=args.as_of, symbols=tuple(args.symbols) if args.symbols else None)
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        if args.ops_command == "sync" and payload["status"] != "succeeded":
+            # Finish every dataset first, emit the diagnostics, then signal failure
+            # to systemd and shell callers. Partial publication is not full success.
+            raise SystemExit(1)
         if args.ops_command == "check" and args.fail_on_alert and payload["active_count"]:
             raise SystemExit(1)
         return

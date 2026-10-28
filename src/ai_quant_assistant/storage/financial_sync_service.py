@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -254,6 +255,27 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
         ]
 
     @staticmethod
+    def _metrics_unchanged(previous: dict[str, float], incoming: dict[str, float]) -> bool:
+        # Only BPS has a reproduced provider recomputation drift (about 6.8e-8
+        # relative). This narrow allowance is NOT a general materiality threshold:
+        # amount/ratio fields remain exact, and BPS drift is capped in CNY/share.
+        if previous.keys() != incoming.keys():
+            return False
+        for code, old in previous.items():
+            new = incoming[code]
+            if not math.isfinite(old) or not math.isfinite(new):
+                return False
+            if old == new:
+                continue
+            if code != "book_value_per_share":
+                return False
+            if abs(old - new) > 1e-5 or not math.isclose(
+                old, new, rel_tol=1e-7, abs_tol=1e-8
+            ):
+                return False
+        return True
+
+    @staticmethod
     def _report_id(security_id: str, period_end: Any, published_at: Any) -> str:
         payload = (
             f"{security_id}:{pd.Timestamp(period_end).date().isoformat()}:"
@@ -323,7 +345,7 @@ class FinancialDataSyncService(ResearchDatasetSyncService):
                         [report[0]],
                     ).fetchall())
                     incoming = {row[4]: row[5] for row in metric_rows if row[0] == report[0]}
-                    if old[0] != report[3] or previous != incoming:
+                    if old[0] != report[3] or not self._metrics_unchanged(previous, incoming):
                         raise ValueError(
                             f"financial version conflict: {report[0]}; changed facts require "
                             "a separately verified publication time; historical version retained"

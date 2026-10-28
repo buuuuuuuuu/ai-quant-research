@@ -239,19 +239,35 @@ class OperationTaskRepository:
             ).fetchone()
         return updated is not None
 
-    def fail(self, task_id: str, *, owner_id: str, message: str, error: str) -> bool:
+    def fail(
+        self,
+        task_id: str,
+        *,
+        owner_id: str,
+        message: str,
+        error: str,
+        result: dict[str, Any] | None = None,
+        progress: int | None = None,
+    ) -> bool:
+        """Persist failure diagnostics under the same owner/status CAS.
+
+        Only callers that finished processing should explicitly pass progress=100.
+        Existing callers retain their last progress and empty-result semantics.
+        """
         now = datetime.now(UTC)
+        terminal_progress = max(0, min(int(progress), 100)) if progress is not None else None
+        serialized = json.dumps(result, ensure_ascii=False, default=str) if result is not None else None
         with self.lock, self.database.connect() as connection:
             updated = connection.execute(
                 """
                 UPDATE operation_task
-                SET status = 'failed', progress = LEAST(progress, 99), message = ?,
-                    result_json = NULL, error = ?, completed_at = ?, heartbeat_at = ?,
+                SET status = 'failed', progress = COALESCE(?, LEAST(progress, 99)), message = ?,
+                    result_json = ?, error = ?, completed_at = ?, heartbeat_at = ?,
                     updated_at = ?, claim_key = NULL
                 WHERE task_id = ? AND status = 'running' AND owner_id = ?
                 RETURNING task_id
                 """,
-                [message, error, now, now, now, task_id, owner_id],
+                [terminal_progress, message, serialized, error, now, now, now, task_id, owner_id],
             ).fetchone()
         return updated is not None
 

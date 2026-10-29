@@ -17,6 +17,9 @@
       const download = document.createElement("a"); download.textContent = "导出当前快照 CSV";
       download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
       download.setAttribute("download", ""); result.append(download);
+      const htmlDownload = document.createElement("a"); htmlDownload.textContent = " 导出离线 HTML";
+      htmlDownload.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/html`;
+      htmlDownload.setAttribute("download", ""); result.append(htmlDownload);
       const points = payload.snapshot.result.points || [];
       status.textContent = `快照 ${payload.snapshot.snapshot_id}；数据缺口显示为 —。`;
       const valid = points.filter(p => p.ratio_fraction !== null && Number.isFinite(Number(p.ratio_fraction)));

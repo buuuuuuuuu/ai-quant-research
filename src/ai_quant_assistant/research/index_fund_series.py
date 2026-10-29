@@ -12,7 +12,7 @@ class DailyFundInput:
     fund_id: str
     trade_date: date
     shares: Decimal | None
-    unit_nav: Decimal | None
+    unit_value: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ def build_series(
     points = []
     for day in trading_days:
         observations = tuple(
-            FundObservation(row.fund_id, day, row.shares, row.unit_nav)
+            FundObservation(row.fund_id, day, row.shares, row.unit_value)
             for fund_id in fund_ids
             if (row := funds.get((day, fund_id))) is not None
         )

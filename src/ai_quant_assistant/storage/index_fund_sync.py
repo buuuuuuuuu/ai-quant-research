@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from ai_quant_assistant.providers.index_float_cap_sse import SseMonthlyFloatCapProvider
+from ai_quant_assistant.providers.index_fund_close import IndexFundCloseProvider
 from ai_quant_assistant.providers.index_fund_nav import IndexFundNavProvider
 from ai_quant_assistant.providers.index_fund_shares import IndexFundShareProvider
 from ai_quant_assistant.research.index_fund_series import (
@@ -22,18 +23,21 @@ from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 class IndexFundSync:
     dataset = "index_fund_observation"
 
-    def __init__(self, database, shares=None, nav=None, cap=None):
+    def __init__(self, database, shares=None, nav=None, cap=None, close=None):
         self.database = database
         self.tasks = OperationTaskRepository(database)
         self.shares = shares or IndexFundShareProvider()
         self.nav = nav or IndexFundNavProvider()
         self.cap = cap or SseMonthlyFloatCapProvider()
+        self.close = close or IndexFundCloseProvider()
 
-    def request(self, index_code, start, end, funds, confirm):
+    def request(self, index_code, start, end, funds, confirm, numerator_mode="nav"):
         if not confirm:
             raise ValueError("请确认数据同步")
         if index_code not in {"000300", "000016", "000688"}:
             raise ValueError("该指数流通市值来源尚未接入")
+        if numerator_mode not in {"nav", "close"}:
+            raise ValueError("不支持的基金规模口径")
         if start > end or (end - start).days > 1830 or end > market_today():
             raise ValueError("请选择不超过1831个自然日且不晚于今天的日期范围")
         if not funds or len(funds) > 10 or len(set(funds)) != len(funds) or any(not re.fullmatch(r"(?:SSE|SZSE)\.[0-9]{6}", f) for f in funds):
@@ -48,6 +52,8 @@ class IndexFundSync:
         if any(x is None for x in sessions) or any(b != a + 1 for a, b in zip(sessions, sessions[1:], strict=False)):
             raise ValueError("交易日历存在缺口，请先同步并核验")
         spec = {"dataset": self.dataset, "index_code": index_code, "start": start.isoformat(), "end": end.isoformat(), "funds": sorted(funds), "days": [r[0].isoformat() for r in rows], "mode": "fixed_group", "scope_verified": False}
+        if numerator_mode != "nav":
+            spec["numerator_mode"] = numerator_mode
         claim = "index-fund:" + hashlib.sha256(_canonical(spec).encode()).hexdigest()
         return self.tasks.create_or_get_active("sync", claim_key=claim, spec=spec, message="等待同步指数基金数据")
 
@@ -82,6 +88,9 @@ class IndexFundSync:
             spec = task["spec"]
             days = tuple(date.fromisoformat(d) for d in spec["days"])
             funds = tuple(spec["funds"])
+            numerator_mode = spec.get("numerator_mode", "nav")
+            if numerator_mode not in {"nav", "close"}:
+                raise ValueError("不支持的基金规模口径")
             # Bump this version when provider normalization or partition semantics change.
             scope = hashlib.sha256(_canonical(["index-fund-partitions-v1", spec]).encode()).hexdigest()
             months = sorted({(d.year, d.month) for d in days})
@@ -94,13 +103,14 @@ class IndexFundSync:
                 done += 1
                 return self._partition(task_id, owner, scope, key, fetch, min(95, 1 + done * 94 // total))
 
-            nav = {}
+            values = {}
             for fund in funds:
                 for year, month in months:
                     month_days = [d for d in days if (d.year, d.month) == (year, month)]
-                    rows = partition(f"nav:{fund}:{year:04d}-{month:02d}", lambda fund=fund, month_days=month_days: [{"date": row.trade_date.isoformat(), "value": str(row.unit_nav)} for row in self.nav.fetch(fund, month_days[0], month_days[-1])])
+                    provider = self.nav if numerator_mode == "nav" else self.close
+                    rows = partition(f"{numerator_mode}:{fund}:{year:04d}-{month:02d}", lambda fund=fund, month_days=month_days, provider=provider: [{"date": row.trade_date.isoformat(), "value": str(row.unit_nav if numerator_mode == "nav" else row.close)} for row in provider.fetch(fund, month_days[0], month_days[-1])])
                     for row in rows:
-                        nav[(date.fromisoformat(row["date"]), fund)] = Decimal(row["value"])
+                        values[(date.fromisoformat(row["date"]), fund)] = Decimal(row["value"])
             share_data = {}
             for day in days:
                 for market in markets:
@@ -112,11 +122,16 @@ class IndexFundSync:
                 rows = partition(f"cap:{year:04d}-{month:02d}", lambda year=year, month=month: [{"date": row.trade_date.isoformat(), "value": str(row.value_cny)} for row in self.cap.fetch_month(spec["index_code"], year, month)])
                 for row in rows:
                     caps[date.fromisoformat(row["date"])] = Decimal(row["value"])
-            fund_rows = tuple(DailyFundInput(fund, day, share_data.get((day, fund)), nav.get((day, fund))) for day in days for fund in funds)
+            fund_rows = tuple(DailyFundInput(fund, day, share_data.get((day, fund)), values.get((day, fund))) for day in days for fund in funds)
             cap_rows = tuple(DailyIndexInput(day, caps.get(day)) for day in days)
             points = build_series(trading_days=days, fund_ids=funds, fund_rows=fund_rows, index_rows=cap_rows)
-            inputs = {"shares": [{"date": d.isoformat(), "fund_id": f, "shares": str(v)} for (d, f), v in sorted(share_data.items())], "nav": [{"date": d.isoformat(), "fund_id": f, "unit_nav": str(v)} for (d, f), v in sorted(nav.items())], "float_cap": [{"date": d.isoformat(), "value_cny": str(v)} for d, v in sorted(caps.items()) if d in days], "sources": sorted({"akshare:" + f.split(".")[0].lower() for f in funds} | {"akshare:eastmoney", "sse:monthly_report"}), "publication_time": None}
-            result = {"points": points, "scope_verified": False, "warning": "固定基金组由用户指定，尚未验证基金跟踪标的或历史排名；不用于回测。"}
+            input_key, field = ("nav", "unit_nav") if numerator_mode == "nav" else ("close", "close")
+            source = "akshare:eastmoney" if numerator_mode == "nav" else "eastmoney:unadjusted_daily_close"
+            inputs = {"shares": [{"date": d.isoformat(), "fund_id": f, "shares": str(v)} for (d, f), v in sorted(share_data.items())], input_key: [{"date": d.isoformat(), "fund_id": f, field: str(v)} for (d, f), v in sorted(values.items())], "float_cap": [{"date": d.isoformat(), "value_cny": str(v)} for d, v in sorted(caps.items()) if d in days], "sources": sorted({"akshare:" + f.split(".")[0].lower() for f in funds} | {source, "sse:monthly_report"}), "publication_time": None}
+            warning = "固定基金组由用户指定，尚未验证基金跟踪标的或历史排名；不用于回测。"
+            if numerator_mode == "close":
+                warning += "收盘价来源及历史覆盖尚待完整核验。"
+            result = {"points": points, "scope_verified": False, "warning": warning}
             texts = [_canonical(x) for x in (spec, inputs, result)]
             snapshot_id = "index-fund-" + hashlib.sha256(_canonical([spec["index_code"], spec, inputs, result]).encode()).hexdigest()
             with self.database.connect() as c:

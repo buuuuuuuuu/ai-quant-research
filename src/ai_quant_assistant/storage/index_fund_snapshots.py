@@ -41,8 +41,10 @@ class IndexFundSnapshotStore:
         return {"snapshot_id": snapshot_id, "index_code": row[0], "spec": json.loads(row[1]),
                 "inputs": json.loads(row[2]), "result": json.loads(row[3]), "created_at": row[4].isoformat()}
 
-    def latest(self, index_code: str) -> dict | None:
+    def latest(self, index_code: str, numerator_mode: str | None = None) -> dict | None:
         self.database.initialize()
+        if numerator_mode not in {None, "nav", "close"}:
+            raise ValueError("invalid numerator mode")
         with self.database.connect(read_only=True) as c:
             # A repeated sync can reproduce an existing content-addressed snapshot.
             # Its original creation time is not the time of the latest publication.
@@ -50,13 +52,15 @@ class IndexFundSnapshotStore:
                 SELECT snapshot_id FROM (
                     SELECT snapshot_id, created_at AS published_at
                     FROM index_fund_snapshot WHERE index_code=?
+                      AND (? IS NULL OR COALESCE(json_extract_string(spec_json, '$.numerator_mode'), 'nav')=?)
                     UNION ALL
                     SELECT s.snapshot_id, t.completed_at AS published_at
                     FROM operation_task t JOIN index_fund_snapshot s
                       ON s.snapshot_id=json_extract_string(t.result_json, '$.snapshot_id')
                     WHERE s.index_code=? AND t.status='succeeded'
+                      AND (? IS NULL OR COALESCE(json_extract_string(s.spec_json, '$.numerator_mode'), 'nav')=?)
                       AND json_extract_string(t.spec_json, '$.dataset')='index_fund_observation'
                       AND t.completed_at IS NOT NULL
                 ) ORDER BY published_at DESC, snapshot_id DESC LIMIT 1
-                """, [index_code, index_code]).fetchone()
+                """, [index_code, numerator_mode, numerator_mode, index_code, numerator_mode, numerator_mode]).fetchone()
         return self.get(row[0]) if row else None

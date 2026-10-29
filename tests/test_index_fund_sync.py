@@ -169,3 +169,28 @@ def test_upgrade_v19_preserves_snapshot_and_adds_checkpoints(tmp_path, monkeypat
     assert IndexFundSnapshotStore(database).get(before)['result'] == {'points': []}
     with database.connect(read_only=True) as c:
         assert c.execute('SELECT COUNT(*) FROM index_fund_sync_checkpoint').fetchone()[0] == 0
+
+
+def test_close_mode_uses_same_day_close_and_retains_gaps(tmp_path):
+    settings = Settings(data_dir=tmp_path / 'data', artifact_dir=tmp_path / 'artifacts', cache_dir=tmp_path / 'cache', duckdb_path=tmp_path / 'data' / 'catalog.duckdb')
+    app = create_app(settings)
+    db = app.state.database
+    db.initialize()
+    with db.connect() as c:
+        for number, day in enumerate((date(2026, 9, 1), date(2026, 9, 2)), 1):
+            c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'test','test',?)", [day, number])
+    class Close:
+        def fetch(self, fund, start, end):
+            return [SimpleNamespace(trade_date=start, close=Decimal('3'))]
+    service = app.state.index_fund_tasks.service
+    service.shares, service.nav, service.cap, service.close = Shares(), Nav(), Cap(), Close()
+    task, _ = service.request('000300', date(2026, 9, 1), date(2026, 9, 2), ['SSE.510300'], True, numerator_mode='close')
+    service.run(task['task_id'])
+    from ai_quant_assistant.storage.index_fund_snapshots import IndexFundSnapshotStore
+    store = IndexFundSnapshotStore(db)
+    snapshot = store.get(service.tasks.get(task['task_id'])['result']['snapshot_id'])
+    assert snapshot['spec']['numerator_mode'] == 'close'
+    assert snapshot['inputs']['close'][0]['close'] == '3' and 'nav' not in snapshot['inputs']
+    assert [p['ratio_fraction'] for p in snapshot['result']['points']] == ['0.03', None]
+    assert store.latest('000300', 'close')['snapshot_id'] == snapshot['snapshot_id']
+    assert store.latest('000300', 'nav') is None

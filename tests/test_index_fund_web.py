@@ -53,3 +53,19 @@ def test_html_export_is_snapshot_bound_escaped_and_offline(tmp_path):
         assert '<script>' not in response.text and '<img ' not in response.text
         assert 'missing:&lt;bad&gt;' in response.text and 'http://' not in response.text and 'https://' not in response.text
         assert client.get('/api/v1/index-fund-snapshots/invalid/html').status_code == 404
+
+
+def test_close_snapshot_filter_and_exports_keep_price_mode(tmp_path):
+    settings = Settings(data_dir=tmp_path / 'data', artifact_dir=tmp_path / 'artifacts', cache_dir=tmp_path / 'cache', duckdb_path=tmp_path / 'data' / 'catalog.duckdb')
+    app = create_app(settings)
+    store = IndexFundSnapshotStore(app.state.database)
+    nav_id = store.save('000300', {'funds': ['SSE.510300']}, {}, {'points': []})
+    close_id = store.save('000300', {'funds': ['SSE.510300'], 'numerator_mode': 'close'}, {'shares': [{'date': '2026-09-01', 'fund_id': 'SSE.510300', 'shares': '100'}], 'close': [{'date': '2026-09-01', 'fund_id': 'SSE.510300', 'close': '3'}]}, {'points': [{'trade_date': '2026-09-01', 'numerator_cny': '300', 'denominator_cny': '10000', 'ratio_fraction': '0.03', 'missing': []}]})
+    with TestClient(app) as client:
+        assert client.get('/api/v1/index-funds/000300?numerator_mode=nav').json()['snapshot']['snapshot_id'] == nav_id
+        assert client.get('/api/v1/index-funds/000300?numerator_mode=close').json()['snapshot']['snapshot_id'] == close_id
+        assert client.get('/api/v1/index-funds/000300?numerator_mode=other').status_code == 422
+        html = client.get(f'/api/v1/index-fund-snapshots/{close_id}/html').text
+        assert '不复权收盘价' in html and '<td>100</td><td>3</td><td>300</td>' in html
+        csv = client.get(f'/api/v1/index-fund-snapshots/{close_id}/csv').text
+        assert 'numerator_mode' in csv and ',close' in csv

@@ -9,25 +9,37 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (id !== request) return;
+      if (!payload.snapshot) { result.replaceChildren(); displayedIndex = null; status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
+      const allPoints = payload.snapshot.result.points || [];
+      const range = document.getElementById("index-range").value;
+      let points = allPoints;
+      if (range === "custom") {
+        const start = document.getElementById("view-start").value, end = document.getElementById("view-end").value;
+        if (!start || !end || start > end) throw new Error("请填写有效的自定义开始和结束日期");
+        points = allPoints.filter(p => p.trade_date >= start && p.trade_date <= end);
+      } else if (["1", "3", "5"].includes(range) && allPoints.length) {
+        const end = allPoints[allPoints.length - 1].trade_date;
+        const cutoff = new Date(end + "T00:00:00Z"); cutoff.setUTCFullYear(cutoff.getUTCFullYear() - Number(range));
+        const start = cutoff.toISOString().slice(0, 10);
+        points = allPoints.filter(p => p.trade_date > start && p.trade_date <= end);
+      }
       result.replaceChildren();
       displayedIndex = null;
-      if (!payload.snapshot) { status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
       displayedIndex = `${indexCode}（${requestedMode === "close" ? "收盘价" : "单位净值"}）`;
       const numeratorMode = payload.snapshot.spec.numerator_mode || "nav";
       const valueName = numeratorMode === "close" ? "不复权收盘价" : "单位净值";
       const modeLabel = document.createElement("p"); modeLabel.textContent = `当前快照口径：份额 × ${valueName}${numeratorMode === "close" ? "（价格来源尚待真实历史核验）" : ""}。`; result.append(modeLabel);
       const warning = document.createElement("p"); warning.textContent = payload.snapshot.result.warning || ""; result.append(warning);
-      const download = document.createElement("a"); download.textContent = "导出当前快照 CSV";
+      const download = document.createElement("a"); download.textContent = "导出完整快照 CSV";
       download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
       download.setAttribute("download", ""); result.append(download);
-      const htmlDownload = document.createElement("a"); htmlDownload.textContent = " 导出离线 HTML";
+      const htmlDownload = document.createElement("a"); htmlDownload.textContent = " 导出完整快照离线 HTML";
       htmlDownload.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/html`;
       htmlDownload.setAttribute("download", ""); result.append(htmlDownload);
-      const points = payload.snapshot.result.points || [];
       status.textContent = `快照 ${payload.snapshot.snapshot_id}；数据缺口显示为 —。`;
       const valid = points.filter(p => p.ratio_fraction !== null && Number.isFinite(Number(p.ratio_fraction)));
       const coverage = document.createElement("p");
-      coverage.textContent = `可计算 ${valid.length} / ${points.length} 个交易日；其余日期保留缺口。`;
+      coverage.textContent = points.length ? `可计算 ${valid.length} / ${points.length} 个交易日；其余日期保留缺口。` : "当前快照在所选范围内没有数据。";
       result.append(coverage);
       if (valid.length) {
         const latest = valid[valid.length - 1], latestIndex = points.indexOf(latest), previous = valid[valid.length - 2];
@@ -138,5 +150,7 @@
     } catch(error) { taskStatus.textContent = `同步失败：${error.message}`; }
     finally { button.disabled = false; select.disabled = false; modeSelect.disabled = false; }
   });
-  select.addEventListener("change", load); modeSelect.addEventListener("change", load); load();
+  select.addEventListener("change", load); modeSelect.addEventListener("change", load);
+  document.getElementById("index-range").addEventListener("change", () => { if (document.getElementById("index-range").value !== "custom") load(); });
+  document.getElementById("view-apply").addEventListener("click", load); load();
 })();

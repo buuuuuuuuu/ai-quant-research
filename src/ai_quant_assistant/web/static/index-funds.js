@@ -1,16 +1,18 @@
 (() => {
   const select = document.getElementById("index-code"), status = document.getElementById("index-status"), result = document.getElementById("index-result");
-  let request = 0;
+  let request = 0, displayedIndex = null;
   async function load() {
-    const id = ++request;
-    status.textContent = "正在读取本地数据…";
-    result.replaceChildren();
+    const id = ++request, indexCode = select.value;
+    status.textContent = displayedIndex ? `正在读取 ${indexCode}；暂时保留 ${displayedIndex} 的数据。` : "正在读取本地数据…";
     try {
-      const response = await fetch(`/api/v1/index-funds/${encodeURIComponent(select.value)}`);
+      const response = await fetch(`/api/v1/index-funds/${encodeURIComponent(indexCode)}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (id !== request) return;
+      result.replaceChildren();
+      displayedIndex = null;
       if (!payload.snapshot) { status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
+      displayedIndex = indexCode;
       const warning = document.createElement("p"); warning.textContent = payload.snapshot.result.warning || ""; result.append(warning);
       const download = document.createElement("a"); download.textContent = "导出当前快照 CSV";
       download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
@@ -18,6 +20,7 @@
       const points = payload.snapshot.result.points || [];
       status.textContent = `快照 ${payload.snapshot.snapshot_id}；数据缺口显示为 —。`;
       const valid = points.filter(p => p.ratio_fraction !== null && Number.isFinite(Number(p.ratio_fraction)));
+      let selectDay = () => {};
       if (valid.length) {
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("viewBox", "0 0 700 220"); svg.setAttribute("role", "img");
@@ -36,7 +39,9 @@
           const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
           circle.setAttribute("cx", 40 + i * 620 / Math.max(points.length - 1, 1)); circle.setAttribute("cy", 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span);
           circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
-          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%`; circle.append(title); svg.append(circle);
+          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%；基金规模 ${p.numerator_cny ?? "—"} 元；流通市值 ${p.denominator_cny ?? "—"} 元。点击查看明细。`; circle.append(title); svg.append(circle);
+          circle.style.cursor = "pointer";
+          circle.addEventListener("click", () => selectDay(p.trade_date));
         });
         for (const [x, y, text] of [[4, 30, max.toFixed(2) + "%"], [4, 194, min.toFixed(2) + "%"], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const label = document.createElementNS("http://www.w3.org/2000/svg", "text"); label.setAttribute("x", x); label.setAttribute("y", y); label.setAttribute("font-size", "12"); label.textContent = text; svg.append(label); }
         result.append(svg);
@@ -51,11 +56,19 @@
         label.textContent = "查看每日基金明细 ";
         for (const point of points) { const option = document.createElement("option"); option.value = point.trade_date; option.textContent = point.trade_date; dateSelect.append(option); }
         dateSelect.value = (valid.at(-1) || points.at(-1)).trade_date;
-        label.append(dateSelect); section.append(label, details); result.append(section);
+        const previous = document.createElement("button"), next = document.createElement("button");
+        previous.type = next.type = "button"; previous.textContent = "上一交易日"; next.textContent = "下一交易日";
+        label.append(dateSelect); section.append(label, previous, next, details); result.append(section);
         function showDetails() {
           details.replaceChildren();
-          const day = dateSelect.value, point = points.find(p => p.trade_date === day);
+          const day = dateSelect.value, pointIndex = points.findIndex(p => p.trade_date === day), point = points[pointIndex];
           if (!point) return;
+          previous.disabled = pointIndex === 0; next.disabled = pointIndex === points.length - 1;
+          const daySummary = document.createElement("p");
+          const fraction = point.ratio_fraction;
+          const quality = Array.isArray(point.missing) ? (point.missing.length ? "缺失：" + point.missing.join("、") : "无已记录缺口") : "缺口详情未记录";
+          daySummary.textContent = `${day}：整体占比 ${fraction != null && Number.isFinite(Number(fraction)) ? (Number(fraction) * 100).toFixed(4) + "%" : "—"}；${quality}`;
+          details.append(daySummary);
           const description = document.createElement("p");
           description.textContent = "基金规模＝当日份额×单位净值；单只占比＝该基金规模÷当日指数流通市值。缺少任一数据时显示 —。";
           details.append(description);
@@ -75,9 +88,12 @@
           }
           const detailShell = document.createElement("div"); detailShell.className = "table-shell"; detailShell.style.overflowX = "auto"; detailShell.append(detailTable); details.append(detailShell);
         }
+        selectDay = day => { dateSelect.value = day; showDetails(); };
+        previous.addEventListener("click", () => { const i = points.findIndex(p => p.trade_date === dateSelect.value); if (i > 0) selectDay(points[i - 1].trade_date); });
+        next.addEventListener("click", () => { const i = points.findIndex(p => p.trade_date === dateSelect.value); if (i >= 0 && i < points.length - 1) selectDay(points[i + 1].trade_date); });
         dateSelect.addEventListener("change", showDetails); showDetails();
       }
-    } catch (error) { if (id === request) status.textContent = `读取失败：${error.message}`; }
+    } catch (error) { if (id === request) status.textContent = `读取 ${indexCode} 失败：${error.message}${displayedIndex ? `；保留 ${displayedIndex} 的已有数据。` : ""}`; }
   }
   const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task"), button = document.getElementById("index-submit");
   form.addEventListener("submit", async (event) => {

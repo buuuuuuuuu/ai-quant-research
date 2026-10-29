@@ -37,3 +37,52 @@ test("daily details use the selected snapshot day and preserve missing values", 
   assert.ok(texts.includes("—"));
   assert.deepEqual(calls, ["/api/v1/index-funds/000300"]);
 });
+
+test("chart clicks and accessible date buttons select the same snapshot day, including gaps", async () => {
+  const elements = Object.fromEntries(["index-code", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  elements["index-code"].value = "000300";
+  const snapshot = {snapshot_id:"s",spec:{funds:["SSE.510300"]},inputs:{shares:[],nav:[]},result:{points:[
+    {trade_date:"2026-09-01",numerator_cny:"200",denominator_cny:"10000",ratio_fraction:"0.02",missing:[]},
+    {trade_date:"2026-09-02",numerator_cny:null,denominator_cny:null,ratio_fraction:null,missing:["index:float_market_cap"]},
+    {trade_date:"2026-09-03",numerator_cny:"300",denominator_cny:"10000",ratio_fraction:"0.03",missing:[]},
+  ]}};
+  const document = {getElementById:id => elements[id],createElement:tag => new Element(tag),createElementNS:(_ns, tag) => new Element(tag)};
+  vm.runInNewContext(source,{document,window:{},fetch:async () => ({ok:true,json:async () => ({snapshot})}),setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  const root = elements["index-result"], select = descendants(root).find(e => e.tag === "select");
+  const buttons = () => descendants(root).filter(e => e.tag === "button");
+  assert.equal(select.value, "2026-09-03");
+  buttons()[0].listeners.click();
+  assert.equal(select.value, "2026-09-02");
+  assert.ok(descendants(root).some(e => e.textContent.includes("缺失：index:float_market_cap")));
+  const circle = descendants(root).find(e => e.tag === "circle");
+  circle.listeners.click();
+  assert.equal(select.value, "2026-09-01");
+  assert.equal(buttons()[0].disabled, true);
+  buttons()[1].listeners.click();
+  assert.equal(select.value, "2026-09-02");
+});
+
+test("failed index read keeps prior snapshot labelled while older responses are ignored", async () => {
+  const elements = Object.fromEntries(["index-code", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  elements["index-code"].value = "000300";
+  let resolveOld;
+  const snapshot = {snapshot_id:"old",spec:{funds:[]},inputs:{},result:{warning:"旧数据",points:[]}};
+  const fetch = async url => {
+    if (url.endsWith("000300")) return {ok:true,json:async () => ({snapshot})};
+    if (url.endsWith("000016")) return await new Promise(resolve => {resolveOld = resolve;});
+    throw new Error("连接失败");
+  };
+  const document = {getElementById:id => elements[id],createElement:tag => new Element(tag),createElementNS:(_ns, tag) => new Element(tag)};
+  vm.runInNewContext(source,{document,window:{},fetch,setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  elements["index-code"].value = "000016"; elements["index-code"].listeners.change();
+  elements["index-code"].value = "000905"; elements["index-code"].listeners.change();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(elements["index-status"].textContent, /读取 000905 失败/);
+  assert.match(elements["index-status"].textContent, /保留 000300/);
+  resolveOld({ok:true,json:async () => ({snapshot:null})});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(elements["index-status"].textContent, /读取 000905 失败/);
+  assert.ok(descendants(elements["index-result"]).some(e => e.textContent === "旧数据"));
+});

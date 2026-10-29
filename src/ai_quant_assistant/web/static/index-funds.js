@@ -44,7 +44,7 @@
       if (valid.length) {
         const latest = valid[valid.length - 1], latestIndex = points.indexOf(latest), previous = valid[valid.length - 2];
         const summary = document.createElement("p");
-        let change = "暂无上一完整观测日";
+        let change = "当前查看范围内无上一完整观测日";
         if (previous) {
           const difference = (Number(latest.ratio_fraction) - Number(previous.ratio_fraction)) * 100;
           change = `${points[latestIndex - 1] === previous ? "较上一交易日" : "跨缺口较上一完整观测日"}（${previous.trade_date}）${difference >= 0 ? "+" : ""}${difference.toFixed(4)} 个百分点`;
@@ -91,6 +91,12 @@
         const previous = document.createElement("button"), next = document.createElement("button");
         previous.type = next.type = "button"; previous.textContent = "上一交易日"; next.textContent = "下一交易日";
         label.append(dateSelect); section.append(label, previous, next, details); result.append(section);
+        function explainMissing(reason) {
+          if (reason === "index:float_market_cap") return "指数流通市值缺失";
+          const match = /^(SSE|SZSE)\.([0-9]{6}):(observation|shares_or_unit_value)$/.exec(reason);
+          if (match) return `${match[1]}.${match[2]}：${match[3] === "observation" ? "当日基金数据缺失" : `份额或${valueName}缺失`}`;
+          return `${reason}（暂无中文说明）`;
+        }
         function showDetails() {
           details.replaceChildren();
           const day = dateSelect.value, pointIndex = points.findIndex(p => p.trade_date === day), point = points[pointIndex];
@@ -98,7 +104,7 @@
           previous.disabled = pointIndex === 0; next.disabled = pointIndex === points.length - 1;
           const daySummary = document.createElement("p");
           const fraction = point.ratio_fraction;
-          const quality = Array.isArray(point.missing) ? (point.missing.length ? "缺失：" + point.missing.join("、") : "无已记录缺口") : "缺口详情未记录";
+          const quality = Array.isArray(point.missing) ? (point.missing.length ? "缺失：" + point.missing.map(explainMissing).join("、") : "无已记录缺口") : "缺口详情未记录";
           daySummary.textContent = `${day}：整体占比 ${fraction != null && Number.isFinite(Number(fraction)) ? (Number(fraction) * 100).toFixed(4) + "%" : "—"}；${quality}`;
           details.append(daySummary);
           const description = document.createElement("p");

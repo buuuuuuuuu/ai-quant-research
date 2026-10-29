@@ -60,7 +60,7 @@ test("chart clicks and accessible date buttons select the same snapshot day, inc
   assert.equal(select.value, "2026-09-03");
   buttons()[0].listeners.click();
   assert.equal(select.value, "2026-09-02");
-  assert.ok(descendants(root).some(e => e.textContent.includes("缺失：index:float_market_cap")));
+  assert.ok(descendants(root).some(e => e.textContent.includes("缺失：指数流通市值缺失")));
   const circle = descendants(root).find(e => e.tag === "circle");
   circle.listeners.click();
   assert.equal(select.value, "2026-09-01");

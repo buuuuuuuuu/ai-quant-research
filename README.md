@@ -58,7 +58,7 @@ uv run python examples/offline-demo/demo.py --output .demo/first --serve
 
 先阅读[本地数据管理](docs/local-stock-data-management.md)和[预检说明](docs/research-data-readiness.md)，明确选择股票与范围，再确认同步。浏览、预检和查看处理计划不启动下载；历史 CLI 中的 `--source local` 存在缺失时回退提供方的路径，不等同于绝对离线模式。
 
-生产部署请使用[部署与运维文档](docs/platform-operations.md)：配置登录、会话密钥、HTTPS 和备份。不要将无鉴权的本地体验服务直接暴露到公网。当前 Schema 为 **18**；升级已有数据库前先备份。
+生产部署请使用[部署与运维文档](docs/platform-operations.md)：配置登录、会话密钥、HTTPS 和备份。不要将无鉴权的本地体验服务直接暴露到公网。当前 Schema 为 **19**；升级已有数据库前先备份。
 
 ## 文档导航
 

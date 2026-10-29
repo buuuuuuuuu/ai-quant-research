@@ -15,7 +15,7 @@ from ai_quant_assistant.api.app import create_app
 from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
-from ai_quant_assistant.storage.schema import apply_migrations
+from ai_quant_assistant.storage.schema import SCHEMA_VERSION, apply_migrations
 from ai_quant_assistant.storage.stock_pools import StockPoolService
 
 
@@ -268,7 +268,9 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
     from ai_quant_assistant.storage import schema
 
     migrations = schema.MIGRATIONS
-    monkeypatch.setattr(schema, "MIGRATIONS", migrations[:-2])
+    before_v17 = tuple(m for m in migrations if m.version < 17)
+    v17 = next(m for m in migrations if m.version == 17)
+    monkeypatch.setattr(schema, "MIGRATIONS", before_v17)
     database = _explorer_database(tmp_path)
     with database.connect() as db:
         before = {
@@ -278,10 +280,10 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             ).fetchall()
         }
         broken = replace(
-            migrations[-2],
-            statements=(*migrations[-2].statements, "SELECT * FROM intentionally_missing_table"),
+            v17,
+            statements=(*v17.statements, "SELECT * FROM intentionally_missing_table"),
         )
-        monkeypatch.setattr(schema, "MIGRATIONS", (*migrations[:-2], broken))
+        monkeypatch.setattr(schema, "MIGRATIONS", (*before_v17, broken))
         with pytest.raises(__import__("duckdb").CatalogException):
             apply_migrations(db)
         assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 16
@@ -292,7 +294,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             == 0
         )
         monkeypatch.setattr(schema, "MIGRATIONS", migrations)
-        assert apply_migrations(db) == [17, 18]
+        assert apply_migrations(db) == list(range(17, SCHEMA_VERSION + 1))
         for name, count in before.items():
             if name != "schema_migrations":
                 assert db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] == count

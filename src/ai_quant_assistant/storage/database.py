@@ -71,6 +71,7 @@ CORE_RELATIONS = (
     "stock_research_summary",
     "stock_research_run",
     "research_brief",
+    "index_fund_snapshot",
 )
 
 DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0

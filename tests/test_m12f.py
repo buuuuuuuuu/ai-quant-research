@@ -64,7 +64,7 @@ def test_schema_18_preserves_v17_tasks_and_allows_cancel(tmp_path):
             connection.execute("INSERT INTO schema_migrations(version,name) VALUES (?,?)", [migration.version, migration.name])
         connection.execute("INSERT INTO operation_task(task_id,task_type,status,spec_json) VALUES ('old-queued','backtest','queued','{\"research_type\":\"daily_signal\"}')")
         connection.execute("INSERT INTO operation_task(task_id,task_type,status) VALUES ('pool-queued','stock_pool_sync','queued')")
-        assert apply_migrations(connection) == [18]
+        assert apply_migrations(connection) == [18, 19]
         assert connection.execute("SELECT status FROM operation_task WHERE task_id='old-queued'").fetchone()[0] == "queued"
         assert connection.execute("SELECT task_type FROM operation_task WHERE task_id='pool-queued'").fetchone()[0] == "stock_pool_sync"
         connection.execute("UPDATE operation_task SET status='cancelled' WHERE task_id='old-queued'")

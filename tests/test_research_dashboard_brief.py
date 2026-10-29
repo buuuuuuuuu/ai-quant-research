@@ -268,7 +268,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
     from ai_quant_assistant.storage import schema
 
     migrations = schema.MIGRATIONS
-    monkeypatch.setattr(schema, "MIGRATIONS", migrations[:-2])
+    monkeypatch.setattr(schema, "MIGRATIONS", migrations[:-3])
     database = _explorer_database(tmp_path)
     with database.connect() as db:
         before = {
@@ -278,10 +278,10 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             ).fetchall()
         }
         broken = replace(
-            migrations[-2],
-            statements=(*migrations[-2].statements, "SELECT * FROM intentionally_missing_table"),
+            migrations[-3],
+            statements=(*migrations[-3].statements, "SELECT * FROM intentionally_missing_table"),
         )
-        monkeypatch.setattr(schema, "MIGRATIONS", (*migrations[:-2], broken))
+        monkeypatch.setattr(schema, "MIGRATIONS", (*migrations[:-3], broken))
         with pytest.raises(__import__("duckdb").CatalogException):
             apply_migrations(db)
         assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 16
@@ -292,7 +292,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             == 0
         )
         monkeypatch.setattr(schema, "MIGRATIONS", migrations)
-        assert apply_migrations(db) == [17, 18]
+        assert apply_migrations(db) == [17, 18, 19]
         for name, count in before.items():
             if name != "schema_migrations":
                 assert db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] == count

@@ -257,7 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
                 "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
-                "app-shell.js", "run-center.js",
+                "app-shell.js", "run-center.js", "index-funds.js",
             )
         )
     ).hexdigest()[:16]
@@ -322,6 +322,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     )
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
+    from ai_quant_assistant.api.index_fund_routes import index_fund_router
+
+    app.include_router(index_fund_router(database, templates, asset_version, resolved_settings.web_username))
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router
     from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench

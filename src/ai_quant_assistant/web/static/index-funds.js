@@ -12,6 +12,9 @@
       if (id !== request) return;
       if (!payload.snapshot) { status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
       const warning = document.createElement("p"); warning.textContent = payload.snapshot.result.warning || ""; result.append(warning);
+      const download = document.createElement("a"); download.textContent = "导出当前快照 CSV";
+      download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
+      download.setAttribute("download", ""); result.append(download);
       const points = payload.snapshot.result.points || [];
       status.textContent = `快照 ${payload.snapshot.snapshot_id}；数据缺口显示为 —。`;
       const valid = points.filter(p => p.ratio_fraction !== null && Number.isFinite(Number(p.ratio_fraction)));
@@ -29,6 +32,12 @@
         });
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
+        points.forEach((p, i) => { if (p.ratio_fraction === null || !Number.isFinite(Number(p.ratio_fraction))) return;
+          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circle.setAttribute("cx", 40 + i * 620 / Math.max(points.length - 1, 1)); circle.setAttribute("cy", 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span);
+          circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
+          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%`; circle.append(title); svg.append(circle);
+        });
         for (const [x, y, text] of [[4, 30, max.toFixed(2) + "%"], [4, 194, min.toFixed(2) + "%"], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const label = document.createElementNS("http://www.w3.org/2000/svg", "text"); label.setAttribute("x", x); label.setAttribute("y", y); label.setAttribute("font-size", "12"); label.textContent = text; svg.append(label); }
         result.append(svg);
       }
@@ -45,7 +54,7 @@
     const start = document.getElementById("index-start").value, end = document.getElementById("index-end").value;
     const funds = document.getElementById("index-funds").value.split(/[,，\s]+/).filter(Boolean);
     if (!window.confirm(`确认联网同步 ${select.value}，${start} 至 ${end}，基金 ${funds.join("、")}？`)) return;
-    button.disabled = true; taskStatus.textContent = "正在提交同步任务…";
+    button.disabled = true; select.disabled = true; taskStatus.textContent = "正在提交同步任务…";
     try {
       const response = await fetch("/api/v1/index-funds/sync", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({index_code:select.value,start,end,funds,confirm:true})});
       const task = await response.json(); if (!response.ok) throw new Error(typeof task.detail === "string" ? task.detail : "参数错误，请检查日期和基金代码");
@@ -59,7 +68,7 @@
       taskStatus.textContent = current.status === "succeeded" ? "同步完成，正在读取快照。" : `同步未完成：${current.error || current.message}`;
       if (current.status === "succeeded") await load();
     } catch(error) { taskStatus.textContent = `同步失败：${error.message}`; }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; select.disabled = false; }
   });
   select.addEventListener("change", load); load();
 })();

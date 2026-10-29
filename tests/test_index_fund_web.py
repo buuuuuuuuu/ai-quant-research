@@ -17,3 +17,21 @@ def test_index_page_reads_only_saved_snapshot(tmp_path):
         result = client.get("/api/v1/index-funds/000300").json()
         assert result["snapshot"]["snapshot_id"] == snapshot_id
         assert result["snapshot"]["result"]["points"][0]["ratio_fraction"] == "0.03"
+
+
+def test_csv_export_uses_exact_snapshot_and_preserves_missing(tmp_path):
+    import csv
+    import io
+
+    settings = Settings(data_dir=tmp_path / 'data', artifact_dir=tmp_path / 'artifacts', cache_dir=tmp_path / 'cache', duckdb_path=tmp_path / 'data' / 'catalog.duckdb')
+    app = create_app(settings)
+    store = IndexFundSnapshotStore(app.state.database)
+    first = store.save('000300', {'funds': ['SSE.510300']}, {'sources': ['sse:monthly_report']}, {'points': [{'trade_date': '2026-09-01', 'numerator_cny': '200', 'denominator_cny': '10000', 'ratio_fraction': '0.02', 'availability': 'ready', 'missing': []}, {'trade_date': '2026-09-02', 'numerator_cny': None, 'denominator_cny': '10000', 'ratio_fraction': None, 'availability': 'partial', 'missing': ['SSE.510300:observation']}]})
+    store.save('000300', {'funds': []}, {}, {'points': []})
+    with TestClient(app) as client:
+        response = client.get('/api/v1/index-fund-snapshots/' + first + '/csv')
+        assert response.status_code == 200
+        rows = list(csv.DictReader(io.StringIO(response.content.decode('utf-8-sig'))))
+        assert rows[0]['snapshot_id'] == first and rows[0]['ratio_percent'] == '2.00'
+        assert rows[1]['ratio_fraction'] == '' and rows[1]['missing'] == 'SSE.510300:observation'
+        assert client.get('/api/v1/index-fund-snapshots/invalid/csv').status_code == 404

@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -1420,6 +1420,19 @@ MIGRATIONS = (
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )""",
             "CREATE INDEX index_fund_snapshot_index_created_idx ON index_fund_snapshot(index_code, created_at)",
+        ),
+    ),
+    Migration(
+        version=20,
+        name="index_fund_sync_checkpoints",
+        statements=(
+            """CREATE TABLE index_fund_sync_checkpoint (
+                scope_id VARCHAR NOT NULL,
+                partition_key VARCHAR NOT NULL,
+                payload_json VARCHAR NOT NULL,
+                fetched_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (scope_id, partition_key)
+            )""",
         ),
     ),
 )

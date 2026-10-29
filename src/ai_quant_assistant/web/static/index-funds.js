@@ -45,7 +45,38 @@
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }
       table.append(head);
       for (const point of points) { const tr = document.createElement("tr"); const ratio = point.ratio_fraction === null ? "—" : `${(Number(point.ratio_fraction) * 100).toFixed(4)}%`; for (const value of [point.trade_date, point.numerator_cny ?? "—", point.denominator_cny ?? "—", ratio]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } table.append(tr); }
-      result.append(table);
+      const tableShell = document.createElement("div"); tableShell.className = "table-shell"; tableShell.style.overflowX = "auto"; tableShell.append(table); result.append(tableShell);
+      if (points.length && Array.isArray(payload.snapshot.spec.funds)) {
+        const section = document.createElement("section"), label = document.createElement("label"), dateSelect = document.createElement("select"), details = document.createElement("div");
+        label.textContent = "查看每日基金明细 ";
+        for (const point of points) { const option = document.createElement("option"); option.value = point.trade_date; option.textContent = point.trade_date; dateSelect.append(option); }
+        dateSelect.value = (valid.at(-1) || points.at(-1)).trade_date;
+        label.append(dateSelect); section.append(label, details); result.append(section);
+        function showDetails() {
+          details.replaceChildren();
+          const day = dateSelect.value, point = points.find(p => p.trade_date === day);
+          if (!point) return;
+          const description = document.createElement("p");
+          description.textContent = "基金规模＝当日份额×单位净值；单只占比＝该基金规模÷当日指数流通市值。缺少任一数据时显示 —。";
+          details.append(description);
+          const detailTable = document.createElement("table"), heading = document.createElement("tr");
+          for (const value of ["基金代码", "份额（份）", "单位净值（元）", "基金规模（元）", "单只占比"]) { const th = document.createElement("th"); th.textContent = value; heading.append(th); }
+          detailTable.append(heading);
+          const inputs = payload.snapshot.inputs || {};
+          for (const fund of payload.snapshot.spec.funds) {
+            const share = (inputs.shares || []).find(r => r.date === day && r.fund_id === fund)?.shares;
+            const nav = (inputs.nav || []).find(r => r.date === day && r.fund_id === fund)?.unit_nav;
+            const amount = share != null && nav != null ? Number(share) * Number(nav) : NaN;
+            const cap = Number(point.denominator_cny);
+            const ratio = Number.isFinite(amount) && amount > 0 && point.denominator_cny != null && Number.isFinite(cap) && cap > 0 ? `${(amount / cap * 100).toFixed(4)}%` : "—";
+            const row = document.createElement("tr");
+            for (const value of [fund, share ?? "—", nav ?? "—", Number.isFinite(amount) && amount > 0 ? amount.toFixed(2) : "—", ratio]) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
+            detailTable.append(row);
+          }
+          const detailShell = document.createElement("div"); detailShell.className = "table-shell"; detailShell.style.overflowX = "auto"; detailShell.append(detailTable); details.append(detailShell);
+        }
+        dateSelect.addEventListener("change", showDetails); showDetails();
+      }
     } catch (error) { if (id === request) status.textContent = `读取失败：${error.message}`; }
   }
   const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task"), button = document.getElementById("index-submit");

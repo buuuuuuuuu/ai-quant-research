@@ -370,7 +370,7 @@ def test_migration_v14_is_repeatable_and_preserves_old_tables(tmp_path):
         before = {
             name: c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() for name in tables
         }
-        assert apply_migrations(c) == [14, 15, 16, 17, 18, 19]
+        assert apply_migrations(c) == [14, 15, 16, 17, 18, 19, 20]
         assert apply_migrations(c) == []
         for name, values in before.items():
             assert c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() == values

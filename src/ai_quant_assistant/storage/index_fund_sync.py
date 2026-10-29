@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 from datetime import date
+from decimal import Decimal
 from uuid import uuid4
 
 from ai_quant_assistant.providers.index_float_cap_sse import SseMonthlyFloatCapProvider
@@ -33,8 +34,8 @@ class IndexFundSync:
             raise ValueError("请确认数据同步")
         if index_code not in {"000300", "000016", "000688"}:
             raise ValueError("该指数流通市值来源尚未接入")
-        if start > end or (end - start).days > 31 or end > market_today():
-            raise ValueError("请选择不超过31天且不晚于今天的日期范围")
+        if start > end or (end - start).days > 1830 or end > market_today():
+            raise ValueError("请选择不超过1831个自然日且不晚于今天的日期范围")
         if not funds or len(funds) > 10 or len(set(funds)) != len(funds) or any(not re.fullmatch(r"(?:SSE|SZSE)\.[0-9]{6}", f) for f in funds):
             raise ValueError("请填写1至10个不重复基金代码，格式如 SSE.510300")
         self.database.initialize()
@@ -50,6 +51,28 @@ class IndexFundSync:
         claim = "index-fund:" + hashlib.sha256(_canonical(spec).encode()).hexdigest()
         return self.tasks.create_or_get_active("sync", claim_key=claim, spec=spec, message="等待同步指数基金数据")
 
+    def _partition(self, task_id, owner, scope, key, fetch, progress):
+        """Read a completed partition or atomically record it under the active owner."""
+        with self.database.connect(read_only=True) as c:
+            row = c.execute("SELECT payload_json FROM index_fund_sync_checkpoint WHERE scope_id=? AND partition_key=?", [scope, key]).fetchone()
+        if row is not None:
+            if not self.tasks.progress(task_id, owner_id=owner, progress=progress, message=f"已复用分区 {key}"):
+                raise RuntimeError("任务所有权已失效")
+            return json.loads(row[0])
+        payload = fetch()
+        with self.database.connect() as c:
+            c.execute("BEGIN TRANSACTION")
+            try:
+                owned = c.execute("UPDATE operation_task SET progress=GREATEST(progress, ?), message=?, heartbeat_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND owner_id=? AND status='running' RETURNING task_id", [progress, f"已完成分区 {key}", task_id, owner]).fetchone()
+                if not owned:
+                    raise RuntimeError("任务所有权已失效")
+                c.execute("INSERT INTO index_fund_sync_checkpoint(scope_id,partition_key,payload_json) VALUES (?,?,?) ON CONFLICT DO NOTHING", [scope, key, _canonical(payload)])
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
+        return payload
+
     def run(self, task_id):
         owner = uuid4().hex
         if not self.tasks.start(task_id, owner_id=owner, message="正在读取基金和指数数据"):
@@ -59,22 +82,36 @@ class IndexFundSync:
             spec = task["spec"]
             days = tuple(date.fromisoformat(d) for d in spec["days"])
             funds = tuple(spec["funds"])
+            # Bump this version when provider normalization or partition semantics change.
+            scope = hashlib.sha256(_canonical(["index-fund-partitions-v1", spec]).encode()).hexdigest()
+            months = sorted({(d.year, d.month) for d in days})
+            markets = sorted({f.split('.')[0] for f in funds})
+            total = len(funds) * len(months) + len(days) * len(markets) + len(months)
+            done = 0
+
+            def partition(key, fetch):
+                nonlocal done
+                done += 1
+                return self._partition(task_id, owner, scope, key, fetch, min(95, 1 + done * 94 // total))
+
             nav = {}
             for fund in funds:
-                for row in self.nav.fetch(fund, days[0], days[-1]):
-                    nav[(row.trade_date, fund)] = row.unit_nav
+                for year, month in months:
+                    month_days = [d for d in days if (d.year, d.month) == (year, month)]
+                    rows = partition(f"nav:{fund}:{year:04d}-{month:02d}", lambda fund=fund, month_days=month_days: [{"date": row.trade_date.isoformat(), "value": str(row.unit_nav)} for row in self.nav.fetch(fund, month_days[0], month_days[-1])])
+                    for row in rows:
+                        nav[(date.fromisoformat(row["date"]), fund)] = Decimal(row["value"])
             share_data = {}
             for day in days:
-                for market in sorted({f.split('.')[0] for f in funds}):
-                    for row in self.shares.fetch_day(market, day):
-                        if row.fund_id in funds:
-                            share_data[(day, row.fund_id)] = row.shares
-                if not self.tasks.progress(task_id, owner_id=owner, progress=25, message=f"已读取份额至 {day}"):
-                    raise RuntimeError("任务所有权已失效")
+                for market in markets:
+                    rows = partition(f"shares:{market}:{day}", lambda market=market, day=day: [{"fund_id": row.fund_id, "value": str(row.shares)} for row in self.shares.fetch_day(market, day) if row.fund_id in funds])
+                    for row in rows:
+                        share_data[(day, row["fund_id"])] = Decimal(row["value"])
             caps = {}
-            for year, month in sorted({(d.year, d.month) for d in days}):
-                for row in self.cap.fetch_month(spec["index_code"], year, month):
-                    caps[row.trade_date] = row.value_cny
+            for year, month in months:
+                rows = partition(f"cap:{year:04d}-{month:02d}", lambda year=year, month=month: [{"date": row.trade_date.isoformat(), "value": str(row.value_cny)} for row in self.cap.fetch_month(spec["index_code"], year, month)])
+                for row in rows:
+                    caps[date.fromisoformat(row["date"])] = Decimal(row["value"])
             fund_rows = tuple(DailyFundInput(fund, day, share_data.get((day, fund)), nav.get((day, fund))) for day in days for fund in funds)
             cap_rows = tuple(DailyIndexInput(day, caps.get(day)) for day in days)
             points = build_series(trading_days=days, fund_ids=funds, fund_rows=fund_rows, index_rows=cap_rows)
@@ -89,6 +126,7 @@ class IndexFundSync:
                     if not owned:
                         raise RuntimeError("任务所有权已失效")
                     c.execute("INSERT INTO index_fund_snapshot(snapshot_id,index_code,spec_json,input_json,result_json) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING", [snapshot_id, spec["index_code"], *texts])
+                    c.execute("DELETE FROM index_fund_sync_checkpoint WHERE scope_id=?", [scope])
                     c.execute("COMMIT")
                 except Exception:
                     c.execute("ROLLBACK")

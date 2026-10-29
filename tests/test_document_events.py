@@ -396,9 +396,9 @@ def test_schema_v11_to_v12_preserves_history_and_is_idempotent(tmp_path) -> None
     first = database.initialize()
     second = database.initialize()
 
-    assert first["applied_migrations"] == [12, 13, 14, 15, 16, 17, 18, 19]
+    assert first["applied_migrations"] == [12, 13, 14, 15, 16, 17, 18, 19, 20]
     assert second["applied_migrations"] == []
-    assert database.status()["schema_version"] == SCHEMA_VERSION == 19
+    assert database.status()["schema_version"] == SCHEMA_VERSION == 20
     with database.connect(read_only=True) as connection:
         assert connection.execute("SELECT text FROM document_page").fetchone()[0] == "old page"
         assert connection.execute("SELECT text FROM document_chunk").fetchone()[0] == "old page"

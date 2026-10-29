@@ -185,7 +185,7 @@ def test_new_run_records_trade_audit_account_checks_and_reproducibility(tmp_path
     reproducibility = result["reproducibility"]
     assert reproducibility["parameter_sha256"] == digest(result["spec"])
     assert reproducibility["frozen_symbol_count"] == 2
-    assert reproducibility["schema_version"] == 19
+    assert reproducibility["schema_version"] == 20
     assert reproducibility["technical_warmup_start"] == "2024-01-02"
     assert reproducibility["signal_adjustment"] == "qfq"
     indicators = pd.read_csv(result["artifacts"]["indicator_series_csv"], dtype={"symbol": str})

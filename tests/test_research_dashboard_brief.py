@@ -15,7 +15,7 @@ from ai_quant_assistant.api.app import create_app
 from ai_quant_assistant.research.dashboard_brief import ResearchDashboardBrief
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
-from ai_quant_assistant.storage.schema import apply_migrations
+from ai_quant_assistant.storage.schema import SCHEMA_VERSION, apply_migrations
 from ai_quant_assistant.storage.stock_pools import StockPoolService
 
 
@@ -294,7 +294,7 @@ def test_migration_v17_retains_all_rows_repeat_and_rollback(tmp_path, monkeypatc
             == 0
         )
         monkeypatch.setattr(schema, "MIGRATIONS", migrations)
-        assert apply_migrations(db) == [17, 18, 19, 20]
+        assert apply_migrations(db) == list(range(17, SCHEMA_VERSION + 1))
         for name, count in before.items():
             if name != "schema_migrations":
                 assert db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0] == count

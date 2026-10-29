@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 
 @dataclass(frozen=True, slots=True)
@@ -1433,6 +1433,19 @@ MIGRATIONS = (
                 fetched_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (scope_id, partition_key)
             )""",
+        ),
+    ),
+    Migration(
+        version=21,
+        name="index_fund_evidence",
+        statements=(
+            """CREATE TABLE index_fund_evidence (
+                evidence_id VARCHAR PRIMARY KEY,
+                fund_id VARCHAR NOT NULL,
+                claim_json VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""",
+            "CREATE INDEX index_fund_evidence_fund_idx ON index_fund_evidence(fund_id, created_at)",
         ),
     ),
 )

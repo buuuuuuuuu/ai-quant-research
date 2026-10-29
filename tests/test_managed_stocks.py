@@ -13,7 +13,7 @@ from ai_quant_assistant.providers.akshare_provider import AkShareProvider
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.layout import DataLayout
 from ai_quant_assistant.storage.managed_stocks import ManagedStockConflict, ManagedStockService
-from ai_quant_assistant.storage.schema import MIGRATIONS, apply_migrations
+from ai_quant_assistant.storage.schema import MIGRATIONS, SCHEMA_VERSION, apply_migrations
 from ai_quant_assistant.storage.stock_pools import StockPoolService
 
 
@@ -370,7 +370,7 @@ def test_migration_v14_is_repeatable_and_preserves_old_tables(tmp_path):
         before = {
             name: c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() for name in tables
         }
-        assert apply_migrations(c) == [14, 15, 16, 17, 18, 19, 20]
+        assert apply_migrations(c) == list(range(14, SCHEMA_VERSION + 1))
         assert apply_migrations(c) == []
         for name, values in before.items():
             assert c.execute(f'SELECT * FROM "{name}" ORDER BY ALL').fetchall() == values

@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
+from ai_quant_assistant.storage.index_fund_evidence import IndexFundEvidenceStore
 from ai_quant_assistant.storage.index_fund_snapshots import IndexFundSnapshotStore
 
 INDEXES = {
@@ -29,9 +30,42 @@ class SyncRequest(BaseModel):
     numerator_mode: Literal["nav", "close"] = "nav"
 
 
+class EvidenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fund_id: str = Field(max_length=20)
+    kind: Literal["listing", "delisting", "tracking"]
+    effective_from: date
+    effective_to: date | None = None
+    index_code: str | None = Field(default=None, max_length=6)
+    source_title: str = Field(min_length=1, max_length=300)
+    source_url: str = Field(min_length=1, max_length=2048)
+    published_date: date | None = None
+    source_sha256: str | None = Field(default=None, max_length=64)
+    note: str = Field(default="", max_length=2000)
+    confirm: StrictBool
+
+
 def index_fund_router(database, templates, asset_version, actor, manager):
     router = APIRouter(tags=["index-fund-observation"])
     store = IndexFundSnapshotStore(database)
+    evidence_store = IndexFundEvidenceStore(database)
+
+    @router.get("/api/v1/index-fund-evidence")
+    def list_evidence(fund_id: str):
+        try:
+            return evidence_store.list_for_fund(fund_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.post("/api/v1/index-fund-evidence", status_code=201)
+    def record_evidence(body: EvidenceRequest):
+        if not body.confirm:
+            raise HTTPException(422, "请确认记录来源证据")
+        try:
+            evidence_id = evidence_store.save(body.model_dump(exclude={"confirm"}))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"evidence_id": evidence_id, "verification": "unverified", "message": "已记录来源线索；未核验证据真实性或历史资格，不用于自动排名。"}
 
     @router.get("/market/index-funds", include_in_schema=False)
     def page(request: Request):

@@ -161,11 +161,11 @@ def test_upgrade_v19_preserves_snapshot_and_adds_checkpoints(tmp_path, monkeypat
     database = create_app(settings).state.database
     migrations = schema.MIGRATIONS
     with monkeypatch.context() as patch:
-        patch.setattr(schema, 'MIGRATIONS', migrations[:-1])
+        patch.setattr(schema, 'MIGRATIONS', tuple(m for m in migrations if m.version <= 19))
         database.initialize()
         before = IndexFundSnapshotStore(database).save('000300', {}, {}, {'points': []})
     database.initialize()
-    assert database.status()['schema_version'] == 20
+    assert database.status()['schema_version'] == schema.SCHEMA_VERSION
     assert IndexFundSnapshotStore(database).get(before)['result'] == {'points': []}
     with database.connect(read_only=True) as c:
         assert c.execute('SELECT COUNT(*) FROM index_fund_sync_checkpoint').fetchone()[0] == 0

@@ -73,6 +73,7 @@ CORE_RELATIONS = (
     "research_brief",
     "index_fund_snapshot",
     "index_fund_sync_checkpoint",
+    "index_fund_evidence",
 )
 
 DATABASE_ACCESS_LOCK_TIMEOUT_SECONDS = 30.0

@@ -1,4 +1,7 @@
+from datetime import date
+
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from ai_quant_assistant.storage.index_fund_snapshots import IndexFundSnapshotStore
 
@@ -9,7 +12,16 @@ INDEXES = {
 }
 
 
-def index_fund_router(database, templates, asset_version, actor):
+class SyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    index_code: str
+    start: date
+    end: date
+    funds: list[str] = Field(min_length=1, max_length=10)
+    confirm: StrictBool
+
+
+def index_fund_router(database, templates, asset_version, actor, manager):
     router = APIRouter(tags=["index-fund-observation"])
     store = IndexFundSnapshotStore(database)
 
@@ -24,5 +36,22 @@ def index_fund_router(database, templates, asset_version, actor):
         if not database.path.is_file():
             return {"index_code": index_code, "index_name": INDEXES[index_code], "snapshot": None}
         return {"index_code": index_code, "index_name": INDEXES[index_code], "snapshot": store.latest(index_code)}
+
+    @router.post("/api/v1/index-funds/sync", status_code=202)
+    def sync(body: SyncRequest):
+        try:
+            return manager.submit(**body.model_dump())
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.get("/api/v1/index-funds/tasks/{task_id}")
+    def task(task_id: str):
+        try:
+            item = manager.service.tasks.get(task_id)
+            if item["spec"].get("dataset") != manager.service.dataset:
+                raise KeyError(task_id)
+            return item
+        except KeyError as exc:
+            raise HTTPException(404, "任务不存在") from exc
 
     return router

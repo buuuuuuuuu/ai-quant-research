@@ -177,6 +177,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         datasets=(ResearchDataPlans.dataset,),
         worker_name="research-data",
     )
+    from ai_quant_assistant.storage.index_fund_sync import IndexFundSync
+
+    index_fund_tasks = ManagedStockTaskManager(IndexFundSync(database), datasets=(IndexFundSync.dataset,), worker_name="index-fund")
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,
@@ -266,10 +269,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         managed_stock_tasks.start()
         research_data_tasks.start()
+        index_fund_tasks.start()
         daily_signal_manager.start()
         yield
         managed_stock_tasks.shutdown()
         research_data_tasks.shutdown()
+        index_fund_tasks.shutdown()
         task_manager.shutdown()
         factor_lab_manager.shutdown()
         daily_signal_manager.shutdown()
@@ -311,6 +316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_event_service = document_event_service
     app.state.document_event_tasks = document_event_tasks
     app.state.stock_pools = stock_pools
+    app.state.index_fund_tasks = index_fund_tasks
     app.state.managed_stock_tasks = managed_stock_tasks
     app.state.research_data_tasks = research_data_tasks
     app.include_router(
@@ -324,7 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
     from ai_quant_assistant.api.index_fund_routes import index_fund_router
 
-    app.include_router(index_fund_router(database, templates, asset_version, resolved_settings.web_username))
+    app.include_router(index_fund_router(database, templates, asset_version, resolved_settings.web_username, index_fund_tasks))
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router
     from ai_quant_assistant.research.stock_workbench import StockResearchWorkbench

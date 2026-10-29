@@ -64,9 +64,30 @@ test("chart clicks and accessible date buttons select the same snapshot day, inc
   const circle = descendants(root).find(e => e.tag === "circle");
   circle.listeners.click();
   assert.equal(select.value, "2026-09-01");
+  select.value = "2026-09-03";
+  let prevented = false;
+  circle.listeners.keydown({key:"Enter", preventDefault:() => { prevented = true; }});
+  assert.equal(select.value, "2026-09-01");
+  assert.equal(prevented, true);
   assert.equal(buttons()[0].disabled, true);
   buttons()[1].listeners.click();
   assert.equal(select.value, "2026-09-02");
+});
+
+test("additional trends use snapshot inputs, keep gaps and require no new request", async () => {
+  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav"; elements["index-range"].value = "all";
+  const snapshot = {snapshot_id:"s",spec:{funds:["SSE.510300"]},inputs:{shares:[{date:"2026-09-01",fund_id:"SSE.510300",shares:"100"}],nav:[{date:"2026-09-01",fund_id:"SSE.510300",unit_nav:"2"}]},result:{points:[{trade_date:"2026-09-01",numerator_cny:"200",denominator_cny:"10000",ratio_fraction:"0.02"},{trade_date:"2026-09-02",numerator_cny:null,denominator_cny:null,ratio_fraction:null}]}};
+  let calls = 0;
+  const document = {getElementById:id => elements[id],createElement:tag => new Element(tag),createElementNS:(_ns, tag) => new Element(tag)};
+  vm.runInNewContext(source,{document,window:{},fetch:async () => {calls++; return {ok:true,json:async () => ({snapshot})};},setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  const root = elements["index-result"], metric = descendants(root).filter(e => e.tag === "select").at(-1);
+  metric.value = "SSE.510300"; metric.listeners.change();
+  assert.ok(descendants(root).some(e => e.textContent === "2.00"));
+  metric.value = "denominator"; metric.listeners.change();
+  assert.ok(descendants(root).some(e => e.textContent === "10000.00"));
+  assert.equal(calls, 1);
 });
 
 test("failed index read keeps prior snapshot labelled while older responses are ignored", async () => {

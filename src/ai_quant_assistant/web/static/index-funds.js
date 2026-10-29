@@ -73,7 +73,10 @@
           circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
           const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%；基金规模 ${p.numerator_cny ?? "—"} 元；流通市值 ${p.denominator_cny ?? "—"} 元。点击查看明细。`; circle.append(title); svg.append(circle);
           circle.style.cursor = "pointer";
+          circle.setAttribute("tabindex", "0"); circle.setAttribute("role", "button");
+          circle.setAttribute("aria-label", `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%，查看明细`);
           circle.addEventListener("click", () => selectDay(p.trade_date));
+          circle.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectDay(p.trade_date); } });
         });
         for (const [x, y, text] of [[4, 30, max.toFixed(2) + "%"], [4, 194, min.toFixed(2) + "%"], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const label = document.createElementNS("http://www.w3.org/2000/svg", "text"); label.setAttribute("x", x); label.setAttribute("y", y); label.setAttribute("font-size", "12"); label.textContent = text; svg.append(label); }
         result.append(svg);
@@ -130,6 +133,39 @@
         previous.addEventListener("click", () => { const i = points.findIndex(p => p.trade_date === dateSelect.value); if (i > 0) selectDay(points[i - 1].trade_date); });
         next.addEventListener("click", () => { const i = points.findIndex(p => p.trade_date === dateSelect.value); if (i >= 0 && i < points.length - 1) selectDay(points[i + 1].trade_date); });
         dateSelect.addEventListener("change", showDetails); showDetails();
+      }
+      if (points.length && Array.isArray(payload.snapshot.spec.funds)) {
+        const section = document.createElement("section"), label = document.createElement("label"), metric = document.createElement("select"), graph = document.createElement("div");
+        label.textContent = "查看其他趋势 ";
+        const options = [["numerator", "基金组合规模（元）"], ["denominator", "指数流通市值（元）"], ...payload.snapshot.spec.funds.map(fund => [fund, `${fund} 单只占比（%）`])];
+        for (const [value, name] of options) { const option = document.createElement("option"); option.value = value; option.textContent = name; metric.append(option); }
+        metric.value = "numerator"; label.append(metric); section.append(label, graph); result.append(section);
+        const inputs = payload.snapshot.inputs || {};
+        const shares = new Map((inputs.shares || []).map(row => [`${row.date}|${row.fund_id}`, row.shares]));
+        const units = new Map(((numeratorMode === "close" ? inputs.close : inputs.nav) || []).map(row => [`${row.date}|${row.fund_id}`, numeratorMode === "close" ? row.close : row.unit_nav]));
+        const number = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+        function drawMetric() {
+          graph.replaceChildren();
+          const selected = metric.value, name = options.find(option => option[0] === selected)?.[1];
+          if (!name) return;
+          const values = points.map(point => {
+            if (selected === "numerator") return number(point.numerator_cny);
+            if (selected === "denominator") return number(point.denominator_cny);
+            const key = `${point.trade_date}|${selected}`, share = number(shares.get(key)), unit = number(units.get(key)), cap = number(point.denominator_cny);
+            return share != null && unit != null && cap != null && share > 0 && unit > 0 && cap > 0 ? share * unit / cap * 100 : null;
+          });
+          const validValues = values.filter(value => value != null && Number.isFinite(value));
+          if (!validValues.length) { const message = document.createElement("p"); message.textContent = `${name}：所选范围没有可计算的数据。`; graph.append(message); return; }
+          const min = Math.min(...validValues), max = Math.max(...validValues), span = max - min || 1;
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("viewBox", "0 0 700 220"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${name}趋势，缺口处断开`); svg.style.width = "100%"; svg.style.maxHeight = "280px";
+          let d = "", connected = false;
+          values.forEach((value, i) => { if (value == null || !Number.isFinite(value)) { connected = false; return; } const x = 40 + i * 620 / Math.max(points.length - 1, 1), y = 190 - (value - min) * 160 / span; d += `${connected ? " L" : " M"}${x} ${y}`; connected = true; });
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
+          for (const [x, y, text] of [[4, 30, max.toFixed(2)], [4, 194, min.toFixed(2)], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const item = document.createElementNS("http://www.w3.org/2000/svg", "text"); item.setAttribute("x", x); item.setAttribute("y", y); item.setAttribute("font-size", "12"); item.textContent = text; svg.append(item); }
+          graph.append(svg);
+        }
+        metric.addEventListener("change", drawMetric); drawMetric();
       }
     } catch (error) { if (id === request) status.textContent = `读取 ${indexCode} 失败：${error.message}${displayedIndex ? `；保留 ${displayedIndex} 的已有数据。` : ""}`; }
   }

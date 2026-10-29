@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+import requests
 
 from ai_quant_assistant.providers.index_fund_close import IndexFundCloseProvider
 
@@ -43,3 +44,38 @@ def test_invalid_identity_and_duplicate_rejected():
     line = "2026-09-01,4.6,4.684,4.7,4.6,1000"
     with pytest.raises(ValueError, match="duplicate"):
         IndexFundCloseProvider(Client({"code": "159919", "market": 0, "klines": [line, line]})).fetch("SZSE.159919", date(2026, 9, 1), date(2026, 9, 1))
+
+
+def test_transient_failure_retries_then_succeeds():
+    class Flaky(Client):
+        def __init__(self):
+            super().__init__({"code": "510300", "market": 1, "klines": ["2026-09-01,4.6,4.684,4.7,4.6,1000"]})
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls < 3:
+                raise requests.Timeout()
+            return super().get(*args, **kwargs)
+
+    client, waits = Flaky(), []
+    rows = IndexFundCloseProvider(client, sleep=waits.append).fetch("SSE.510300", date(2026, 9, 1), date(2026, 9, 1))
+    assert rows[0].close == Decimal("4.684")
+    assert client.calls == 3 and waits == [0.25, 0.5]
+
+
+@pytest.mark.parametrize("status,calls", [(503, 3), (429, 3), (404, 1)])
+def test_http_failures_are_bounded_and_reported(status, calls):
+    class Failing:
+        count = 0
+
+        def get(self, *args, **kwargs):
+            self.count += 1
+            response = requests.Response()
+            response.status_code = status
+            raise requests.HTTPError(response=response)
+
+    client, waits = Failing(), []
+    with pytest.raises(RuntimeError, match=rf"HTTP {status}（尝试 {calls} 次）"):
+        IndexFundCloseProvider(client, sleep=waits.append).fetch("SSE.510300", date(2026, 9, 1), date(2026, 9, 1))
+    assert client.count == calls and len(waits) == calls - 1

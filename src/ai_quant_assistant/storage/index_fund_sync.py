@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from ai_quant_assistant.providers.index_float_cap_sse import SseMonthlyFloatCapProvider
+from ai_quant_assistant.providers.index_float_cap_sse import SQL_IDS, SseMonthlyFloatCapProvider
 from ai_quant_assistant.providers.index_fund_close import IndexFundCloseProvider
 from ai_quant_assistant.providers.index_fund_nav import IndexFundNavProvider
 from ai_quant_assistant.providers.index_fund_shares import IndexFundShareProvider
@@ -18,6 +18,13 @@ from ai_quant_assistant.research.index_fund_series import (
 from ai_quant_assistant.storage.index_fund_snapshots import _canonical
 from ai_quant_assistant.storage.managed_coverage import market_today
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
+
+
+INDEXES = {
+    "000300": "沪深300", "000016": "上证50", "000905": "中证500",
+    "000852": "中证1000", "932000": "中证2000", "000510": "中证A500",
+    "399006": "创业板指", "000688": "科创50",
+}
 
 
 class IndexFundSync:
@@ -34,8 +41,8 @@ class IndexFundSync:
     def request(self, index_code, start, end, funds, confirm, numerator_mode="nav"):
         if not confirm:
             raise ValueError("请确认数据同步")
-        if index_code not in {"000300", "000016", "000688"}:
-            raise ValueError("该指数流通市值来源尚未接入")
+        if index_code not in INDEXES:
+            raise ValueError("不支持的指数")
         if numerator_mode not in {"nav", "close"}:
             raise ValueError("不支持的基金规模口径")
         if start > end or (end - start).days > 1830 or end > market_today():
@@ -95,7 +102,8 @@ class IndexFundSync:
             scope = hashlib.sha256(_canonical(["index-fund-partitions-v1", spec]).encode()).hexdigest()
             months = sorted({(d.year, d.month) for d in days})
             markets = sorted({f.split('.')[0] for f in funds})
-            total = len(funds) * len(months) + len(days) * len(markets) + len(months)
+            cap_months = months if spec["index_code"] in SQL_IDS else []
+            total = len(funds) * len(months) + len(days) * len(markets) + len(cap_months)
             done = 0
 
             def partition(key, fetch):
@@ -118,7 +126,7 @@ class IndexFundSync:
                     for row in rows:
                         share_data[(day, row["fund_id"])] = Decimal(row["value"])
             caps = {}
-            for year, month in months:
+            for year, month in cap_months:
                 rows = partition(f"cap:{year:04d}-{month:02d}", lambda year=year, month=month: [{"date": row.trade_date.isoformat(), "value": str(row.value_cny)} for row in self.cap.fetch_month(spec["index_code"], year, month)])
                 for row in rows:
                     caps[date.fromisoformat(row["date"])] = Decimal(row["value"])
@@ -127,8 +135,13 @@ class IndexFundSync:
             points = build_series(trading_days=days, fund_ids=funds, fund_rows=fund_rows, index_rows=cap_rows)
             input_key, field = ("nav", "unit_nav") if numerator_mode == "nav" else ("close", "close")
             source = "akshare:eastmoney" if numerator_mode == "nav" else "eastmoney:unadjusted_daily_close"
-            inputs = {"shares": [{"date": d.isoformat(), "fund_id": f, "shares": str(v)} for (d, f), v in sorted(share_data.items())], input_key: [{"date": d.isoformat(), "fund_id": f, field: str(v)} for (d, f), v in sorted(values.items())], "float_cap": [{"date": d.isoformat(), "value_cny": str(v)} for d, v in sorted(caps.items()) if d in days], "sources": sorted({"akshare:" + f.split(".")[0].lower() for f in funds} | {source, "sse:monthly_report"}), "publication_time": None}
+            sources = {"akshare:" + f.split(".")[0].lower() for f in funds} | {source}
+            if cap_months:
+                sources.add("sse:monthly_report")
+            inputs = {"shares": [{"date": d.isoformat(), "fund_id": f, "shares": str(v)} for (d, f), v in sorted(share_data.items())], input_key: [{"date": d.isoformat(), "fund_id": f, field: str(v)} for (d, f), v in sorted(values.items())], "float_cap": [{"date": d.isoformat(), "value_cny": str(v)} for d, v in sorted(caps.items()) if d in days], "sources": sorted(sources), "publication_time": None}
             warning = "固定基金组由用户指定，尚未验证基金跟踪标的或历史排名；不用于回测。"
+            if not cap_months:
+                warning += "该指数历史流通市值尚未接入，仅展示固定基金组规模，占比缺失。"
             if numerator_mode == "close":
                 warning += "收盘价来源及历史覆盖尚待完整核验。"
             result = {"points": points, "scope_verified": False, "warning": warning}

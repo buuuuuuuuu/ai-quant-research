@@ -23,7 +23,7 @@
       node.textContent = text; svg.append(node);
     }
     if (!flat) label(left - 12, 34, "end", high);
-    label(left - 12, 194, "end", low);
+    label(left - 12, flat ? 114 : 194, "end", low);
     label(left, 215, "start", points[0].trade_date);
     if (points.length > 1) label(right, 215, "end", points.at(-1).trade_date);
     return xAt;
@@ -36,6 +36,9 @@
   const examples = {
     "000300": [["SSE.510300", "华泰柏瑞"], ["SZSE.159919", "嘉实"], ["SSE.510310", "易方达"], ["SSE.510330", "华夏"]],
     // SSE fund report 510500_20240330_LM9Y; SZSE listing notice 2024-10-10 (159351).
+    "000852": [["SSE.512100", "南方"]],
+    "932000": [["SSE.563300", "华泰柏瑞"]],
+    "399006": [["SZSE.159915", "易方达"]],
     "000905": [["SSE.510500", "南方"]],
     "000510": [["SZSE.159351", "嘉实"]],
     "000016": [["SSE.510050", "华夏"], ["SSE.510100", "易方达"]],
@@ -52,12 +55,11 @@
       button.disabled = codes.includes(button.value) || codes.length >= 10;
     }
   }
-  const syncAvailable = () => ["000300", "000016", "000688"].includes(select.value);
+  const hasCapSource = () => ["000300", "000016", "000688"].includes(select.value);
   const button = document.getElementById("index-submit");
   const syncHint = document.getElementById("index-sync-hint");
   function showExamples() {
-    button.disabled = !syncAvailable();
-    syncHint.hidden = !button.disabled;
+    syncHint.hidden = hasCapSource();
     const group = examples[select.value] || [];
     exampleList.replaceChildren();
     exampleList.hidden = !group.length;
@@ -130,33 +132,65 @@
         result.append(summary);
       }
       let selectDay = () => {};
-      if (valid.length) {
+      function addTrend(parent, values, format, name) {
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("viewBox", "0 0 700 220"); svg.setAttribute("role", "img");
-        svg.setAttribute("aria-label", "基金规模占比趋势，数据缺口处断开；完整数值见下方表格");
-        svg.style.width = "100%"; svg.style.maxHeight = "280px";
-        const values = valid.map(p => Number(p.ratio_fraction) * 100);
-        const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
-        const xAt = chartAxes(svg, points, min.toFixed(2) + "%", max.toFixed(2) + "%", min === max);
-        let d = "", connected = false;
-        points.forEach((p, i) => { if (p.ratio_fraction === null || !Number.isFinite(Number(p.ratio_fraction))) { connected = false; return; }
-          const x = xAt(i), y = 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span;
-          d += `${connected ? " L" : " M"}${x} ${y}`; connected = true;
-        });
-        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
-        points.forEach((p, i) => { if (p.ratio_fraction === null || !Number.isFinite(Number(p.ratio_fraction))) return;
-          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          circle.setAttribute("cx", xAt(i)); circle.setAttribute("cy", 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span);
-          circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
-          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%；基金规模 ${money(p.numerator_cny)} 元；流通市值 ${money(p.denominator_cny)} 元。点击查看明细。`; circle.append(title); svg.append(circle);
-          circle.style.cursor = "pointer";
-          circle.setAttribute("tabindex", "0"); circle.setAttribute("role", "button");
-          circle.setAttribute("aria-label", `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%，查看明细`);
-          circle.addEventListener("click", () => selectDay(p.trade_date));
-          circle.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectDay(p.trade_date); } });
-        });
-        result.append(svg);
+        svg.setAttribute("viewBox", "0 0 700 220");
+        svg.setAttribute("role", "group");
+        svg.setAttribute("aria-label", name + "，方向键选日期，加减键缩放");
+        svg.style.width = "100%";
+        svg.style.maxHeight = "280px";
+        const readout = document.createElement("p");
+        readout.setAttribute("aria-live", "polite");
+        readout.textContent = "点击查看当日数据，滚轮缩放日期范围。";
+        let left, right;
+        function choose(index) {
+          selectDay(points[index].trade_date);
+          readout.textContent = points[index].trade_date + " · " + name + " " +
+            (values[index] == null ? "缺失" : format(values[index]));
+        }
+        function render(first, last) {
+          svg.replaceChildren();
+          const visible = points.slice(first, last + 1);
+          const active = values.slice(first, last + 1).filter(value => value != null);
+          const min = active.length ? Math.min(...active) : 0;
+          const max = active.length ? Math.max(...active) : 0;
+          const xAt = chartAxes(svg, visible, active.length ? format(min) : "—",
+            active.length ? format(max) : "—", min === max);
+          left = xAt(0); right = xAt(last - first);
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          svg.append(path);
+          let d = "", connected = false;
+          for (let i = first; i <= last; i++) {
+            const value = values[i];
+            if (value == null) { connected = false; continue; }
+            const x = xAt(i - first), y = max === min ? 110 : 190 - (value - min) * 160 / (max - min);
+            d += (connected ? " L" : " M") + x + " " + y;
+            connected = true;
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x); circle.setAttribute("cy", y);
+            circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = points[i].trade_date + " · " + format(value);
+            circle.append(title);
+            circle.setAttribute("role", "button");
+            circle.setAttribute("tabindex", "-1");
+            circle.setAttribute("aria-label", title.textContent);
+            circle.addEventListener("click", event => { event?.stopPropagation(); selectIndex(i); });
+            circle.addEventListener("keydown", event => {
+              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectIndex(i); }
+            });
+            svg.append(circle);
+          }
+          path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f");
+        }
+        render(0, points.length - 1);
+        const selectIndex = bindDateChart(svg, {length: points.length, fractionAt: x => (x - left) / (right - left || 1),
+          render, select: choose});
+        parent.append(svg, readout);
+      }
+      if (valid.length) {
+        addTrend(result, points.map(p => p.ratio_fraction == null || !Number.isFinite(Number(p.ratio_fraction))
+          ? null : Number(p.ratio_fraction) * 100), value => value.toFixed(2) + "%", "基金规模占比");
       }
       const table = document.createElement("table"), head = document.createElement("tr");
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }
@@ -233,15 +267,8 @@
           });
           const validValues = values.filter(value => value != null && Number.isFinite(value));
           if (!validValues.length) { const message = document.createElement("p"); message.textContent = `${name}：所选范围没有可计算的数据。`; graph.append(message); return; }
-          const min = Math.min(...validValues), max = Math.max(...validValues), span = max - min || 1;
-          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-          svg.setAttribute("viewBox", "0 0 700 220"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${name}趋势，缺口处断开`); svg.style.width = "100%"; svg.style.maxHeight = "280px";
-          const axisValue = selected === "numerator" || selected === "denominator" ? money : value => value.toFixed(2);
-          const xAt = chartAxes(svg, points, axisValue(min), axisValue(max), min === max);
-          let d = "", connected = false;
-          values.forEach((value, i) => { if (value == null || !Number.isFinite(value)) { connected = false; return; } const x = xAt(i), y = 190 - (value - min) * 160 / span; d += `${connected ? " L" : " M"}${x} ${y}`; connected = true; });
-          const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
-          graph.append(svg);
+          const format = selected === "numerator" || selected === "denominator" ? money : value => value.toFixed(2);
+          addTrend(graph, values, format, name);
         }
         metric.addEventListener("change", drawMetric); drawMetric();
       }
@@ -250,7 +277,6 @@
   const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task");
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!syncAvailable()) return;
     const start = document.getElementById("index-start").value, end = document.getElementById("index-end").value;
     const numerator_mode = modeSelect.value;
     const funds = fundCodes();

@@ -37,3 +37,6 @@
 .gold-market summary { cursor: pointer; padding-block: .6rem; }
 .gold-market table { width: 100%; font-variant-numeric: tabular-nums; }
 .gold-market td:last-child, .gold-market th:last-child { text-align: right; }
+
+.gold-cursor { display: none; stroke: #27675b; stroke-dasharray: 4 3; pointer-events: none; }
+.gold-chart svg { overflow: hidden; }

@@ -51,7 +51,7 @@
           <input id="index-funds" placeholder="交易所.六位代码" required>
         </div>
         <div id="index-examples" class="fund-full-row" role="group" aria-label="点击添加该指数的基金示例" hidden></div>
-        <p id="index-sync-hint" class="fund-full-row" hidden>该指数的历史流通市值尚未接入，暂不能同步规模占比；已有本地快照仍可查看。</p>
+        <p id="index-sync-hint" class="fund-full-row" hidden>可同步基金规模。该指数的历史流通市值尚未接入，占比将显示为 —。</p>
         <button id="index-submit" aria-describedby="index-sync-hint" class="primary-button" type="submit">同步固定基金组</button>
       </div>
       <p id="index-task" role="status"></p>
@@ -86,6 +86,7 @@
     <div id="index-result"></div>
   </section>
 </main>
+<script src="/assets/date-chart.js?v={{ asset_version }}" defer></script>
 <script src="/assets/index-funds.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

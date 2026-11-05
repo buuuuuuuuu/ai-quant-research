@@ -3,7 +3,9 @@ const {readFileSync} = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const source = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/index-funds.js"), "utf8");
+const source = ["date-chart.js", "index-funds.js"].map(name =>
+  readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static", name), "utf8")
+).join("\n");
 
 class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.style = {}; this.listeners = {}; this.value = ""; this.textContent = ""; }
@@ -183,13 +185,18 @@ test("fund examples append once, respect the cap, and keep each index draft sepa
   picker.value = "000905"; picker.listeners.change();
   assert.equal(list.hidden, false);
   assert.equal(list.children[0].value, "SSE.510500");
-  assert.equal(elements["index-submit"].disabled, true);
+  assert.ok(!elements["index-submit"].disabled);
   assert.equal(elements["index-sync-hint"].hidden, false);
   picker.value = "000510"; picker.listeners.change();
   assert.equal(list.children[0].value, "SZSE.159351");
+  for (const [code, fund] of [["000852", "SSE.512100"], ["932000", "SSE.563300"], ["399006", "SZSE.159915"]]) {
+    picker.value = code; picker.listeners.change();
+    assert.equal(list.children[0].value, fund);
+    assert.ok(!elements["index-submit"].disabled);
+  }
   picker.value = "000300"; picker.listeners.change();
   assert.equal(input.value, "SSE.510330,SZSE.159919");
-  assert.equal(elements["index-submit"].disabled, false);
+  assert.ok(!elements["index-submit"].disabled);
   assert.ok(calls.every(c => !c.opts));
 });
 

@@ -19,7 +19,6 @@ from ai_quant_assistant.storage.index_fund_snapshots import _canonical
 from ai_quant_assistant.storage.managed_coverage import market_today
 from ai_quant_assistant.storage.task_repository import OperationTaskRepository
 
-
 INDEXES = {
     "000300": "沪深300", "000016": "上证50", "000905": "中证500",
     "000852": "中证1000", "932000": "中证2000", "000510": "中证A500",

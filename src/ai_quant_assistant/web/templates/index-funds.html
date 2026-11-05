@@ -51,7 +51,7 @@
           <input id="index-funds" placeholder="交易所.六位代码" required>
         </div>
         <div id="index-examples" class="fund-full-row" role="group" aria-label="点击添加该指数的基金示例" hidden></div>
-        <p id="index-sync-hint" data-lixinger="{{ 1 if lixinger_enabled else 0 }}" class="fund-full-row" hidden>{% if lixinger_enabled %}流通市值来源：理杏仁日度数据（cmc）。{% else %}当前仅同步基金规模。要同时获取该指数的历史流通市值，请在服务器配置 AI_QUANT_LIXINGER_TOKEN 后重启 Web 服务。{% endif %}</p>
+        <p id="index-sync-hint" class="fund-full-row" hidden>流通市值按当日成分股汇总，使用免费公开数据。成分或估值缺失的日期显示为 —。</p>
         <button id="index-submit" aria-describedby="index-sync-hint" class="primary-button" type="submit">同步固定基金组</button>
       </div>
       <p id="index-task" role="status"></p>

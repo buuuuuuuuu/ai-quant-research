@@ -55,11 +55,11 @@
       button.disabled = codes.includes(button.value) || codes.length >= 10;
     }
   }
-  const hasCapSource = () => ["000300", "000016", "000688"].includes(select.value);
+  const usesExchangeReport = () => ["000300", "000016", "000688"].includes(select.value);
   const button = document.getElementById("index-submit");
   const syncHint = document.getElementById("index-sync-hint");
   function showExamples() {
-    syncHint.hidden = syncHint.dataset?.lixinger !== "1" && hasCapSource();
+    syncHint.hidden = usesExchangeReport();
     const group = examples[select.value] || [];
     exampleList.replaceChildren();
     exampleList.hidden = !group.length;

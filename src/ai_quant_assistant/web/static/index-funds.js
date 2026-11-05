@@ -1,5 +1,74 @@
 (() => {
   const select = document.getElementById("index-code"), modeSelect = document.getElementById("index-numerator"), status = document.getElementById("index-status"), result = document.getElementById("index-result");
+  const currency = new Intl.NumberFormat("zh-CN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function money(value) {
+    return value == null || value === "" || !Number.isFinite(Number(value)) ? "—" : currency.format(value);
+  }
+  function groupedDecimal(value) {
+    if (value == null || value === "") return "—";
+    const [integer, fraction] = String(value).split(".");
+    const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return fraction === undefined ? grouped : grouped + "." + fraction;
+  }
+
+  // The Y labels end before the plot; X labels sit in a separate band below it.
+  function chartAxes(svg, points, low, high, flat) {
+    const left = 18 + Math.max(low.length, high.length) * 8, right = 686;
+    const xAt = i => left + i * (right - left) / Math.max(points.length - 1, 1);
+    function label(x, y, anchor, text) {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      node.setAttribute("x", x); node.setAttribute("y", y);
+      node.setAttribute("text-anchor", anchor);
+      node.setAttribute("font-size", "12"); node.setAttribute("font-family", "monospace");
+      node.textContent = text; svg.append(node);
+    }
+    if (!flat) label(left - 12, 34, "end", high);
+    label(left - 12, 194, "end", low);
+    label(left, 215, "start", points[0].trade_date);
+    if (points.length > 1) label(right, 215, "end", points.at(-1).trade_date);
+    return xAt;
+  }
+
+  // Product examples, independent of historical eligibility or size rankings.
+  // https://www.sse.com.cn/market/funddata/volumn/etfvolumn/
+  // https://www.jsfund.cn/Services/cn/jsp/pcf/index.jsp?SiteID=1&fundcode=159919_1
+  // https://www.sse.com.cn/disclosure/fund/announcement/c/new/2025-04-28/588080_20250428_99XH.pdf
+  const examples = {
+    "000300": [["SSE.510300", "华泰柏瑞"], ["SZSE.159919", "嘉实"], ["SSE.510310", "易方达"], ["SSE.510330", "华夏"]],
+    "000016": [["SSE.510050", "华夏"], ["SSE.510100", "易方达"]],
+    "000688": [["SSE.588000", "华夏"], ["SSE.588080", "易方达"]],
+  };
+  const fundInput = document.getElementById("index-funds");
+  const exampleList = document.getElementById("index-examples");
+  const drafts = new Map();
+  let editingIndex = select.value;
+  const fundCodes = () => fundInput.value.split(/[,，\s]+/).filter(Boolean);
+  function updateExampleButtons() {
+    const codes = fundCodes();
+    for (const button of exampleList.children) {
+      button.disabled = codes.includes(button.value) || codes.length >= 10;
+    }
+  }
+  function showExamples() {
+    const group = examples[select.value] || [];
+    exampleList.replaceChildren();
+    exampleList.hidden = !group.length;
+    for (const [code, manager] of group) {
+      const button = document.createElement("button");
+      button.type = "button"; button.value = code;
+      button.className = "secondary-button";
+      button.textContent = manager + " " + code;
+      button.addEventListener("click", () => {
+        const codes = fundCodes();
+        if (codes.length < 10 && !codes.includes(code)) fundInput.value = [...codes, code].join(",");
+        updateExampleButtons();
+      });
+      exampleList.append(button);
+    }
+    updateExampleButtons();
+  }
+  fundInput.addEventListener("input", updateExampleButtons);
+  showExamples();
   let request = 0, displayedIndex = null;
   async function load() {
     const id = ++request, indexCode = select.value, requestedMode = modeSelect.value;
@@ -49,7 +118,7 @@
           const difference = (Number(latest.ratio_fraction) - Number(previous.ratio_fraction)) * 100;
           change = `${points[latestIndex - 1] === previous ? "较上一交易日" : "跨缺口较上一完整观测日"}（${previous.trade_date}）${difference >= 0 ? "+" : ""}${difference.toFixed(4)} 个百分点`;
         }
-        summary.textContent = `最新完整统计日 ${latest.trade_date}：${(Number(latest.ratio_fraction) * 100).toFixed(4)}%；${change}。基金规模 ${latest.numerator_cny ?? "—"} 元；流通市值 ${latest.denominator_cny ?? "—"} 元。`;
+        summary.textContent = `最新完整统计日 ${latest.trade_date}：${(Number(latest.ratio_fraction) * 100).toFixed(4)}%；${change}。基金规模 ${money(latest.numerator_cny)} 元；流通市值 ${money(latest.denominator_cny)} 元。`;
         result.append(summary);
       }
       let selectDay = () => {};
@@ -60,31 +129,31 @@
         svg.style.width = "100%"; svg.style.maxHeight = "280px";
         const values = valid.map(p => Number(p.ratio_fraction) * 100);
         const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+        const xAt = chartAxes(svg, points, min.toFixed(2) + "%", max.toFixed(2) + "%", min === max);
         let d = "", connected = false;
         points.forEach((p, i) => { if (p.ratio_fraction === null || !Number.isFinite(Number(p.ratio_fraction))) { connected = false; return; }
-          const x = 40 + i * 620 / Math.max(points.length - 1, 1), y = 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span;
+          const x = xAt(i), y = 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span;
           d += `${connected ? " L" : " M"}${x} ${y}`; connected = true;
         });
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
         points.forEach((p, i) => { if (p.ratio_fraction === null || !Number.isFinite(Number(p.ratio_fraction))) return;
           const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          circle.setAttribute("cx", 40 + i * 620 / Math.max(points.length - 1, 1)); circle.setAttribute("cy", 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span);
+          circle.setAttribute("cx", xAt(i)); circle.setAttribute("cy", 190 - (Number(p.ratio_fraction) * 100 - min) * 160 / span);
           circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
-          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%；基金规模 ${p.numerator_cny ?? "—"} 元；流通市值 ${p.denominator_cny ?? "—"} 元。点击查看明细。`; circle.append(title); svg.append(circle);
+          const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%；基金规模 ${money(p.numerator_cny)} 元；流通市值 ${money(p.denominator_cny)} 元。点击查看明细。`; circle.append(title); svg.append(circle);
           circle.style.cursor = "pointer";
           circle.setAttribute("tabindex", "0"); circle.setAttribute("role", "button");
           circle.setAttribute("aria-label", `${p.trade_date}：${(Number(p.ratio_fraction) * 100).toFixed(4)}%，查看明细`);
           circle.addEventListener("click", () => selectDay(p.trade_date));
           circle.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectDay(p.trade_date); } });
         });
-        for (const [x, y, text] of [[4, 30, max.toFixed(2) + "%"], [4, 194, min.toFixed(2) + "%"], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const label = document.createElementNS("http://www.w3.org/2000/svg", "text"); label.setAttribute("x", x); label.setAttribute("y", y); label.setAttribute("font-size", "12"); label.textContent = text; svg.append(label); }
         result.append(svg);
       }
       const table = document.createElement("table"), head = document.createElement("tr");
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }
       table.append(head);
-      for (const point of points) { const tr = document.createElement("tr"); const ratio = point.ratio_fraction === null ? "—" : `${(Number(point.ratio_fraction) * 100).toFixed(4)}%`; for (const value of [point.trade_date, point.numerator_cny ?? "—", point.denominator_cny ?? "—", ratio]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } table.append(tr); }
+      for (const point of points) { const tr = document.createElement("tr"); const ratio = point.ratio_fraction === null ? "—" : `${(Number(point.ratio_fraction) * 100).toFixed(4)}%`; for (const value of [point.trade_date, money(point.numerator_cny), money(point.denominator_cny), ratio]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } table.append(tr); }
       const tableShell = document.createElement("div"); tableShell.className = "table-shell"; tableShell.style.overflowX = "auto"; tableShell.append(table); result.append(tableShell);
       if (points.length && Array.isArray(payload.snapshot.spec.funds)) {
         const section = document.createElement("section"), label = document.createElement("label"), dateSelect = document.createElement("select"), details = document.createElement("div");
@@ -124,7 +193,7 @@
             const cap = Number(point.denominator_cny);
             const ratio = Number.isFinite(amount) && amount > 0 && point.denominator_cny != null && Number.isFinite(cap) && cap > 0 ? `${(amount / cap * 100).toFixed(4)}%` : "—";
             const row = document.createElement("tr");
-            for (const value of [fund, share ?? "—", unit ?? "—", Number.isFinite(amount) && amount > 0 ? amount.toFixed(2) : "—", ratio]) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
+            for (const value of [fund, groupedDecimal(share), groupedDecimal(unit), Number.isFinite(amount) && amount > 0 ? money(amount) : "—", ratio]) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
             detailTable.append(row);
           }
           const detailShell = document.createElement("div"); detailShell.className = "table-shell"; detailShell.style.overflowX = "auto"; detailShell.append(detailTable); details.append(detailShell);
@@ -159,10 +228,11 @@
           const min = Math.min(...validValues), max = Math.max(...validValues), span = max - min || 1;
           const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
           svg.setAttribute("viewBox", "0 0 700 220"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${name}趋势，缺口处断开`); svg.style.width = "100%"; svg.style.maxHeight = "280px";
+          const axisValue = selected === "numerator" || selected === "denominator" ? money : value => value.toFixed(2);
+          const xAt = chartAxes(svg, points, axisValue(min), axisValue(max), min === max);
           let d = "", connected = false;
-          values.forEach((value, i) => { if (value == null || !Number.isFinite(value)) { connected = false; return; } const x = 40 + i * 620 / Math.max(points.length - 1, 1), y = 190 - (value - min) * 160 / span; d += `${connected ? " L" : " M"}${x} ${y}`; connected = true; });
+          values.forEach((value, i) => { if (value == null || !Number.isFinite(value)) { connected = false; return; } const x = xAt(i), y = 190 - (value - min) * 160 / span; d += `${connected ? " L" : " M"}${x} ${y}`; connected = true; });
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f"); path.setAttribute("stroke-width", "2"); svg.append(path);
-          for (const [x, y, text] of [[4, 30, max.toFixed(2)], [4, 194, min.toFixed(2)], [40, 216, points[0].trade_date], [570, 216, points[points.length - 1].trade_date]]) { const item = document.createElementNS("http://www.w3.org/2000/svg", "text"); item.setAttribute("x", x); item.setAttribute("y", y); item.setAttribute("font-size", "12"); item.textContent = text; svg.append(item); }
           graph.append(svg);
         }
         metric.addEventListener("change", drawMetric); drawMetric();
@@ -174,7 +244,7 @@
     event.preventDefault();
     const start = document.getElementById("index-start").value, end = document.getElementById("index-end").value;
     const numerator_mode = modeSelect.value;
-    const funds = document.getElementById("index-funds").value.split(/[,，\s]+/).filter(Boolean);
+    const funds = fundCodes();
     if (!window.confirm(`确认联网同步 ${select.value}，${start} 至 ${end}，基金 ${funds.join("、")}，口径 ${numerator_mode === "close" ? "不复权收盘价（来源尚待核验）" : "单位净值"}？`)) return;
     button.disabled = true; select.disabled = true; modeSelect.disabled = true; taskStatus.textContent = "正在提交同步任务…";
     try {
@@ -192,7 +262,14 @@
     } catch(error) { taskStatus.textContent = `同步失败：${error.message}`; }
     finally { button.disabled = false; select.disabled = false; modeSelect.disabled = false; }
   });
-  select.addEventListener("change", load); modeSelect.addEventListener("change", load);
+  select.addEventListener("change", () => {
+    drafts.set(editingIndex, fundInput.value);
+    editingIndex = select.value;
+    fundInput.value = drafts.get(editingIndex) || "";
+    showExamples();
+    load();
+  });
+  modeSelect.addEventListener("change", load);
   document.getElementById("index-range").addEventListener("change", () => { if (document.getElementById("index-range").value !== "custom") load(); });
   document.getElementById("view-apply").addEventListener("click", load); load();
 })();

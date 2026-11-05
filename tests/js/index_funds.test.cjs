@@ -9,13 +9,13 @@ class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.style = {}; this.listeners = {}; this.value = ""; this.textContent = ""; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
-  setAttribute() {}
+  setAttribute(name, value) { (this.attributes ||= {})[name] = String(value); }
   addEventListener(name, handler) { this.listeners[name] = handler; }
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
 
 test("daily details use the selected snapshot day and preserve missing values", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -41,7 +41,7 @@ test("daily details use the selected snapshot day and preserve missing values", 
 });
 
 test("chart clicks and accessible date buttons select the same snapshot day, including gaps", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -75,7 +75,7 @@ test("chart clicks and accessible date buttons select the same snapshot day, inc
 });
 
 test("additional trends use snapshot inputs, keep gaps and require no new request", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav"; elements["index-range"].value = "all";
   const snapshot = {snapshot_id:"s",spec:{funds:["SSE.510300"]},inputs:{shares:[{date:"2026-09-01",fund_id:"SSE.510300",shares:"100"}],nav:[{date:"2026-09-01",fund_id:"SSE.510300",unit_nav:"2"}]},result:{points:[{trade_date:"2026-09-01",numerator_cny:"200",denominator_cny:"10000",ratio_fraction:"0.02"},{trade_date:"2026-09-02",numerator_cny:null,denominator_cny:null,ratio_fraction:null}]}};
   let calls = 0;
@@ -86,12 +86,12 @@ test("additional trends use snapshot inputs, keep gaps and require no new reques
   metric.value = "SSE.510300"; metric.listeners.change();
   assert.ok(descendants(root).some(e => e.textContent === "2.00"));
   metric.value = "denominator"; metric.listeners.change();
-  assert.ok(descendants(root).some(e => e.textContent === "10000.00"));
+  assert.ok(descendants(root).some(e => e.textContent === "10,000.00"));
   assert.equal(calls, 1);
 });
 
 test("failed index read keeps prior snapshot labelled while older responses are ignored", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -117,7 +117,7 @@ test("failed index read keeps prior snapshot labelled while older responses are 
 });
 
 test("mode switch reads matching local snapshot and labels close correctly", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -136,7 +136,7 @@ test("mode switch reads matching local snapshot and labels close correctly", asy
 });
 
 test("custom display range uses local snapshot without changing export and rejects invalid dates", async () => {
-  const elements = Object.fromEntries(["index-code", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav"; elements["index-range"].value = "all";
   const snapshot = {snapshot_id:"same",spec:{funds:[]},inputs:{},result:{points:[
     {trade_date:"2024-01-01",ratio_fraction:null}, {trade_date:"2025-01-01",ratio_fraction:null}, {trade_date:"2026-01-01",ratio_fraction:null},
@@ -154,4 +154,57 @@ test("custom display range uses local snapshot without changing export and rejec
   assert.match(elements["index-status"].textContent, /请填写有效/);
   assert.ok(descendants(elements["index-result"]).some(e => e.textContent.includes("0 / 1 个交易日")));
   assert.ok(calls.every(c => c.options === undefined));
+});
+
+test("fund examples append once, respect the cap, and keep each index draft separate", async () => {
+  const ids = ["index-code", "index-funds", "index-examples", "index-numerator", "index-range",
+    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  const picker = elements["index-code"], input = elements["index-funds"], list = elements["index-examples"];
+  picker.value = "000300"; input.value = "SSE.510330";
+  const calls = [];
+  const document = {getElementById: id => elements[id], createElement: tag => new Element(tag)};
+  const fetch = async (url, opts) => {
+    calls.push({url, opts});
+    return {ok: true, json: async () => ({snapshot: null})};
+  };
+  vm.runInNewContext(source, {document, window: {}, fetch, setTimeout});
+  const example = list.children.find(b => b.value === "SZSE.159919");
+  example.listeners.click(); example.listeners.click();
+  assert.equal(input.value, "SSE.510330,SZSE.159919");
+  assert.equal(example.disabled, true);
+  assert.equal(calls.length, 1);
+  picker.value = "000016"; picker.listeners.change();
+  assert.equal(input.value, "");
+  assert.ok(list.children.some(b => b.value === "SSE.510050"));
+  input.value = Array.from({length: 10}, (_, i) => "SSE." + (510000 + i)).join(",");
+  input.listeners.input();
+  assert.ok(list.children.every(b => b.disabled));
+  picker.value = "000905"; picker.listeners.change();
+  assert.equal(list.hidden, true);
+  picker.value = "000300"; picker.listeners.change();
+  assert.equal(input.value, "SSE.510330,SZSE.159919");
+  assert.ok(calls.every(c => !c.opts));
+});
+
+test("large CNY labels stay left of the plot when the index cap is missing", async () => {
+  const ids = ["index-code", "index-funds", "index-examples", "index-numerator", "index-range",
+    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  elements["index-code"].value = "000300";
+  const document = {getElementById: id => elements[id], createElement: tag => new Element(tag),
+    createElementNS: (_, tag) => new Element(tag)};
+  const points = ["169447599578.56000", "194842433071.929958091"].map((amount, i) => ({
+    trade_date: "2026-11-0" + (i + 2), numerator_cny: amount, denominator_cny: null, ratio_fraction: null,
+  }));
+  const snapshot = {snapshot_id: "large", spec: {funds: ["SSE.510300"]}, result: {points}, inputs: {}};
+  vm.runInNewContext(source, {document, window: {}, fetch: async () => ({ok: true, json: async () => ({snapshot})}), setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  const nodes = descendants(elements["index-result"]);
+  assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "194,842,433,071.93"));
+  assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "—"));
+  const label = nodes.find(n => n.tag === "text" && n.textContent === "169,447,599,578.56");
+  const firstX = Number(nodes.find(n => n.tag === "path").attributes.d.match(/M([\d.]+)/)[1]);
+  assert.equal(label.attributes["text-anchor"], "end");
+  assert.ok(Number(label.attributes.x) <= firstX - 10);
 });

@@ -28,7 +28,7 @@
     </div>
 
     <form id="index-sync">
-      <p>固定基金组：填写已核实跟踪该指数的基金，最多10只，代码用逗号分隔。当前不自动判断头部排名。</p>
+      <p>固定基金组：可手动填写代码，或点击下方基金示例添加，最多10只，代码用逗号分隔。当前不自动判断头部排名。</p>
       <p>最多同步1831个自然日；长区间可能耗时较久。失败后使用相同指数、日期及基金重试，可继续已完成的分区。</p>
       <div class="fund-fields">
         <div class="fund-field fund-full-row">
@@ -48,8 +48,9 @@
         </div>
         <div class="fund-field fund-full-row">
           <label for="index-funds">基金代码</label>
-          <input id="index-funds" placeholder="SSE.510300,SZSE.159919" required>
+          <input id="index-funds" placeholder="交易所.六位代码" required>
         </div>
+        <div id="index-examples" class="fund-full-row" role="group" aria-label="点击添加该指数的基金示例" hidden></div>
         <button id="index-submit" class="primary-button" type="submit">同步固定基金组</button>
       </div>
       <p id="index-task" role="status"></p>

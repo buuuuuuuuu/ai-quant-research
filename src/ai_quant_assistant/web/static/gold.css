@@ -1,0 +1,30 @@
+.gold-market .gold-panel { padding: clamp(1rem, 3vw, 2rem); }
+.gold-toolbar, .gold-periods, .gold-chart figcaption {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .6rem 1.25rem;
+}
+.gold-toolbar, .gold-chart figcaption { justify-content: space-between; }
+.gold-toolbar p { margin: .4rem 0; }
+.gold-price { font-size: clamp(1.6rem, 4vw, 2.5rem); }
+.gold-periods { margin-block: 1.25rem; }
+.gold-periods a { padding: .4rem .6rem; }
+.gold-periods a[aria-current="page"] { background: #e6efea; border-radius: .4rem; font-weight: bold; }
+.gold-chart {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: .5rem .75rem;
+  margin: 1.5rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.gold-chart svg {
+  width: 100%; height: clamp(10rem, 24vw, 17rem);
+  border-block: 1px solid #d7e3dc; color: #88601c;
+}
+.gold-scale { display: flex; flex-direction: column; justify-content: space-between; text-align: end; }
+.gold-scale.flat { justify-content: center; }
+.gold-chart figcaption { grid-column: 2; }
+.gold-market summary { cursor: pointer; padding-block: .6rem; }
+.gold-market table { width: 100%; font-variant-numeric: tabular-nums; }
+.gold-market td:last-child, .gold-market th:last-child { text-align: right; }

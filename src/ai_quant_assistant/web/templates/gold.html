@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>黄金走势 · 澄明</title>
+  <link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/assets/gold.css?v={{ asset_version }}">
+</head>
+<body>
+{% include "app-nav.html" %}
+<main class="gold-market">
+  <p class="eyebrow">市场观察</p>
+  <h1>黄金走势</h1>
+  <p><a href="{{ source }}">上海黄金交易所</a> · Au99.99 现货日收盘价 · 人民币元/克</p>
+  <section class="panel gold-panel" aria-label="黄金日行情">
+    <div class="gold-toolbar">
+      <div>
+        {% if rows %}
+        <p>{{ rows[-1][0] }} 收盘价</p>
+        <strong class="gold-price">{{ "{:,.2f}".format(rows[-1][1]) if rows[-1][1] is not none else "缺失" }}</strong>
+        {% if rows[-1][1] is not none %}<span>元/克</span>{% endif %}
+        {% else %}<p>本地暂无黄金行情，点击「更新行情」获取历史收盘价。</p>{% endif %}
+      </div>
+      <div>
+        <button id="gold-refresh" type="button" class="primary-button">更新行情</button>
+        <p id="gold-status" role="status">{% if updated %}上次更新 {{ updated.strftime("%Y-%m-%d %H:%M") }}（北京时间）{% endif %}</p>
+      </div>
+    </div>
+    {% if rows %}
+    <nav class="gold-periods" aria-label="走势时间范围">
+      {% for value, label in [("30", "近30天"), ("90", "近90天"), ("365", "近1年"), ("all", "全部")] %}
+      <a href="?days={{ value }}"{% if days == value %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    {% if chart %}
+    <figure class="gold-chart" aria-label="所选区间黄金收盘价走势，单位元/克">
+      <div class="gold-scale{% if chart.high == chart.low %} flat{% endif %}">
+        <span>{{ "{:,.2f}".format(chart.high) }}</span>
+        {% if chart.high != chart.low %}<span>{{ "{:,.2f}".format(chart.low) }}</span>{% endif %}
+      </div>
+      <svg viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-label="黄金收盘价折线图">
+        <path d="{{ chart.path }}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <figcaption><time>{{ rows[0][0] }}</time>{% if rows[0][0] != rows[-1][0] %}<time>{{ rows[-1][0] }}</time>{% endif %}</figcaption>
+    </figure>
+    {% else %}<p>所选区间没有有效收盘价。</p>{% endif %}
+    <details><summary>查看逐日收盘价（最近 {{ recent|length }} 条）</summary>
+      <table><thead><tr><th scope="col">交易日</th><th scope="col">收盘价（元/克）</th></tr></thead>
+      <tbody>{% for day, close in recent %}<tr><td>{{ day }}</td><td>{{ "{:,.2f}".format(close) if close is not none else "缺失" }}</td></tr>{% endfor %}</tbody></table>
+    </details>
+    {% endif %}
+  </section>
+</main>
+<script src="/assets/gold.js?v={{ asset_version }}" defer></script>
+</body>
+</html>

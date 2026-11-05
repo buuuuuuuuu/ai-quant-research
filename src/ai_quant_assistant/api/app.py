@@ -26,6 +26,7 @@ from ai_quant_assistant.ai.repository import CopilotRepository
 from ai_quant_assistant.ai.tool_registry import copilot_tool_catalog, require_allowed_tool
 from ai_quant_assistant.api.auth import SESSION_COOKIE, WebAuthenticator, safe_next_path
 from ai_quant_assistant.api.backtest_tasks import BacktestTaskManager
+from ai_quant_assistant.api.gold_routes import gold_router
 from ai_quant_assistant.api.managed_stock_routes import managed_stock_router
 from ai_quant_assistant.api.managed_stock_tasks import ManagedStockTaskManager
 from ai_quant_assistant.api.operations_tasks import OperationsTaskManager
@@ -260,7 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
                 "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
-                "app-shell.js", "run-center.js", "index-funds.js",
+                "app-shell.js", "run-center.js", "index-funds.js", "gold.js", "gold.css",
             )
         )
     ).hexdigest()[:16]
@@ -328,6 +329,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     )
     app.include_router(managed_stock_router(managed_stock_tasks, resolved_settings.web_username))
+    app.include_router(gold_router(
+        resolved_settings.cache_dir, templates, asset_version, resolved_settings.web_username
+    ))
     from ai_quant_assistant.api.index_fund_routes import index_fund_router
 
     app.include_router(index_fund_router(database, templates, asset_version, resolved_settings.web_username, index_fund_tasks))

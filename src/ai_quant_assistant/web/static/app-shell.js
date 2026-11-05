@@ -60,7 +60,7 @@
   setOpen(false);
   const path = location.pathname;
   const group = path.startsWith("/market/")
-    ? "market"
+    ? (path === "/market/gold" ? "gold" : "market")
     : path.startsWith("/backtests")
     ? "backtests"
     : path.startsWith("/data")

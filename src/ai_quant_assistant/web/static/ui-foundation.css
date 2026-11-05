@@ -184,3 +184,45 @@ body:has(.app-sidebar) dialog::backdrop { background: rgba(10, 32, 27, .45); }
 @media (prefers-reduced-motion: reduce) {
   .app-sidebar, .entry-card { transition: none !important; }
 }
+
+/* 指数基金规模观察 */
+.fund-observation {
+  padding: clamp(16px, 2.5vw, 32px);
+}
+.fund-observation .fund-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  max-width: 45rem;
+  gap: 16px 28px;
+  margin-top: 16px;
+}
+.fund-observation .fund-field {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
+  min-width: 0;
+  max-width: 28rem;
+}
+.fund-observation .fund-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+.fund-observation .fund-full-row {
+  grid-column: 1 / -1;
+}
+.fund-observation .fund-fields > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  justify-content: center;
+}
+
+.fund-observation #index-examples:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fund-observation #index-examples button {
+  font-variant-numeric: tabular-nums;
+  padding: 6px 12px;
+}

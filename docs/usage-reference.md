@@ -1,6 +1,6 @@
 # 详细操作参考 / Detailed usage reference
 
-> 从原 README 迁移的分阶段操作说明。历史里程碑的版本号仅描述当时状态；当前 Schema 为 18。首次体验请先阅读[项目首页](../README.md)。以下真实数据同步及部分 local-first CLI 命令可能联网，不属于离线示例。
+> 从原 README 迁移的分阶段操作说明。历史里程碑的版本号仅描述当时状态；当前 Schema 为 19。首次体验请先阅读[项目首页](../README.md)。以下真实数据同步及部分 local-first CLI 命令可能联网，不属于离线示例。
 
 # AI 量化研究助手 V1
 
@@ -53,7 +53,7 @@ ai-quant-research/
 
 ## A 股本地数据库（M0–M9）
 
-数据平台提供 DuckDB Schema v18、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
+数据平台提供 DuckDB Schema v20、可重复执行的迁移、Bronze/Silver/Gold/Snapshots
 目录、离线 Fixture，以及 AkShare 沪深京证券主数据、交易日历、股票日线、指数基准和
 一季报、半年报、三季报、年报公告及十二项财务指标的增量同步。分区支持失败续跑，阻断
 级质量检查失败的数据不会发布；公告和财务版本同时保存报告期与真实公开时间，防止把
@@ -65,7 +65,7 @@ ai-quant-research/
 uv run ai-quant data init
 ```
 
-已有旧版数据库执行同一命令时会按顺序升级到 Schema v18，不删除已发布的
+已有旧版数据库执行同一命令时会按顺序升级到 Schema v20，不删除已发布的
 股票日线、指数、历史公告、财务报告、后台任务、备份或审计记录。
 
 Schema v10 引入的公告文档能力从 Web“数据浏览 → 定期公告 → 查看公告 → 文档智能”进入。

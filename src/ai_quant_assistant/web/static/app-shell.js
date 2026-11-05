@@ -59,7 +59,9 @@
   mobile.addEventListener("change", () => setOpen(false));
   setOpen(false);
   const path = location.pathname;
-  const group = path.startsWith("/backtests")
+  const group = path.startsWith("/market/")
+    ? "market"
+    : path.startsWith("/backtests")
     ? "backtests"
     : path.startsWith("/data")
       ? "data"

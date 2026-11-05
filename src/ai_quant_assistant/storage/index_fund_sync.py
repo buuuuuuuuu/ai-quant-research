@@ -6,7 +6,10 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from ai_quant_assistant.providers.index_float_cap_lixinger import LIXINGER_CMC, LixingerIndexFloatCap
+from ai_quant_assistant.providers.index_float_cap_lixinger import (
+    LIXINGER_CMC,
+    LixingerIndexFloatCap,
+)
 from ai_quant_assistant.providers.index_float_cap_sse import SQL_IDS, SseMonthlyFloatCapProvider
 from ai_quant_assistant.providers.index_fund_close import IndexFundCloseProvider
 from ai_quant_assistant.providers.index_fund_nav import IndexFundNavProvider

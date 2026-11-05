@@ -12,13 +12,29 @@ class GoldRefresh(BaseModel):
     confirm: StrictBool
 
 
-def chart_data(rows):
+def chart_data(rows, *, window_start=None):
     prices = [close for _, close in rows if close is not None]
     if not prices:
         return None
     high, low = max(prices), min(prices)
     first, last = (date.fromisoformat(rows[i][0]) for i in (0, -1))
+    first = window_start or first
     days = (last - first).days
+
+    def x_for(offset):
+        return 2 + 996 * offset / days if days else 500
+
+    # Calendar ticks share the exact time scale used for prices, including weekends.
+    intervals = min(days, 6)
+    ticks = []
+    for index in range(intervals + 1):
+        offset = round(index * days / intervals) if intervals else 0
+        day = first + timedelta(days=offset)
+        ticks.append({
+            "date": day.isoformat(), "label": day.strftime("%Y-%m" if days > 730 else "%m-%d"),
+            "x": x_for(offset), "compact": index in (0, intervals // 2, intervals),
+        })
+    markers = []
     path = []
     start_segment = True
     for day, close in rows:
@@ -26,14 +42,18 @@ def chart_data(rows):
             start_segment = True
             continue
         offset = (date.fromisoformat(day) - first).days
-        x = 2 + 996 * offset / days if days else 500
+        x = x_for(offset)
         y = 4 + 192 * (high - close) / (high - low) if high > low else 100
+        if window_start is not None:
+            markers.append({"date": day, "close": close, "x": x, "y": y})
         # A zero-length round-capped segment also shows an isolated observation.
         if start_segment:
             path.append(f"M{x:.2f},{y:.2f}")
         path.append(f"L{x:.2f},{y:.2f}")
         start_segment = False
-    return {"path": " ".join(path), "high": high, "low": low}
+    return {
+        "path": " ".join(path), "high": high, "low": low, "ticks": ticks, "markers": markers,
+    }
 
 
 def gold_router(cache_dir, templates, asset_version, actor):
@@ -41,9 +61,10 @@ def gold_router(cache_dir, templates, asset_version, actor):
     history = GoldHistory(cache_dir)
 
     @router.get("/market/gold", include_in_schema=False)
-    def page(request: Request, days: Literal["30", "90", "365", "all"] = "90"):
+    def page(request: Request, days: Literal["7", "30", "90", "365", "all"] = "90"):
         snapshot = history.read()
         rows = sorted(snapshot["closes"].items())
+        start = None
         if rows and days != "all":
             start = date.fromisoformat(rows[-1][0]) - timedelta(days=int(days) - 1)
             rows = [(day, close) for day, close in rows if day >= start.isoformat()]
@@ -55,7 +76,8 @@ def gold_router(cache_dir, templates, asset_version, actor):
             name="gold.html",
             context={
                 "username": actor, "asset_version": asset_version, "days": days,
-                "rows": rows, "chart": chart_data(rows), "source": SOURCE,
+                "rows": rows, "source": SOURCE,
+                "chart": chart_data(rows, window_start=start if days == "7" else None),
                 "updated": updated, "recent": list(reversed(rows[-20:])),
             },
         )

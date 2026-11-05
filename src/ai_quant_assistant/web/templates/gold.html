@@ -29,7 +29,7 @@
     </div>
     {% if rows %}
     <nav class="gold-periods" aria-label="走势时间范围">
-      {% for value, label in [("30", "近30天"), ("90", "近90天"), ("365", "近1年"), ("all", "全部")] %}
+      {% for value, label in [("7", "近7天"), ("30", "近30天"), ("90", "近90天"), ("365", "近1年"), ("all", "全部")] %}
       <a href="?days={{ value }}"{% if days == value %} aria-current="page"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
@@ -40,9 +40,20 @@
         {% if chart.high != chart.low %}<span>{{ "{:,.2f}".format(chart.low) }}</span>{% endif %}
       </div>
       <svg viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-label="黄金收盘价折线图">
+        {% for tick in chart.ticks %}
+        <line class="gold-guide{% if not tick.compact %} gold-wide-tick{% endif %}" x1="{{ tick.x }}" x2="{{ tick.x }}" y1="0" y2="200" vector-effect="non-scaling-stroke"/>
+        {% endfor %}
         <path d="{{ chart.path }}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+        {% for mark in chart.markers %}
+        <path d="M{{ mark.x }},{{ mark.y }} h0" stroke="currentColor" stroke-width="6" stroke-linecap="round" vector-effect="non-scaling-stroke"><title>{{ mark.date }} · {{ "{:,.2f}".format(mark.close) }} 元/克</title></path>
+        {% endfor %}
       </svg>
-      <figcaption><time>{{ rows[0][0] }}</time>{% if rows[0][0] != rows[-1][0] %}<time>{{ rows[-1][0] }}</time>{% endif %}</figcaption>
+      <div class="gold-axis" aria-hidden="true">
+        {% for tick in chart.ticks %}
+        <time class="{% if not tick.compact %}gold-wide-tick{% endif %}" datetime="{{ tick.date }}" style="left: {{ tick.x / 10 }}%">{{ tick.label }}</time>
+        {% endfor %}
+      </div>
+      <figcaption>日期范围：{{ chart.ticks[0].date }}{% if chart.ticks|length > 1 %} 至 {{ chart.ticks[-1].date }}{% endif %}</figcaption>
     </figure>
     {% else %}<p>所选区间没有有效收盘价。</p>{% endif %}
     <details><summary>查看逐日收盘价（最近 {{ recent|length }} 条）</summary>

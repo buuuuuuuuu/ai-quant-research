@@ -35,6 +35,9 @@
   // https://www.sse.com.cn/disclosure/fund/announcement/c/new/2025-04-28/588080_20250428_99XH.pdf
   const examples = {
     "000300": [["SSE.510300", "华泰柏瑞"], ["SZSE.159919", "嘉实"], ["SSE.510310", "易方达"], ["SSE.510330", "华夏"]],
+    // SSE fund report 510500_20240330_LM9Y; SZSE listing notice 2024-10-10 (159351).
+    "000905": [["SSE.510500", "南方"]],
+    "000510": [["SZSE.159351", "嘉实"]],
     "000016": [["SSE.510050", "华夏"], ["SSE.510100", "易方达"]],
     "000688": [["SSE.588000", "华夏"], ["SSE.588080", "易方达"]],
   };
@@ -49,7 +52,12 @@
       button.disabled = codes.includes(button.value) || codes.length >= 10;
     }
   }
+  const syncAvailable = () => ["000300", "000016", "000688"].includes(select.value);
+  const button = document.getElementById("index-submit");
+  const syncHint = document.getElementById("index-sync-hint");
   function showExamples() {
+    button.disabled = !syncAvailable();
+    syncHint.hidden = !button.disabled;
     const group = examples[select.value] || [];
     exampleList.replaceChildren();
     exampleList.hidden = !group.length;
@@ -239,9 +247,10 @@
       }
     } catch (error) { if (id === request) status.textContent = `读取 ${indexCode} 失败：${error.message}${displayedIndex ? `；保留 ${displayedIndex} 的已有数据。` : ""}`; }
   }
-  const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task"), button = document.getElementById("index-submit");
+  const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task");
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!syncAvailable()) return;
     const start = document.getElementById("index-start").value, end = document.getElementById("index-end").value;
     const numerator_mode = modeSelect.value;
     const funds = fundCodes();

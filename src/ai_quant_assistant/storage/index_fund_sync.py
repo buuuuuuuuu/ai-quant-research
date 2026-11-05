@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
+from ai_quant_assistant.providers.index_float_cap_lixinger import LIXINGER_CMC, LixingerIndexFloatCap
 from ai_quant_assistant.providers.index_float_cap_sse import SQL_IDS, SseMonthlyFloatCapProvider
 from ai_quant_assistant.providers.index_fund_close import IndexFundCloseProvider
 from ai_quant_assistant.providers.index_fund_nav import IndexFundNavProvider
@@ -29,12 +30,13 @@ INDEXES = {
 class IndexFundSync:
     dataset = "index_fund_observation"
 
-    def __init__(self, database, shares=None, nav=None, cap=None, close=None):
+    def __init__(self, database, shares=None, nav=None, cap=None, close=None, lixinger_token=""):
         self.database = database
         self.tasks = OperationTaskRepository(database)
         self.shares = shares or IndexFundShareProvider()
         self.nav = nav or IndexFundNavProvider()
         self.cap = cap or SseMonthlyFloatCapProvider()
+        self.lixinger = LixingerIndexFloatCap(lixinger_token) if lixinger_token else None
         self.close = close or IndexFundCloseProvider()
 
     def request(self, index_code, start, end, funds, confirm, numerator_mode="nav"):
@@ -58,6 +60,8 @@ class IndexFundSync:
         if any(x is None for x in sessions) or any(b != a + 1 for a, b in zip(sessions, sessions[1:], strict=False)):
             raise ValueError("交易日历存在缺口，请先同步并核验")
         spec = {"dataset": self.dataset, "index_code": index_code, "start": start.isoformat(), "end": end.isoformat(), "funds": sorted(funds), "days": [r[0].isoformat() for r in rows], "mode": "fixed_group", "scope_verified": False}
+        if self.lixinger is not None:
+            spec["cap_source"] = LIXINGER_CMC
         if numerator_mode != "nav":
             spec["numerator_mode"] = numerator_mode
         claim = "index-fund:" + hashlib.sha256(_canonical(spec).encode()).hexdigest()
@@ -101,7 +105,13 @@ class IndexFundSync:
             scope = hashlib.sha256(_canonical(["index-fund-partitions-v1", spec]).encode()).hexdigest()
             months = sorted({(d.year, d.month) for d in days})
             markets = sorted({f.split('.')[0] for f in funds})
-            cap_months = months if spec["index_code"] in SQL_IDS else []
+            # Tasks created before the optional provider keep their original source.
+            cap_source = spec.get("cap_source")
+            if cap_source is None and spec["index_code"] in SQL_IDS:
+                cap_source = "sse:monthly_report"
+            if cap_source == LIXINGER_CMC and self.lixinger is None:
+                raise ValueError("任务需要理杏仁，请恢复服务器 Token 后重试。")
+            cap_months = months if cap_source else []
             total = len(funds) * len(months) + len(days) * len(markets) + len(cap_months)
             done = 0
 
@@ -125,8 +135,16 @@ class IndexFundSync:
                     for row in rows:
                         share_data[(day, row["fund_id"])] = Decimal(row["value"])
             caps = {}
+            def cap_partition(year, month):
+                if cap_source == LIXINGER_CMC:
+                    month_days = [day for day in days if (day.year, day.month) == (year, month)]
+                    records = self.lixinger.fetch_range(spec["index_code"], month_days[0], month_days[-1])
+                else:
+                    records = self.cap.fetch_month(spec["index_code"], year, month)
+                return [{"date": row.trade_date.isoformat(), "value": str(row.value_cny)} for row in records]
+
             for year, month in cap_months:
-                rows = partition(f"cap:{year:04d}-{month:02d}", lambda year=year, month=month: [{"date": row.trade_date.isoformat(), "value": str(row.value_cny)} for row in self.cap.fetch_month(spec["index_code"], year, month)])
+                rows = partition(f"cap:{year:04d}-{month:02d}", lambda year=year, month=month: cap_partition(year, month))
                 for row in rows:
                     caps[date.fromisoformat(row["date"])] = Decimal(row["value"])
             fund_rows = tuple(DailyFundInput(fund, day, share_data.get((day, fund)), values.get((day, fund))) for day in days for fund in funds)
@@ -135,12 +153,14 @@ class IndexFundSync:
             input_key, field = ("nav", "unit_nav") if numerator_mode == "nav" else ("close", "close")
             source = "akshare:eastmoney" if numerator_mode == "nav" else "eastmoney:unadjusted_daily_close"
             sources = {"akshare:" + f.split(".")[0].lower() for f in funds} | {source}
-            if cap_months:
-                sources.add("sse:monthly_report")
+            if cap_source:
+                sources.add(cap_source)
             inputs = {"shares": [{"date": d.isoformat(), "fund_id": f, "shares": str(v)} for (d, f), v in sorted(share_data.items())], input_key: [{"date": d.isoformat(), "fund_id": f, field: str(v)} for (d, f), v in sorted(values.items())], "float_cap": [{"date": d.isoformat(), "value_cny": str(v)} for d, v in sorted(caps.items()) if d in days], "sources": sorted(sources), "publication_time": None}
             warning = "固定基金组由用户指定，尚未验证基金跟踪标的或历史排名；不用于回测。"
             if not cap_months:
-                warning += "该指数历史流通市值尚未接入，仅展示固定基金组规模，占比缺失。"
+                warning += "本次同步未配置理杏仁 Token，仅获取基金规模，占比缺失。"
+            elif cap_source == LIXINGER_CMC:
+                warning += "指数流通市值来自理杏仁日度 cmc（元）；缺少同日数据时占比留空。"
             if numerator_mode == "close":
                 warning += "收盘价来源及历史覆盖尚待完整核验。"
             result = {"points": points, "scope_verified": False, "warning": warning}

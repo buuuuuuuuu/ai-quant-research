@@ -64,7 +64,10 @@ def index_fund_router(database, templates, asset_version, actor, manager):
 
     @router.get("/market/index-funds", include_in_schema=False)
     def page(request: Request):
-        return templates.TemplateResponse(request=request, name="index-funds.html", context={"asset_version": asset_version, "username": actor})
+        return templates.TemplateResponse(request=request, name="index-funds.html", context={
+            "asset_version": asset_version, "username": actor,
+            "lixinger_enabled": manager.service.lixinger is not None,
+        })
 
     @router.get("/api/v1/index-funds/{index_code}")
     def latest(index_code: str, numerator_mode: Literal["nav", "close"] | None = None):

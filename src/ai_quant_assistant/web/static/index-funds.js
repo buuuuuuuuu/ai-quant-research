@@ -59,7 +59,7 @@
   const button = document.getElementById("index-submit");
   const syncHint = document.getElementById("index-sync-hint");
   function showExamples() {
-    syncHint.hidden = hasCapSource();
+    syncHint.hidden = syncHint.dataset?.lixinger !== "1" && hasCapSource();
     const group = examples[select.value] || [];
     exampleList.replaceChildren();
     exampleList.hidden = !group.length;

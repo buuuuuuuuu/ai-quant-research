@@ -35,6 +35,7 @@ class Settings:
     alert_webhook_url: str = ""
     alert_webhook_timeout_seconds: float = 5.0
     copilot_planner: str = "rules"
+    lixinger_token: str = field(default="", repr=False)
     openai_api_key: str = field(default="", repr=False)
     openai_model: str = "gpt-5-mini"
     openai_base_url: str = "https://api.openai.com/v1"
@@ -172,6 +173,7 @@ class Settings:
                 os.getenv("AI_QUANT_ALERT_WEBHOOK_TIMEOUT_SECONDS", "5")
             ),
             copilot_planner=os.getenv("AI_QUANT_COPILOT_PLANNER", "rules").strip().lower(),
+            lixinger_token=os.getenv("AI_QUANT_LIXINGER_TOKEN", "").strip(),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_model=os.getenv("AI_QUANT_OPENAI_MODEL", "gpt-5-mini"),
             openai_base_url=os.getenv("AI_QUANT_OPENAI_BASE_URL", "https://api.openai.com/v1")

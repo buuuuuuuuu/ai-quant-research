@@ -25,10 +25,15 @@ class Cap:
         return [SimpleNamespace(trade_date=date(2026, 9, day), value_cny=Decimal("10000")) for day in (1, 2)]
 
 
-@pytest.mark.parametrize("index_code, expected_ratio", [("000300", "0.02"), ("000905", None)])
-def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_code, expected_ratio):
+@pytest.mark.parametrize(("index_code", "token", "expected_ratio"), [
+    ("000300", "", "0.02"), ("000905", "", None), ("932000", "test", "0.04"),
+])
+def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_code, token, expected_ratio):
     settings = Settings(data_dir=tmp_path / "data", artifact_dir=tmp_path / "artifacts", cache_dir=tmp_path / "cache", duckdb_path=tmp_path / "data" / "catalog.duckdb")
-    app = create_app(settings)
+    from dataclasses import replace
+    from unittest.mock import Mock
+
+    app = create_app(replace(settings, lixinger_token=token))
     db = app.state.database
     db.initialize()
     with db.connect() as c:
@@ -36,6 +41,13 @@ def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_
             c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'test','test',?)", [day, number])
     service = app.state.index_fund_tasks.service
     service.shares, service.nav, service.cap = Shares(), Nav(), Cap()
+    if token:
+        service.lixinger.client = Mock()
+        response = service.lixinger.client.post.return_value
+        response.status_code = 200
+        response.json.return_value = {"code": 1, "data": [
+            {"date": "2026-09-01T00:00:00+08:00", "stockCode": index_code, "cmc": "5000"},
+        ]}
     payload = {"index_code": index_code, "start": "2026-09-01", "end": "2026-09-02", "funds": ["SSE.510300"], "confirm": False}
     with TestClient(app) as client:
         assert client.post('/api/v1/index-funds/sync', json=payload).status_code == 422
@@ -52,7 +64,8 @@ def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_
         data = client.get('/api/v1/index-funds/' + index_code).json()['snapshot']
         assert Decimal(data['result']['points'][0]['numerator_cny']) == 200
         assert data['result']['points'][0]['ratio_fraction'] == expected_ratio
-        assert ("sse:monthly_report" in data["inputs"]["sources"]) == (expected_ratio is not None)
+        assert ("sse:monthly_report" in data["inputs"]["sources"]) == (index_code == "000300")
+        assert ("lixinger:cn/index/fundamental:cmc" in data["inputs"]["sources"]) == bool(token)
         assert data['result']['points'][1]['ratio_fraction'] is None
         assert data['result']['scope_verified'] is False
 

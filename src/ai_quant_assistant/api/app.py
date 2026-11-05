@@ -180,7 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     from ai_quant_assistant.storage.index_fund_sync import IndexFundSync
 
-    index_fund_tasks = ManagedStockTaskManager(IndexFundSync(database), datasets=(IndexFundSync.dataset,), worker_name="index-fund")
+    index_fund_tasks = ManagedStockTaskManager(IndexFundSync(database, lixinger_token=resolved_settings.lixinger_token), datasets=(IndexFundSync.dataset,), worker_name="index-fund")
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
             database, resolved_settings, task_repository, operation_lock,

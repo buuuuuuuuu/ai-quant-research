@@ -64,6 +64,12 @@
       <button id="index-resume" class="secondary-button" type="button" hidden>继续查询同步进度</button>
     </form>
 
+    <section class="fund-profiles" aria-labelledby="fund-profiles-title">
+      <h2 id="fund-profiles-title">基金详情</h2>
+      <p>点击基金名称展开：成立多久、投资范围、调仓方式及披露查询。包含当前指数示例和手动填写的基金。</p>
+      <div id="index-fund-profiles"></div>
+    </section>
+
     <fieldset>
       <legend>查看范围（仅本地快照，最近年数截至快照最后交易日）</legend>
       <div class="fund-fields">
@@ -94,6 +100,7 @@
   </section>
 </main>
 <script src="/assets/date-chart.js?v={{ asset_version }}" defer></script>
+<script src="/assets/fund-profiles.js?v={{ asset_version }}" defer></script>
 <script src="/assets/index-funds.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

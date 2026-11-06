@@ -29,28 +29,7 @@
     return xAt;
   }
 
-  // Product examples, independent of historical eligibility or size rankings.
-  // https://www.sse.com.cn/market/funddata/volumn/etfvolumn/
-  // https://www.jsfund.cn/Services/cn/jsp/pcf/index.jsp?SiteID=1&fundcode=159919_1
-  // https://www.sse.com.cn/disclosure/fund/announcement/c/new/2025-04-28/588080_20250428_99XH.pdf
-  // Additional product identities checked against the fund managers' public pages.
-  // https://www.gffunds.com.cn/funds/?fundcode=510510
-  // https://www.chinaamc.com.cn/fund/512500/
-  // https://www.jsfund.cn/Services/cn/jsp/pcf/index.jsp?SiteID=1&fundcode=159922
-  // https://api.efunds.com.cn/owch/oURL/website/weixin/wx_fundinfo.shtml?fundcode=510580
-  // https://accountquery.chinaamc.com/product/getPortfolioCompositionFile.do?fundcode=159845
-  // https://www.gffunds.com.cn/funds/?fundcode=560010
-  const examples = {
-    "000300": [["SSE.510300", "华泰柏瑞沪深300ETF"], ["SZSE.159919", "嘉实沪深300ETF"], ["SSE.510310", "易方达沪深300ETF"], ["SSE.510330", "华夏沪深300ETF"]],
-    // SSE fund report 510500_20240330_LM9Y; SZSE listing notice 2024-10-10 (159351).
-    "000852": [["SSE.512100", "南方中证1000ETF"], ["SZSE.159845", "华夏中证1000ETF"], ["SSE.560010", "广发中证1000ETF"]],
-    "932000": [["SSE.563300", "华泰柏瑞中证2000ETF"]],
-    "399006": [["SZSE.159915", "易方达创业板ETF"]],
-    "000905": [["SSE.510500", "南方中证500ETF"], ["SSE.510510", "广发中证500ETF"], ["SSE.512500", "华夏中证500ETF"], ["SZSE.159922", "嘉实中证500ETF"], ["SSE.510580", "易方达中证500ETF"]],
-    "000510": [["SZSE.159351", "嘉实中证A500ETF"]],
-    "000016": [["SSE.510050", "华夏上证50ETF"], ["SSE.510100", "易方达上证50ETF"]],
-    "000688": [["SSE.588000", "华夏科创50ETF"], ["SSE.588080", "易方达科创50ETF"]],
-  };
+  const examples = window.FundProfiles.examples;
   const fundInput = document.getElementById("index-funds");
   const exampleList = document.getElementById("index-examples");
   const fundNames = new Map(Object.values(examples).flat());
@@ -72,6 +51,7 @@
     addExamples.disabled = codes.length >= 10 || (examples[select.value] || []).every(([code]) => codes.includes(code));
     clearFunds.disabled = !codes.length;
     selectedCount.textContent = "已选 " + codes.length + " / 10 只，统计所选基金的合计规模";
+    window.FundProfiles.render(document.getElementById("index-fund-profiles"), select.value, codes);
     selectedList.replaceChildren();
     for (const code of codes) {
       const remove = document.createElement("button");

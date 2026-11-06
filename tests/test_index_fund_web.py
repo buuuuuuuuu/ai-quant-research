@@ -9,7 +9,10 @@ def test_index_page_reads_only_saved_snapshot(tmp_path):
     settings = Settings(data_dir=tmp_path / "data", artifact_dir=tmp_path / "artifacts", cache_dir=tmp_path / "cache", duckdb_path=tmp_path / "data" / "catalog.duckdb")
     app = create_app(settings)
     with TestClient(app) as client:
-        assert "指数基金规模观察" in client.get("/market/index-funds").text
+        page = client.get("/market/index-funds").text
+        assert "指数基金规模观察" in page and 'id="index-fund-profiles"' in page
+        assert page.index('/assets/fund-profiles.js') < page.index('/assets/index-funds.js')
+        assert client.get('/assets/fund-profiles.js').status_code == 200
         assert client.get("/api/v1/index-funds/000300").json()["snapshot"] is None
         assert client.get("/api/v1/index-funds/invalid").status_code == 404
         store = IndexFundSnapshotStore(app.state.database)

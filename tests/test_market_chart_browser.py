@@ -98,6 +98,16 @@ async function run(width) {
     check(doc.querySelectorAll("#index-selected button").length === 5, "toggle selection");
     check(doc.querySelector(".fund-snapshot-scope").textContent.includes("SSE.510300"),
       "actual snapshot group");
+    const cards = [...doc.querySelectorAll(".fund-profile")];
+    check(cards.length === 5, "fund profiles count");
+    const summary = cards[0].querySelector("summary");
+    summary.focus(); summary.click();
+    check(cards[0].open, "fund profile expansion");
+    check(cards[0].textContent.includes("2013-02-06"), "fund inception");
+    check(cards[0].textContent.includes("已披露持仓不等于实时持仓"), "holdings limitation");
+    check(cards[0].querySelector('a[href$="ccmx_510500.html"]'), "holdings source");
+    doc.querySelector("#index-selected button").click();
+    check(doc.querySelector(".fund-profile").open, "profile remains open on selection change");
     check(doc.documentElement.scrollWidth <= width, "page overflow");
     for (const control of doc.querySelectorAll("#index-examples button, #index-selected button")) {
       check(control.getBoundingClientRect().right <= width, "picker overflow");

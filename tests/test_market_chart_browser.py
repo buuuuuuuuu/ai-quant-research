@@ -55,7 +55,8 @@ async function run(width) {
   check(charts.length === 1, "chart count");
   for (const svg of charts) {
     const position = svg.createSVGPoint();
-    position.x = gold ? 500 : 370; position.y = 100;
+    position.x = gold ? 500 : (Number(svg.querySelector("circle").getAttribute("cx")) +
+      Number([...svg.querySelectorAll("circle")].at(-1).getAttribute("cx"))) / 2; position.y = 100;
     const screen = position.matrixTransform(svg.getScreenCTM());
     const coords = {clientX: screen.x, clientY: screen.y, bubbles: true};
     svg.dispatchEvent(new win.MouseEvent("click", coords));

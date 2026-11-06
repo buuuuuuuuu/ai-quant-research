@@ -12,8 +12,8 @@
   }
 
   // The Y labels end before the plot; X labels sit in a separate band below it.
-  function chartAxes(svg, points, low, high, flat) {
-    const left = 18 + Math.max(low.length, high.length) * 8, right = 686;
+  function chartAxes(svg, points, low, high, flat, width = 700) {
+    const left = 18 + Math.max(low.length, high.length) * 8, right = width - 14;
     const xAt = i => left + i * (right - left) / Math.max(points.length - 1, 1);
     function label(x, y, anchor, text) {
       const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -137,24 +137,29 @@
       displayedIndex = `${indexCode}（${requestedMode === "close" ? "收盘价" : "单位净值"}）`;
       const numeratorMode = payload.snapshot.spec.numerator_mode || "nav";
       const valueName = numeratorMode === "close" ? "不复权收盘价" : "单位净值";
-      const modeLabel = document.createElement("p"); modeLabel.textContent = `当前快照口径：份额 × ${valueName}${numeratorMode === "close" ? "（价格来源尚待真实历史核验）" : ""}。`; result.append(modeLabel);
+      const metadata = document.createElement("details"), metadataTitle = document.createElement("summary");
+      metadata.className = "market-snapshot-meta";
+      metadataTitle.textContent = `当前结果：${(payload.snapshot.spec.funds || []).length}只基金 · 数据来源与导出`;
+      metadata.append(metadataTitle); result.append(metadata);
+      const modeLabel = document.createElement("p"); modeLabel.textContent = `当前快照口径：份额 × ${valueName}${numeratorMode === "close" ? "（价格来源尚待真实历史核验）" : ""}。快照 ${payload.snapshot.snapshot_id}`; metadata.append(modeLabel);
       const scope = document.createElement("p");
       scope.className = "fund-snapshot-scope";
       scope.textContent = "当前结果统计 " + (payload.snapshot.spec.funds || []).map(fundLabel).join("、") +
         "；同步区间 " + (payload.snapshot.spec.start || allPoints[0]?.trade_date || "未记录") +
         " 至 " + (payload.snapshot.spec.end || allPoints.at(-1)?.trade_date || "未记录") +
         "。修改“基金选择与同步”中的参数后，需点击同步才会生成新结果。";
-      result.append(scope);
+      metadata.append(scope);
       const warning = document.createElement("p"); warning.textContent = payload.snapshot.result.warning || ""; result.append(warning);
       const download = document.createElement("a"); download.textContent = "导出完整快照 CSV";
       download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
-      download.setAttribute("download", ""); result.append(download);
+      download.setAttribute("download", ""); metadata.append(download);
       const htmlDownload = document.createElement("a"); htmlDownload.textContent = " 导出完整快照离线 HTML";
       htmlDownload.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/html`;
-      htmlDownload.setAttribute("download", ""); result.append(htmlDownload);
-      status.textContent = `快照 ${payload.snapshot.snapshot_id}；数据缺口显示为 —。`;
+      htmlDownload.setAttribute("download", ""); metadata.append(htmlDownload);
+      status.textContent = "已读取本地快照；数据缺口显示为 —。";
       const valid = points.filter(p => p.ratio_fraction !== null && Number.isFinite(Number(p.ratio_fraction)));
       const coverage = document.createElement("p");
+      coverage.className = "market-coverage";
       coverage.textContent = points.length ? `可计算 ${valid.length} / ${points.length} 个交易日；其余日期保留缺口。` : "当前快照在所选范围内没有数据。";
       result.append(coverage);
       if (valid.length) {
@@ -165,7 +170,14 @@
           const difference = (Number(latest.ratio_fraction) - Number(previous.ratio_fraction)) * 100;
           change = `${points[latestIndex - 1] === previous ? "较上一交易日" : "跨缺口较上一完整观测日"}（${previous.trade_date}）${difference >= 0 ? "+" : ""}${difference.toFixed(4)} 个百分点`;
         }
-        summary.textContent = `最新完整统计日 ${latest.trade_date}：${(Number(latest.ratio_fraction) * 100).toFixed(4)}%；${change}。基金规模 ${money(latest.numerator_cny)} 元；流通市值 ${money(latest.denominator_cny)} 元。`;
+        summary.textContent = `最新完整统计日 ${latest.trade_date}；${change}。`;
+        const stats = document.createElement("dl"); stats.className = "market-stats";
+        const compact = value => Number(value) >= 100000000 ? money(Number(value) / 100000000) + " 亿元" : money(value) + " 元";
+        for (const [name, value] of [["基金规模占比", (Number(latest.ratio_fraction) * 100).toFixed(4) + "%"], ["基金合计规模", compact(latest.numerator_cny)], ["指数流通市值", compact(latest.denominator_cny)]]) {
+          const item = document.createElement("div"), term = document.createElement("dt"), amount = document.createElement("dd");
+          term.textContent = name; amount.textContent = value; item.append(term, amount); stats.append(item);
+        }
+        result.append(stats);
         result.append(summary);
       }
       let selectDay = () => {};
@@ -179,20 +191,22 @@
         const readout = document.createElement("p");
         readout.setAttribute("aria-live", "polite");
         readout.textContent = "点击查看当日数据，滚轮缩放日期范围。";
-        let left, right;
+        let left, right, chartWidth = 700, visibleFirst = 0, visibleLast = points.length - 1;
         function choose(index) {
           selectDay(points[index].trade_date);
           readout.textContent = points[index].trade_date + " · " + name + " " +
             (values[index] == null ? "缺失" : format(values[index]));
         }
         function render(first, last) {
+          visibleFirst = first; visibleLast = last;
+          svg.setAttribute("viewBox", `0 0 ${chartWidth} 220`);
           svg.replaceChildren();
           const visible = points.slice(first, last + 1);
           const active = values.slice(first, last + 1).filter(value => value != null);
           const min = active.length ? Math.min(...active) : 0;
           const max = active.length ? Math.max(...active) : 0;
           const xAt = chartAxes(svg, visible, active.length ? format(min) : "—",
-            active.length ? format(max) : "—", min === max);
+            active.length ? format(max) : "—", min === max, chartWidth);
           left = xAt(0); right = xAt(last - first);
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
           svg.append(path);
@@ -224,6 +238,14 @@
         const selectIndex = bindDateChart(svg, {length: points.length, fractionAt: x => (x - left) / (right - left || 1),
           render, select: choose});
         parent.append(svg, readout);
+        if (window.ResizeObserver) {
+          const observer = new window.ResizeObserver(() => {
+            if (!svg.isConnected) { observer.disconnect(); return; }
+            const width = Math.max(300, Math.min(700, Math.floor(parent.clientWidth)));
+            if (width !== chartWidth) { chartWidth = width; render(visibleFirst, visibleLast); }
+          });
+          observer.observe(parent);
+        }
       }
       const table = document.createElement("table"), head = document.createElement("tr");
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }

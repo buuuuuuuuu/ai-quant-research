@@ -25,7 +25,19 @@ class Cap:
         return [SimpleNamespace(trade_date=date(2026, 9, day), value_cny=Decimal("10000")) for day in (1, 2)]
 
 
-def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path):
+class PublicCap:
+    def membership(self, index_code):
+        assert index_code == "000905"
+        return [["000001", "2020-01-01", None]]
+
+    def daily(self, index_code, day, intervals):
+        if day.day == 1:
+            return {"date": day.isoformat(), "value": "5000", "members": 500, "member_cap_sha256": "example"}
+        return None
+
+
+@pytest.mark.parametrize("index_code, expected_ratio", [("000300", "0.02"), ("000905", "0.04")])
+def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_code, expected_ratio):
     settings = Settings(data_dir=tmp_path / "data", artifact_dir=tmp_path / "artifacts", cache_dir=tmp_path / "cache", duckdb_path=tmp_path / "data" / "catalog.duckdb")
     app = create_app(settings)
     db = app.state.database
@@ -35,7 +47,8 @@ def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path):
             c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'test','test',?)", [day, number])
     service = app.state.index_fund_tasks.service
     service.shares, service.nav, service.cap = Shares(), Nav(), Cap()
-    payload = {"index_code": "000300", "start": "2026-09-01", "end": "2026-09-02", "funds": ["SSE.510300"], "confirm": False}
+    service.public_cap = PublicCap()
+    payload = {"index_code": index_code, "start": "2026-09-01", "end": "2026-09-02", "funds": ["SSE.510300"], "confirm": False}
     with TestClient(app) as client:
         assert client.post('/api/v1/index-funds/sync', json=payload).status_code == 422
         payload['confirm'] = True
@@ -48,8 +61,14 @@ def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path):
                 break
             time.sleep(0.02)
         assert task['status'] == 'succeeded', task
-        data = client.get('/api/v1/index-funds/000300').json()['snapshot']
-        assert data['result']['points'][0]['ratio_fraction'] == '0.02'
+        data = client.get('/api/v1/index-funds/' + index_code).json()['snapshot']
+        assert Decimal(data['result']['points'][0]['numerator_cny']) == 200
+        assert data['result']['points'][0]['ratio_fraction'] == expected_ratio
+        assert ("sse:monthly_report" in data["inputs"]["sources"]) == (index_code == "000300")
+        if index_code == "000905":
+            assert data["inputs"]["cap_evidence"][0]["members"] == 500
+            assert data["inputs"]["index_membership"] == [["000001", "2020-01-01", None]]
+            assert data["spec"]["cap_source"] in data["inputs"]["sources"]
         assert data['result']['points'][1]['ratio_fraction'] is None
         assert data['result']['scope_verified'] is False
 

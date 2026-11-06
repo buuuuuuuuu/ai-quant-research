@@ -3,19 +3,23 @@ const {readFileSync} = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const source = readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static/index-funds.js"), "utf8");
+const source = ["date-chart.js", "fund-profiles.js", "index-funds.js"].map(name =>
+  readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static", name), "utf8")
+).join("\n");
 
 class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.style = {}; this.listeners = {}; this.value = ""; this.textContent = ""; }
+  focus() { this.focused = true; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { (this.attributes ||= {})[name] = String(value); }
+  getAttribute(name) { return this.attributes?.[name]; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
 }
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
 
 test("daily details use the selected snapshot day and preserve missing values", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -35,13 +39,13 @@ test("daily details use the selected snapshot day and preserve missing values", 
   const texts = descendants(root).map(e => e.textContent);
   assert.ok(texts.includes("200.00"));
   assert.ok(texts.includes("2.0000%"));
-  assert.ok(texts.includes("SZSE.159919"));
+  assert.ok(texts.some(text => text.includes("SZSE.159919")));
   assert.ok(texts.includes("—"));
   assert.deepEqual(calls, ["/api/v1/index-funds/000300?numerator_mode=nav"]);
 });
 
 test("chart clicks and accessible date buttons select the same snapshot day, including gaps", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -75,7 +79,7 @@ test("chart clicks and accessible date buttons select the same snapshot day, inc
 });
 
 test("additional trends use snapshot inputs, keep gaps and require no new request", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav"; elements["index-range"].value = "all";
   const snapshot = {snapshot_id:"s",spec:{funds:["SSE.510300"]},inputs:{shares:[{date:"2026-09-01",fund_id:"SSE.510300",shares:"100"}],nav:[{date:"2026-09-01",fund_id:"SSE.510300",unit_nav:"2"}]},result:{points:[{trade_date:"2026-09-01",numerator_cny:"200",denominator_cny:"10000",ratio_fraction:"0.02"},{trade_date:"2026-09-02",numerator_cny:null,denominator_cny:null,ratio_fraction:null}]}};
   let calls = 0;
@@ -91,7 +95,7 @@ test("additional trends use snapshot inputs, keep gaps and require no new reques
 });
 
 test("failed index read keeps prior snapshot labelled while older responses are ignored", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -117,7 +121,7 @@ test("failed index read keeps prior snapshot labelled while older responses are 
 });
 
 test("mode switch reads matching local snapshot and labels close correctly", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   elements["index-numerator"].value = "nav";
   elements["index-range"].value = "all";
@@ -136,7 +140,7 @@ test("mode switch reads matching local snapshot and labels close correctly", asy
 });
 
 test("custom display range uses local snapshot without changing export and rejects invalid dates", async () => {
-  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
   elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav"; elements["index-range"].value = "all";
   const snapshot = {snapshot_id:"same",spec:{funds:[]},inputs:{},result:{points:[
     {trade_date:"2024-01-01",ratio_fraction:null}, {trade_date:"2025-01-01",ratio_fraction:null}, {trade_date:"2026-01-01",ratio_fraction:null},
@@ -157,8 +161,8 @@ test("custom display range uses local snapshot without changing export and rejec
 });
 
 test("fund examples append once, respect the cap, and keep each index draft separate", async () => {
-  const ids = ["index-code", "index-funds", "index-examples", "index-numerator", "index-range",
-    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"];
+  const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range",
+    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
   const picker = elements["index-code"], input = elements["index-funds"], list = elements["index-examples"];
   picker.value = "000300"; input.value = "SSE.510330";
@@ -171,8 +175,10 @@ test("fund examples append once, respect the cap, and keep each index draft sepa
   vm.runInNewContext(source, {document, window: {}, fetch, setTimeout});
   const example = list.children.find(b => b.value === "SZSE.159919");
   example.listeners.click(); example.listeners.click();
+  assert.equal(input.value, "SSE.510330");
+  example.listeners.click();
   assert.equal(input.value, "SSE.510330,SZSE.159919");
-  assert.equal(example.disabled, true);
+  assert.equal(example.attributes["aria-pressed"], "true");
   assert.equal(calls.length, 1);
   picker.value = "000016"; picker.listeners.change();
   assert.equal(input.value, "");
@@ -181,15 +187,26 @@ test("fund examples append once, respect the cap, and keep each index draft sepa
   input.listeners.input();
   assert.ok(list.children.every(b => b.disabled));
   picker.value = "000905"; picker.listeners.change();
-  assert.equal(list.hidden, true);
+  assert.equal(list.hidden, false);
+  assert.equal(list.children[0].value, "SSE.510500");
+  assert.ok(!elements["index-submit"].disabled);
+  assert.equal(elements["index-sync-hint"].hidden, false);
+  picker.value = "000510"; picker.listeners.change();
+  assert.equal(list.children[0].value, "SZSE.159351");
+  for (const [code, fund] of [["000852", "SSE.512100"], ["932000", "SSE.563300"], ["399006", "SZSE.159915"]]) {
+    picker.value = code; picker.listeners.change();
+    assert.equal(list.children[0].value, fund);
+    assert.ok(!elements["index-submit"].disabled);
+  }
   picker.value = "000300"; picker.listeners.change();
   assert.equal(input.value, "SSE.510330,SZSE.159919");
+  assert.ok(!elements["index-submit"].disabled);
   assert.ok(calls.every(c => !c.opts));
 });
 
 test("large CNY labels stay left of the plot when the index cap is missing", async () => {
-  const ids = ["index-code", "index-funds", "index-examples", "index-numerator", "index-range",
-    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit"];
+  const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range",
+    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
   elements["index-code"].value = "000300";
   const document = {getElementById: id => elements[id], createElement: tag => new Element(tag),
@@ -207,4 +224,120 @@ test("large CNY labels stay left of the plot when the index cap is missing", asy
   const firstX = Number(nodes.find(n => n.tag === "path").attributes.d.match(/M([\d.]+)/)[1]);
   assert.equal(label.attributes["text-anchor"], "end");
   assert.ok(Number(label.attributes.x) <= firstX - 10);
+});
+
+function syncHarness(fetch, storage = new Map()) {
+  const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range",
+    "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit",
+    "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples",
+    "index-clear-funds", "index-resume", "index-start", "index-end"];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  elements["index-code"].value = "000905";
+  elements["index-numerator"].value = "nav";
+  elements["index-start"].value = "2026-09-01";
+  elements["index-end"].value = "2026-09-02";
+  const document = {getElementById: id => elements[id], createElement: tag => new Element(tag)};
+  const window = {confirm: () => true, sessionStorage: {
+    getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
+    removeItem: key => storage.delete(key),
+  }};
+  vm.runInNewContext(source, {document, window, fetch, setTimeout: fn => setImmediate(fn)});
+  return elements;
+}
+
+test("bulk selection, removal and manual input normalization never submit a task", () => {
+  const calls = [];
+  const elements = syncHarness(async (url, options) => {
+    calls.push({url, options});
+    return {ok: true, json: async () => ({snapshot: null})};
+  });
+  elements["index-add-examples"].listeners.click();
+  assert.equal(elements["index-selected"].children.length, 5);
+  assert.match(elements["index-selected-count"].textContent, /已选 5/);
+  elements["index-selected"].children[0].listeners.click();
+  assert.ok(!elements["index-funds"].value.includes("SSE.510500"));
+  elements["index-funds"].value = "sse.510500；SSE.510500, szse.159922";
+  elements["index-funds"].listeners.input();
+  assert.equal(elements["index-selected"].children.length, 2);
+  elements["index-clear-funds"].listeners.click();
+  assert.equal(elements["index-funds"].value, "");
+  assert.ok(calls.every(call => !call.options));
+});
+
+test("invalid dates and known wrong-index funds are rejected before submission", async () => {
+  let posts = 0;
+  const elements = syncHarness(async (url, options) => {
+    if (options) posts++;
+    return {ok: true, json: async () => ({snapshot: null})};
+  });
+  const submit = () => elements["index-sync"].listeners.submit({preventDefault() {}});
+  elements["index-funds"].value = "SSE.510300";
+  await submit();
+  assert.match(elements["index-task"].textContent, /跟踪其他指数/);
+  elements["index-start"].value = "2026-09-03";
+  await submit();
+  assert.match(elements["index-task"].textContent, /开始日期/);
+  assert.equal(posts, 0);
+});
+
+test("interrupted polling resumes the submitted task and prevents duplicate submission", async () => {
+  let posts = 0, polls = 0, resolveSubmit;
+  const storage = new Map();
+  const elements = syncHarness(async (url, options) => {
+    if (options) {
+      posts++;
+      return new Promise(resolve => { resolveSubmit = resolve; });
+    }
+    if (url.includes("/tasks/")) {
+      polls++;
+      if (polls === 1) throw Error("network interrupted");
+      return {ok: true, json: async () => ({status: "succeeded"})};
+    }
+    return {ok: true, json: async () => ({snapshot: null})};
+  }, storage);
+  elements["index-funds"].value = "SSE.510500";
+  const submit = () => elements["index-sync"].listeners.submit({preventDefault() {}});
+  const first = submit();
+  assert.equal(elements["index-funds"].disabled, true);
+  await submit();
+  assert.equal(posts, 1);
+  resolveSubmit({ok: true, json: async () => ({task_id: "existing", status: "queued"})});
+  await first;
+  assert.match(elements["index-task"].textContent, /后台可能仍在运行/);
+  assert.equal(elements["index-resume"].hidden, false);
+  assert.equal(storage.size, 1);
+  await submit();
+  assert.equal(posts, 1);
+  assert.equal(storage.size, 0);
+  assert.match(elements["index-task"].textContent, /同步完成/);
+});
+
+test("refresh resumes a stored task without posting another synchronization", async () => {
+  const storage = new Map([["index-fund-pending-task", JSON.stringify({
+    task_id: "existing", status: "queued", index_code: "000852", numerator_mode: "nav",
+  })]]);
+  const calls = [];
+  const elements = syncHarness(async (url, options) => {
+    calls.push({url, options});
+    return {ok: true, json: async () => url.includes("/tasks/") ?
+      {status: "succeeded"} : {snapshot: null}};
+  }, storage);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements["index-code"].value, "000852");
+  assert.ok(calls.some(call => call.url.endsWith("/tasks/existing")));
+  assert.ok(calls.every(call => !call.options));
+  assert.equal(storage.size, 0);
+});
+
+test("a removed saved task releases tracking so a new sync can be submitted", async () => {
+  const storage = new Map([["index-fund-pending-task", JSON.stringify({
+    task_id: "gone", status: "queued", index_code: "000905", numerator_mode: "nav",
+  })]]);
+  const elements = syncHarness(async url => url.includes("/tasks/") ?
+    {ok: false, status: 404} : {ok: true, json: async () => ({snapshot: null})}, storage);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(storage.size, 0);
+  assert.equal(elements["index-submit"].disabled, false);
+  assert.equal(elements["index-submit"].textContent, "同步所选基金");
+  assert.match(elements["index-task"].textContent, /原同步任务已不存在/);
 });

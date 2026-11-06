@@ -3,6 +3,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 required = {
+    "ai_quant_assistant/web/static/fund-profiles.js",
     "ai_quant_assistant/reports/presentation.py",
     "ai_quant_assistant/reports/templates/factor_lab.html.j2",
     "ai_quant_assistant/reports/templates/factor_backtest.html.j2",

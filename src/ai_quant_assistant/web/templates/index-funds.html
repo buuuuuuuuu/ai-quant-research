@@ -28,7 +28,7 @@
     </div>
 
     <form id="index-sync">
-      <p>固定基金组：可手动填写代码，或点击下方基金示例添加，最多10只，代码用逗号分隔。当前不自动判断头部排名。</p>
+      <p>选择要统计的基金，最多10只。下方提供部分跟踪该指数的 ETF 示例，支持手动补充。</p>
       <p>最多同步1831个自然日；长区间可能耗时较久。失败后使用相同指数、日期及基金重试，可继续已完成的分区。</p>
       <div class="fund-fields">
         <div class="fund-field fund-full-row">
@@ -48,13 +48,27 @@
         </div>
         <div class="fund-field fund-full-row">
           <label for="index-funds">基金代码</label>
-          <input id="index-funds" placeholder="交易所.六位代码" required>
+          <input id="index-funds" placeholder="例如 SSE.510500,SZSE.159922" aria-describedby="index-selected-count" required>
         </div>
-        <div id="index-examples" class="fund-full-row" role="group" aria-label="点击添加该指数的基金示例" hidden></div>
-        <button id="index-submit" class="primary-button" type="submit">同步固定基金组</button>
+        <div class="fund-full-row fund-picker-actions">
+          <button id="index-add-examples" class="secondary-button" type="button">添加全部示例</button>
+          <button id="index-clear-funds" class="secondary-button" type="button">清空已选</button>
+          <span id="index-selected-count" role="status"></span>
+        </div>
+        <div id="index-examples" class="fund-full-row" role="group" aria-label="点击选择或取消该指数的基金示例" hidden></div>
+        <div id="index-selected" class="fund-full-row" role="group" aria-label="已选基金，点击移除"></div>
+        <p id="index-sync-hint" class="fund-full-row" hidden>流通市值按当日成分股汇总，使用免费公开数据。成分或估值缺失的日期显示为 —。</p>
+        <button id="index-submit" aria-describedby="index-sync-hint" class="primary-button" type="submit">同步所选基金</button>
       </div>
       <p id="index-task" role="status"></p>
+      <button id="index-resume" class="secondary-button" type="button" hidden>继续查询同步进度</button>
     </form>
+
+    <section class="fund-profiles" aria-labelledby="fund-profiles-title">
+      <h2 id="fund-profiles-title">基金详情</h2>
+      <p>点击基金名称展开：成立多久、投资范围、调仓方式及披露查询。包含当前指数示例和手动填写的基金。</p>
+      <div id="index-fund-profiles"></div>
+    </section>
 
     <fieldset>
       <legend>查看范围（仅本地快照，最近年数截至快照最后交易日）</legend>
@@ -85,6 +99,8 @@
     <div id="index-result"></div>
   </section>
 </main>
+<script src="/assets/date-chart.js?v={{ asset_version }}" defer></script>
+<script src="/assets/fund-profiles.js?v={{ asset_version }}" defer></script>
 <script src="/assets/index-funds.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

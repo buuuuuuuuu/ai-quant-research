@@ -226,3 +226,62 @@ body:has(.app-sidebar) dialog::backdrop { background: rgba(10, 32, 27, .45); }
   font-variant-numeric: tabular-nums;
   padding: 6px 12px;
 }
+
+/* Index fund selection and the actual published group. */
+.fund-picker-actions, #index-selected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .65rem;
+}
+.fund-observation #index-examples button[aria-pressed="true"] {
+  background: #e5f2ec;
+  border-color: #176c56;
+  color: #145441;
+}
+.fund-observation #index-selected button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fund-snapshot-scope {
+  padding: .85rem;
+  background: #f0f6f3;
+  border-left: 3px solid #176c56;
+  overflow-wrap: anywhere;
+}
+.fund-observation #index-task { overflow-wrap: anywhere; }
+.fund-observation #index-resume[hidden] { display: none; }
+
+.fund-profiles { margin: 2rem 0; }
+.fund-profile {
+  margin: .65rem 0;
+  border: 1px solid #cdded6;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.fund-profile summary {
+  padding: 1rem;
+  cursor: pointer;
+  color: #145441;
+  font-weight: 600;
+  min-height: 44px;
+}
+.fund-profile summary:focus-visible { outline: 2px solid #176c56; outline-offset: 2px; }
+.fund-profile[open] summary { background: #f0f6f3; border-radius: 10px 10px 0 0; }
+.fund-profile-body { padding: 0 1rem 1rem; }
+.fund-profile dl {
+  display: grid;
+  grid-template-columns: 8em minmax(0, 1fr);
+  gap: .85rem 1.25rem;
+  line-height: 1.7;
+}
+.fund-profile dt { font-weight: 600; }
+.fund-profile dd { margin: 0; min-width: 0; }
+.fund-profile-links { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+.fund-profile-links a { display: inline-flex; align-items: center; min-height: 44px; }
+.fund-profile-body > p { color: #52685e; font-size: .9rem; line-height: 1.7; }
+@media (max-width: 600px) {
+  .fund-profile dl { grid-template-columns: minmax(0, 1fr); gap: .35rem; }
+  .fund-profile dd { margin-bottom: .75rem; }
+}

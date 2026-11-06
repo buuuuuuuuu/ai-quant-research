@@ -36,8 +36,8 @@ jobs:
       - name: Lint Python source
         run: uv run ruff check .
 
-      - name: Execute offline tests
-        run: uv run pytest
+      - name: Check market browser interactions and render screenshots
+        run: uv run pytest tests/test_market_chart_browser.py
         env:
           AI_QUANT_UI_SCREENSHOT_DIR: ${{ runner.temp }}/market-ui
 
@@ -49,6 +49,9 @@ jobs:
           path: ${{ runner.temp }}/market-ui
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Execute remaining offline tests
+        run: uv run pytest --ignore=tests/test_market_chart_browser.py
 
       - name: Validate browser JavaScript
         run: for script in src/ai_quant_assistant/web/static/*.js; do node --check "$script"; done

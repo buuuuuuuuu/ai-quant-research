@@ -164,7 +164,6 @@ async function run(width) {
          f"--user-data-dir={tmp_path / 'profile'}", "--dump-dom", path.as_uri()],
         capture_output=True, text=True, timeout=45, check=True,
     )
-    assert '<output id="result">passed</output>' in output.stdout, output.stdout[:2000]
     # CI can retain real browser renders for review, without committing generated files.
     if directory := os.environ.get("AI_QUANT_UI_SCREENSHOT_DIR"):
         destination = Path(directory)
@@ -179,3 +178,4 @@ async function run(width) {
                  (tmp_path / "chart.html").as_uri()],
                 capture_output=True, text=True, timeout=30, check=True,
             )
+    assert '<output id="result">passed</output>' in output.stdout, output.stdout[:2000]

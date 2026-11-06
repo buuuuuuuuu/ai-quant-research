@@ -239,15 +239,31 @@ test("large CNY labels stay left of the plot when the index cap is missing", asy
     trade_date: "2026-11-0" + (i + 2), numerator_cny: amount, denominator_cny: null, ratio_fraction: null,
   }));
   const snapshot = {snapshot_id: "large", spec: {funds: ["SSE.510300"]}, result: {points}, inputs: {}};
-  vm.runInNewContext(source, {document, window: {}, fetch: async () => ({ok: true, json: async () => ({snapshot})}), setTimeout});
+  const observers = new Set();
+  class ResizeObserver {
+    observe() { observers.add(this); }
+    disconnect() { observers.delete(this); }
+  }
+  let payload = {snapshot};
+  vm.runInNewContext(source, {document, window: {ResizeObserver}, fetch: async () => ({ok: true, json: async () => payload}), setTimeout});
   await new Promise(resolve => setImmediate(resolve));
   const nodes = descendants(elements["index-result"]);
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "194,842,433,071.93"));
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "—"));
-  const label = nodes.find(n => n.tag === "text" && n.textContent === "169,447,599,578.56");
+  const label = nodes.find(n => n.tag === "text" && n.textContent === "1,694.48亿元");
   const firstX = Number(nodes.find(n => n.tag === "path").attributes.d.match(/M([\d.]+)/)[1]);
   assert.equal(label.attributes["text-anchor"], "end");
   assert.ok(Number(label.attributes.x) <= firstX - 10);
+  nodes.find(n => n.tag === "circle").listeners.click();
+  assert.ok(descendants(elements["index-result"]).some(n => n.textContent.includes("169,447,599,578.56")), "selected readout retains full CNY amount");
+  const metric = nodes.filter(n => n.tag === "select").at(-1);
+  for (let i = 0; i < 5; i++) {
+    metric.listeners.change();
+    assert.equal(observers.size, 1, "replacing a chart must release the previous observer");
+  }
+  payload = {snapshot: null};
+  await elements["index-numerator"].listeners.change();
+  assert.equal(observers.size, 0, "empty snapshots release chart observers");
 });
 
 function syncHarness(fetch, storage = new Map()) {
@@ -330,10 +346,17 @@ test("interrupted polling resumes the submitted task and prevents duplicate subm
   assert.match(elements["index-task"].textContent, /后台可能仍在运行/);
   assert.equal(elements["index-resume"].hidden, false);
   assert.equal(storage.size, 1);
+  for (const id of ["index-code", "index-numerator", "index-funds", "index-start", "index-end", "index-add-examples", "index-clear-funds"]) {
+    assert.equal(elements[id].disabled, true, id + " must remain locked while the task is unresolved");
+  }
+  assert.ok(elements["index-selected"].children.every(control => control.disabled));
+  assert.equal(elements["index-resume"].disabled, false);
   await submit();
   assert.equal(posts, 1);
   assert.equal(storage.size, 0);
   assert.match(elements["index-task"].textContent, /同步完成/);
+  assert.equal(elements["index-code"].disabled, false);
+  assert.equal(elements["index-funds"].disabled, false);
 });
 
 test("refresh resumes a stored task without posting another synchronization", async () => {

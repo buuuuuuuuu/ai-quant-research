@@ -104,6 +104,7 @@
   fundInput.addEventListener("input", updateExampleButtons);
   showExamples();
   let request = 0, displayedIndex = null;
+  let disconnectTrend = () => {};
   async function load() {
     const id = ++request, indexCode = select.value, requestedMode = modeSelect.value;
     status.textContent = displayedIndex ? `正在读取 ${indexCode}；暂时保留 ${displayedIndex} 的数据。` : "正在读取本地数据…";
@@ -112,7 +113,7 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = await response.json();
       if (id !== request) return;
-      if (!payload.snapshot) { result.replaceChildren(); displayedIndex = null; status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
+      if (!payload.snapshot) { disconnectTrend(); result.replaceChildren(); displayedIndex = null; status.textContent = "本地暂无数据；需要先准备基金和指数流通市值数据。"; return; }
       const allPoints = payload.snapshot.result.points || [];
       const range = document.getElementById("index-range").value;
       let points = allPoints;
@@ -132,6 +133,7 @@
         const start = cutoff.toISOString().slice(0, 10);
         points = allPoints.filter(p => p.trade_date > start && p.trade_date <= end);
       }
+      disconnectTrend();
       result.replaceChildren();
       displayedIndex = null;
       displayedIndex = `${indexCode}（${requestedMode === "close" ? "收盘价" : "单位净值"}）`;
@@ -181,7 +183,7 @@
         result.append(summary);
       }
       let selectDay = () => {};
-      function addTrend(parent, values, format, name) {
+      function addTrend(parent, values, format, name, axisFormat = format) {
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
         svg.setAttribute("viewBox", "0 0 700 220");
         svg.setAttribute("role", "group");
@@ -205,8 +207,8 @@
           const active = values.slice(first, last + 1).filter(value => value != null);
           const min = active.length ? Math.min(...active) : 0;
           const max = active.length ? Math.max(...active) : 0;
-          const xAt = chartAxes(svg, visible, active.length ? format(min) : "—",
-            active.length ? format(max) : "—", min === max, chartWidth);
+          const xAt = chartAxes(svg, visible, active.length ? axisFormat(min) : "—",
+            active.length ? axisFormat(max) : "—", min === max, chartWidth);
           left = xAt(0); right = xAt(last - first);
           const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
           svg.append(path);
@@ -245,6 +247,7 @@
             if (width !== chartWidth) { chartWidth = width; render(visibleFirst, visibleLast); }
           });
           observer.observe(parent);
+          disconnectTrend = () => observer.disconnect();
         }
       }
       const table = document.createElement("table"), head = document.createElement("tr");
@@ -316,6 +319,7 @@
         const units = new Map(((numeratorMode === "close" ? inputs.close : inputs.nav) || []).map(row => [`${row.date}|${row.fund_id}`, numeratorMode === "close" ? row.close : row.unit_nav]));
         const number = value => value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
         function drawMetric() {
+          disconnectTrend();
           graph.replaceChildren();
           const selected = metric.value, name = options.find(option => option[0] === selected)?.[1];
           if (!name) return;
@@ -329,7 +333,11 @@
           const validValues = values.filter(value => value != null && Number.isFinite(value));
           if (!validValues.length) { const message = document.createElement("p"); message.textContent = `${name}：所选范围没有可计算的数据。`; graph.append(message); return; }
           const format = selected === "numerator" || selected === "denominator" ? money : value => value.toFixed(2) + "%";
-          addTrend(graph, values, format, name);
+          const magnitude = Math.max(...validValues.map(value => Math.abs(value)));
+          const unit = magnitude >= 1e12 ? [1e12, "万亿元"] : magnitude >= 1e8 ? [1e8, "亿元"] : magnitude >= 1e4 ? [1e4, "万元"] : [1, ""];
+          const axisFormat = selected === "numerator" || selected === "denominator" ?
+            value => money(value / unit[0]) + unit[1] : format;
+          addTrend(graph, values, format, name, axisFormat);
         }
         metric.addEventListener("change", drawMetric); drawMetric();
       }
@@ -348,14 +356,15 @@
   }
   function setBusy(value) {
     busy = value;
-    button.disabled = value; select.disabled = value; modeSelect.disabled = value;
+    const locked = value || pendingTask !== null;
+    button.disabled = value; select.disabled = locked; modeSelect.disabled = locked;
     resume.disabled = value;
     button.textContent = pendingTask ? "继续查询同步进度" : "同步所选基金";
-    fundInput.disabled = value;
-    document.getElementById("index-start").disabled = value;
-    document.getElementById("index-end").disabled = value;
+    fundInput.disabled = locked;
+    document.getElementById("index-start").disabled = locked;
+    document.getElementById("index-end").disabled = locked;
     updateExampleButtons();
-    if (value) {
+    if (locked) {
       addExamples.disabled = clearFunds.disabled = true;
       for (const control of [...exampleList.children, ...selectedList.children]) control.disabled = true;
     }

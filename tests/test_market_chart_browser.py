@@ -31,8 +31,8 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
     html = client.get(f"/market/{page}?days=7").text.replace('"/assets/', f'"{STATIC.as_uri()}/')
     snapshot = {"snapshot_id": "test", "spec": {"funds": ["SSE.510300"]}, "inputs": {},
                 "result": {"points": [
-                    {"trade_date": day, "numerator_cny": str(price), "denominator_cny": "10000",
-                     "ratio_fraction": str(price / 10000)} for day, price in closes.items()
+                    {"trade_date": day, "numerator_cny": str(price * 100_000_000), "denominator_cny": "10000000000000",
+                     "ratio_fraction": str(price / 100000)} for day, price in closes.items()
                 ]}}
     mock = "<script>window.requests=[];window.fetch=async(url,options)=>{window.requests.push({url,options});return {ok:true,json:async()=>(" + json.dumps(
         {"snapshot": snapshot}
@@ -84,6 +84,23 @@ async function run(width) {
     }
   }
   if (!gold) {
+    const metric = doc.querySelector(".market-trends select");
+    for (const name of ["numerator", "denominator", "ratio"]) {
+      metric.value = name; metric.dispatchEvent(new win.Event("change"));
+      await new Promise(resolve => win.setTimeout(resolve, 60));
+      const svg = doc.querySelector(".market-trends svg");
+      const labels = [...svg.querySelectorAll("text")];
+      const dates = labels.slice(-2).map(node => node.getBoundingClientRect());
+      check(dates[0].right < dates[1].left, name + " date labels overlap");
+      const circles = [...svg.querySelectorAll("circle")];
+      const price = labels[0].getBoundingClientRect();
+      check(price.right < circles[0].getBoundingClientRect().left, name + " value overlaps plot");
+      if (name !== "ratio") {
+        check(labels[0].textContent.includes(name === "numerator" ? "亿元" : "万亿元"), "compact CNY unit");
+        circles[0].dispatchEvent(new win.MouseEvent("click", {bubbles: true}));
+        check(doc.querySelector(".market-trends p").textContent.includes(name === "numerator" ? "85,100,000,000.00" : "10,000,000,000,000.00"), "full CNY readout");
+      }
+    }
     check(!doc.querySelector("#market-chart").hidden, "chart is initial panel");
     check(doc.querySelector("#market-settings").hidden, "settings initially hidden");
     const disclosure = doc.querySelector("#market-list-disclosure");
@@ -172,14 +189,23 @@ async function run(width) {
     if directory := os.environ.get("AI_QUANT_UI_SCREENSHOT_DIR"):
         destination = Path(directory)
         destination.mkdir(parents=True, exist_ok=True)
-        for width in (390, 768, 1440):
-            subprocess.run(
-                [CHROME, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
-                 "--allow-file-access-from-files", "--virtual-time-budget=1500",
-                 f"--user-data-dir={tmp_path / 'screenshot-profile'}",
-                 f"--window-size={width},1800", "--force-device-scale-factor=1",
-                 f"--screenshot={destination / f'{page}-{width}.png'}",
-                 (tmp_path / "chart.html").as_uri()],
-                capture_output=True, text=True, timeout=30, check=True,
-            )
+        renders = [(page, "chart.html")]
+        if page == "index-funds":
+            cap_script = """<script>window.addEventListener('load', () => {
+              const metric = document.querySelector('.market-trends select');
+              metric.value = 'denominator'; metric.dispatchEvent(new Event('change'));
+            });</script>"""
+            (tmp_path / "chart-cap.html").write_text((tmp_path / "chart.html").read_text() + cap_script)
+            renders.append(("index-funds-cap", "chart-cap.html"))
+        for name, filename in renders:
+            for width in (390, 768, 1440):
+                subprocess.run(
+                    [CHROME, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
+                     "--allow-file-access-from-files", "--virtual-time-budget=1500",
+                     f"--user-data-dir={tmp_path / 'screenshot-profile'}",
+                     f"--window-size={width},1800", "--force-device-scale-factor=1",
+                     f"--screenshot={destination / f'{name}-{width}.png'}",
+                     (tmp_path / filename).as_uri()],
+                    capture_output=True, text=True, timeout=30, check=True,
+                )
     assert '<output id="result">passed</output>' in output.stdout, output.stdout[:2000]

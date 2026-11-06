@@ -86,6 +86,9 @@ async function run(width) {
   if (!gold) {
     check(!doc.querySelector("#market-chart").hidden, "chart is initial panel");
     check(doc.querySelector("#market-settings").hidden, "settings initially hidden");
+    const disclosure = doc.querySelector("#market-list-disclosure");
+    check(disclosure.open === (width > 700), "mobile watchlist starts compact");
+    if (!disclosure.open) disclosure.querySelector("summary").click();
     const search = doc.querySelector("#market-search");
     search.value = "zz500"; search.dispatchEvent(new win.Event("input"));
     check([...doc.querySelectorAll(".market-watch-row")].filter(row => !row.hidden).length === 1, "index search");

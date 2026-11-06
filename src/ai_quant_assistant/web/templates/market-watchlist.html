@@ -1,5 +1,7 @@
 <aside class="market-watchlist" aria-label="市场列表与自选">
   <div class="market-watch-heading"><h2>市场列表</h2><span>指数 · 黄金</span></div>
+  <details id="market-list-disclosure" open>
+  <summary>搜索市场 / 我的自选</summary>
   <label for="market-search">搜索名称或代码 <kbd>/</kbd></label>
   <input id="market-search" type="search" placeholder="中证500 / 000905" autocomplete="off">
   <label class="market-favorites-filter"><input id="market-favorites-only" type="checkbox"> 只看自选</label>
@@ -12,5 +14,6 @@
     {% endfor %}
   </nav>
   <p id="market-no-match" hidden>没有匹配项，可修改搜索或取消“只看自选”。</p>
+  </details>
   <p id="market-watch-note">自选仅保存在当前浏览器。切换市场只读取本地数据。</p>
 </aside>

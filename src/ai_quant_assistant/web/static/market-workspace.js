@@ -3,6 +3,10 @@
   const root = document.querySelector(".market-workspace");
   if (!root) return;
   const select = document.getElementById("index-code");
+  const listDisclosure = document.getElementById("market-list-disclosure");
+  const narrow = window.matchMedia("(max-width: 700px)");
+  listDisclosure.open = !narrow.matches;
+  narrow.addEventListener("change", () => { listDisclosure.open = !narrow.matches; });
   const rows = [...root.querySelectorAll(".market-watch-row")];
   const search = document.getElementById("market-search");
   const favoritesOnly = document.getElementById("market-favorites-only");
@@ -75,6 +79,10 @@
       }
       showTab("chart");
       updateSelection();
+      if (narrow.matches) {
+        listDisclosure.open = false;
+        const title = document.getElementById("market-title"); title.tabIndex = -1; title.focus();
+      }
     });
   }
   search.addEventListener("input", filterRows);
@@ -113,7 +121,7 @@
   document.addEventListener("keydown", event => {
     if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing ||
         event.target.closest?.("input, textarea, select, [contenteditable='true'], [role='textbox']")) return;
-    if (event.key === "/") { event.preventDefault(); search.focus(); }
+    if (event.key === "/") { event.preventDefault(); listDisclosure.open = true; search.focus(); }
     else if (event.key === "F10" && select) { event.preventDefault(); showTab("profiles", true); }
   });
   if (select) {

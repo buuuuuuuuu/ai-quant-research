@@ -109,7 +109,8 @@ class IndexFundSync:
             if numerator_mode not in {"nav", "close"}:
                 raise ValueError("不支持的基金规模口径")
             # Bump this version when provider normalization or partition semantics change.
-            scope = hashlib.sha256(_canonical(["index-fund-partitions-v1", spec]).encode()).hexdigest()
+            partition_version = "index-fund-public-v2" if cap_source == PUBLIC_CAP_SOURCE else "index-fund-partitions-v1"
+            scope = hashlib.sha256(_canonical([partition_version, spec]).encode()).hexdigest()
             months = sorted({(d.year, d.month) for d in days})
             markets = sorted({f.split('.')[0] for f in funds})
             cap_months = months if spec["index_code"] in SQL_IDS else []
@@ -165,7 +166,10 @@ class IndexFundSync:
             warning = "固定基金组由用户指定，尚未验证基金跟踪标的或历史排名；不用于回测。"
             if cap_source == PUBLIC_CAP_SOURCE:
                 inputs["cap_evidence"] = reconstructed
-                warning += "流通市值按新浪成分记录及东方财富个股流通市值汇总。成分、估值不全或剔除日期口径不明时，当日占比留空。"
+                inputs["index_membership"] = intervals
+                if not intervals:
+                    warning += "公开成分名单不完整，所选区间的指数流通市值缺失。"
+                warning += "流通市值按新浪成分记录及东方财富个股流通市值汇总，历史完整性尚待核验。成分、估值不全或剔除日期口径不明时，当日占比留空。"
             elif not cap_months:
                 warning += "该指数历史流通市值尚未接入，仅展示固定基金组规模，占比缺失。"
             if numerator_mode == "close":

@@ -81,6 +81,30 @@ async function run(width) {
       ticks.slice(1).forEach((tick, i) => check(ticks[i].right <= tick.left, "date labels overlap"));
     }
   }
+  if (!gold) {
+    const picker = doc.querySelector("#index-code");
+    picker.value = "000905";
+    picker.dispatchEvent(new win.Event("change"));
+    await new Promise(resolve => win.setTimeout(resolve, 0));
+    doc.querySelector("#index-add-examples").click();
+    check(doc.querySelectorAll("#index-selected button").length === 5, "bulk selection");
+    check(doc.querySelectorAll('#index-examples button[aria-pressed="true"]').length === 5,
+      "selected state");
+    doc.querySelector("#index-selected button").click();
+    check(doc.querySelectorAll("#index-selected button").length === 4, "remove fund");
+    const firstExample = doc.querySelector("#index-examples button");
+    firstExample.focus();
+    firstExample.click();
+    check(doc.querySelectorAll("#index-selected button").length === 5, "toggle selection");
+    check(doc.querySelector(".fund-snapshot-scope").textContent.includes("SSE.510300"),
+      "actual snapshot group");
+    check(doc.documentElement.scrollWidth <= width, "page overflow");
+    for (const control of doc.querySelectorAll("#index-examples button, #index-selected button")) {
+      check(control.getBoundingClientRect().right <= width, "picker overflow");
+    }
+    doc.querySelector("#index-clear-funds").click();
+    check(doc.querySelector("#index-funds").value === "", "clear selection");
+  }
   frame.remove();
 }
 (async () => {

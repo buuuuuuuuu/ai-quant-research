@@ -116,8 +116,12 @@ class PublicMemberCap:
             )
             response.raise_for_status()
             payload = response.json(parse_float=Decimal)
+            if not isinstance(payload, dict):
+                raise ValueError("东方财富估值接口响应格式无效")
             if payload.get("result") is None and "无返回数据" in str(payload.get("message")):
-                return None
+                if page == 1:
+                    return None
+                raise ValueError("东方财富估值后续分页缺失，请重试")
             if payload.get("success") is not True or not isinstance(payload.get("result"), dict):
                 raise ValueError("东方财富估值接口未返回成功结果")
             result = payload["result"]

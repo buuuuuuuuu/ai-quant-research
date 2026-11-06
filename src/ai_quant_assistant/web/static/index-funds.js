@@ -33,28 +33,71 @@
   // https://www.sse.com.cn/market/funddata/volumn/etfvolumn/
   // https://www.jsfund.cn/Services/cn/jsp/pcf/index.jsp?SiteID=1&fundcode=159919_1
   // https://www.sse.com.cn/disclosure/fund/announcement/c/new/2025-04-28/588080_20250428_99XH.pdf
+  // Additional product identities checked against the fund managers' public pages.
+  // https://www.gffunds.com.cn/funds/?fundcode=510510
+  // https://www.chinaamc.com.cn/fund/512500/
+  // https://www.jsfund.cn/Services/cn/jsp/pcf/index.jsp?SiteID=1&fundcode=159922
+  // https://api.efunds.com.cn/owch/oURL/website/weixin/wx_fundinfo.shtml?fundcode=510580
+  // https://accountquery.chinaamc.com/product/getPortfolioCompositionFile.do?fundcode=159845
+  // https://www.gffunds.com.cn/funds/?fundcode=560010
   const examples = {
-    "000300": [["SSE.510300", "华泰柏瑞"], ["SZSE.159919", "嘉实"], ["SSE.510310", "易方达"], ["SSE.510330", "华夏"]],
+    "000300": [["SSE.510300", "华泰柏瑞沪深300ETF"], ["SZSE.159919", "嘉实沪深300ETF"], ["SSE.510310", "易方达沪深300ETF"], ["SSE.510330", "华夏沪深300ETF"]],
     // SSE fund report 510500_20240330_LM9Y; SZSE listing notice 2024-10-10 (159351).
-    "000852": [["SSE.512100", "南方"]],
-    "932000": [["SSE.563300", "华泰柏瑞"]],
-    "399006": [["SZSE.159915", "易方达"]],
-    "000905": [["SSE.510500", "南方"]],
-    "000510": [["SZSE.159351", "嘉实"]],
-    "000016": [["SSE.510050", "华夏"], ["SSE.510100", "易方达"]],
-    "000688": [["SSE.588000", "华夏"], ["SSE.588080", "易方达"]],
+    "000852": [["SSE.512100", "南方中证1000ETF"], ["SZSE.159845", "华夏中证1000ETF"], ["SSE.560010", "广发中证1000ETF"]],
+    "932000": [["SSE.563300", "华泰柏瑞中证2000ETF"]],
+    "399006": [["SZSE.159915", "易方达创业板ETF"]],
+    "000905": [["SSE.510500", "南方中证500ETF"], ["SSE.510510", "广发中证500ETF"], ["SSE.512500", "华夏中证500ETF"], ["SZSE.159922", "嘉实中证500ETF"], ["SSE.510580", "易方达中证500ETF"]],
+    "000510": [["SZSE.159351", "嘉实中证A500ETF"]],
+    "000016": [["SSE.510050", "华夏上证50ETF"], ["SSE.510100", "易方达上证50ETF"]],
+    "000688": [["SSE.588000", "华夏科创50ETF"], ["SSE.588080", "易方达科创50ETF"]],
   };
   const fundInput = document.getElementById("index-funds");
   const exampleList = document.getElementById("index-examples");
+  const fundNames = new Map(Object.values(examples).flat());
+  const fundLabel = code => fundNames.has(code) ? fundNames.get(code) + " · " + code : code + "（名称待核实）";
+  const selectedList = document.getElementById("index-selected");
+  const selectedCount = document.getElementById("index-selected-count");
+  const addExamples = document.getElementById("index-add-examples");
+  const clearFunds = document.getElementById("index-clear-funds");
   const drafts = new Map();
   let editingIndex = select.value;
-  const fundCodes = () => fundInput.value.split(/[,，\s]+/).filter(Boolean);
+  const fundCodes = () => [...new Set(fundInput.value.toUpperCase().split(/[,，;；\s]+/).filter(Boolean))];
   function updateExampleButtons() {
     const codes = fundCodes();
     for (const button of exampleList.children) {
-      button.disabled = codes.includes(button.value) || codes.length >= 10;
+      const selected = codes.includes(button.value);
+      button.disabled = codes.length >= 10 && !selected;
+      button.setAttribute("aria-pressed", selected);
+    }
+    addExamples.disabled = codes.length >= 10 || (examples[select.value] || []).every(([code]) => codes.includes(code));
+    clearFunds.disabled = !codes.length;
+    selectedCount.textContent = "已选 " + codes.length + " / 10 只，统计所选基金的合计规模";
+    selectedList.replaceChildren();
+    for (const code of codes) {
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "secondary-button";
+      remove.textContent = fundLabel(code) + " ×";
+      remove.setAttribute("aria-label", "移除 " + fundLabel(code));
+      remove.addEventListener("click", () => {
+        fundInput.value = fundCodes().filter(item => item !== code).join(",");
+        updateExampleButtons();
+      });
+      selectedList.append(remove);
     }
   }
+  addExamples.addEventListener("click", () => {
+    const codes = new Set(fundCodes());
+    for (const [code] of examples[select.value] || []) {
+      if (codes.size >= 10) break;
+      codes.add(code);
+    }
+    fundInput.value = [...codes].join(",");
+    updateExampleButtons();
+  });
+  clearFunds.addEventListener("click", () => {
+    fundInput.value = "";
+    updateExampleButtons();
+  });
   const usesExchangeReport = () => ["000300", "000016", "000688"].includes(select.value);
   const button = document.getElementById("index-submit");
   const syncHint = document.getElementById("index-sync-hint");
@@ -70,7 +113,8 @@
       button.textContent = manager + " " + code;
       button.addEventListener("click", () => {
         const codes = fundCodes();
-        if (codes.length < 10 && !codes.includes(code)) fundInput.value = [...codes, code].join(",");
+        if (codes.includes(code)) fundInput.value = codes.filter(item => item !== code).join(",");
+        else if (codes.length < 10) fundInput.value = [...codes, code].join(",");
         updateExampleButtons();
       });
       exampleList.append(button);
@@ -108,6 +152,13 @@
       const numeratorMode = payload.snapshot.spec.numerator_mode || "nav";
       const valueName = numeratorMode === "close" ? "不复权收盘价" : "单位净值";
       const modeLabel = document.createElement("p"); modeLabel.textContent = `当前快照口径：份额 × ${valueName}${numeratorMode === "close" ? "（价格来源尚待真实历史核验）" : ""}。`; result.append(modeLabel);
+      const scope = document.createElement("p");
+      scope.className = "fund-snapshot-scope";
+      scope.textContent = "当前结果统计 " + (payload.snapshot.spec.funds || []).map(fundLabel).join("、") +
+        "；同步区间 " + (payload.snapshot.spec.start || allPoints[0]?.trade_date || "未记录") +
+        " 至 " + (payload.snapshot.spec.end || allPoints.at(-1)?.trade_date || "未记录") +
+        "。修改上方选择后，需点击同步才会生成新结果。";
+      result.append(scope);
       const warning = document.createElement("p"); warning.textContent = payload.snapshot.result.warning || ""; result.append(warning);
       const download = document.createElement("a"); download.textContent = "导出完整快照 CSV";
       download.href = `/api/v1/index-fund-snapshots/${encodeURIComponent(payload.snapshot.snapshot_id)}/csv`;
@@ -195,7 +246,7 @@
       const table = document.createElement("table"), head = document.createElement("tr");
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }
       table.append(head);
-      for (const point of points) { const tr = document.createElement("tr"); const ratio = point.ratio_fraction === null ? "—" : `${(Number(point.ratio_fraction) * 100).toFixed(4)}%`; for (const value of [point.trade_date, money(point.numerator_cny), money(point.denominator_cny), ratio]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } table.append(tr); }
+      for (const point of points) { const tr = document.createElement("tr"); const ratio = point.ratio_fraction == null || !Number.isFinite(Number(point.ratio_fraction)) ? "—" : `${(Number(point.ratio_fraction) * 100).toFixed(4)}%`; for (const value of [point.trade_date, money(point.numerator_cny), money(point.denominator_cny), ratio]) { const td = document.createElement("td"); td.textContent = value; tr.append(td); } table.append(tr); }
       const tableShell = document.createElement("div"); tableShell.className = "table-shell"; tableShell.style.overflowX = "auto"; tableShell.append(table); result.append(tableShell);
       if (points.length && Array.isArray(payload.snapshot.spec.funds)) {
         const section = document.createElement("section"), label = document.createElement("label"), dateSelect = document.createElement("select"), details = document.createElement("div");
@@ -235,7 +286,7 @@
             const cap = Number(point.denominator_cny);
             const ratio = Number.isFinite(amount) && amount > 0 && point.denominator_cny != null && Number.isFinite(cap) && cap > 0 ? `${(amount / cap * 100).toFixed(4)}%` : "—";
             const row = document.createElement("tr");
-            for (const value of [fund, groupedDecimal(share), groupedDecimal(unit), Number.isFinite(amount) && amount > 0 ? money(amount) : "—", ratio]) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
+            for (const value of [fundLabel(fund), groupedDecimal(share), groupedDecimal(unit), Number.isFinite(amount) && amount > 0 ? money(amount) : "—", ratio]) { const cell = document.createElement("td"); cell.textContent = value; row.append(cell); }
             detailTable.append(row);
           }
           const detailShell = document.createElement("div"); detailShell.className = "table-shell"; detailShell.style.overflowX = "auto"; detailShell.append(detailTable); details.append(detailShell);
@@ -275,28 +326,104 @@
     } catch (error) { if (id === request) status.textContent = `读取 ${indexCode} 失败：${error.message}${displayedIndex ? `；保留 ${displayedIndex} 的已有数据。` : ""}`; }
   }
   const form = document.getElementById("index-sync"), taskStatus = document.getElementById("index-task");
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const start = document.getElementById("index-start").value, end = document.getElementById("index-end").value;
-    const numerator_mode = modeSelect.value;
-    const funds = fundCodes();
-    if (!window.confirm(`确认联网同步 ${select.value}，${start} 至 ${end}，基金 ${funds.join("、")}，口径 ${numerator_mode === "close" ? "不复权收盘价（来源尚待核验）" : "单位净值"}？`)) return;
-    button.disabled = true; select.disabled = true; modeSelect.disabled = true; taskStatus.textContent = "正在提交同步任务…";
+  const resume = document.getElementById("index-resume");
+  let busy = false, pendingTask = null;
+  const taskKey = "index-fund-pending-task";
+  function saveTask(task) {
+    pendingTask = task;
     try {
-      const response = await fetch("/api/v1/index-funds/sync", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({index_code:select.value,start,end,funds,confirm:true,numerator_mode})});
-      const task = await response.json(); if (!response.ok) throw new Error(typeof task.detail === "string" ? task.detail : "参数错误，请检查日期和基金代码");
+      if (task) window.sessionStorage?.setItem(taskKey, JSON.stringify(task));
+      else window.sessionStorage?.removeItem(taskKey);
+    } catch { /* Tracking still works when browser storage is unavailable. */ }
+  }
+  function setBusy(value) {
+    busy = value;
+    button.disabled = value; select.disabled = value; modeSelect.disabled = value;
+    resume.disabled = value;
+    button.textContent = pendingTask ? "继续查询同步进度" : "同步所选基金";
+    fundInput.disabled = value;
+    document.getElementById("index-start").disabled = value;
+    document.getElementById("index-end").disabled = value;
+    updateExampleButtons();
+    if (value) {
+      addExamples.disabled = clearFunds.disabled = true;
+      for (const control of [...exampleList.children, ...selectedList.children]) control.disabled = true;
+    }
+  }
+  async function followTask(task) {
+    setBusy(true);
+    resume.hidden = true;
+    try {
       let current = task;
       while (["queued", "running"].includes(current.status)) {
-        taskStatus.textContent = `${current.message}（${current.progress}%）`;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const next = await fetch(`/api/v1/index-funds/tasks/${encodeURIComponent(task.task_id)}`);
-        if (!next.ok) throw new Error("任务状态查询失败"); current = await next.json();
+        taskStatus.textContent = `指数 ${task.index_code} · ${current.message || "正在查询任务"}（${current.progress || 0}%）`;
+        const response = await fetch(`/api/v1/index-funds/tasks/${encodeURIComponent(task.task_id)}`);
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        current = await response.json();
+        if (["queued", "running"].includes(current.status)) await new Promise(resolve => setTimeout(resolve, 2000));
       }
-      taskStatus.textContent = current.status === "succeeded" ? "同步完成，正在读取快照。" : `同步未完成：${current.error || current.message}`;
+      saveTask(null);
+      taskStatus.textContent = current.status === "succeeded" ? "同步完成，请查看下方基金组及数据覆盖。" : `同步未完成：${current.error || current.message || current.status}`;
       if (current.status === "succeeded") await load();
-    } catch(error) { taskStatus.textContent = `同步失败：${error.message}`; }
-    finally { button.disabled = false; select.disabled = false; modeSelect.disabled = false; }
+    } catch (error) {
+      taskStatus.textContent = `任务 ${task.task_id} 状态查询中断：${error.message}。后台可能仍在运行，请点击继续查询。`;
+      resume.hidden = false;
+    } finally { setBusy(false); }
+  }
+  resume.addEventListener("click", () => { if (!busy && pendingTask) followTask(pendingTask); });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (busy) return;
+    if (pendingTask) { await followTask(pendingTask); return; }
+    const startInput = document.getElementById("index-start"), endInput = document.getElementById("index-end");
+    const start = startInput.value, end = endInput.value, numerator_mode = modeSelect.value, funds = fundCodes();
+    if (!start || !end || start > end || (Date.parse(end) - Date.parse(start)) / 86400000 > 1830) {
+      taskStatus.textContent = "请填写起止日期，开始日期须早于或等于结束日期，范围最多1831个自然日。";
+      startInput.focus(); return;
+    }
+    if (!funds.length || funds.length > 10 || funds.some(code => !/^(SSE|SZSE)\.[0-9]{6}$/.test(code))) {
+      taskStatus.textContent = "请选择1至10只基金，或填写交易所和六位代码，例如 SSE.510300。";
+      fundInput.focus(); return;
+    }
+    const mismatched = funds.filter(code => Object.entries(examples).some(([index, group]) =>
+      index !== select.value && group.some(([fund]) => fund === code)));
+    if (mismatched.length) {
+      taskStatus.textContent = "以下示例基金跟踪其他指数，请移除或切换指数：" + mismatched.map(fundLabel).join("、");
+      fundInput.focus(); return;
+    }
+    fundInput.value = funds.join(",");
+    updateExampleButtons();
+    const indexName = select.selectedOptions?.[0]?.textContent || select.value;
+    if (!window.confirm(`确认联网同步 ${indexName}，${start} 至 ${end}，共${funds.length}只基金：${funds.map(fundLabel).join("、")}，口径 ${numerator_mode === "close" ? "不复权收盘价（来源尚待核验）" : "单位净值"}？`)) return;
+    setBusy(true);
+    taskStatus.textContent = "正在提交同步任务…";
+    try {
+      const response = await fetch("/api/v1/index-funds/sync", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({index_code:select.value,start,end,funds,confirm:true,numerator_mode})});
+      const task = await response.json();
+      if (!response.ok) throw new Error(typeof task.detail === "string" ? task.detail : "参数错误，请检查日期和基金代码");
+      saveTask({task_id: task.task_id, status: "queued", index_code: select.value, numerator_mode, start, end, funds});
+      await followTask(pendingTask);
+    } catch(error) {
+      taskStatus.textContent = `提交未确认：${error.message}。可用相同参数重试，后台会复用同一活动任务。`;
+    } finally { setBusy(false); }
   });
+  try {
+    const stored = JSON.parse(window.sessionStorage?.getItem(taskKey) || "null");
+    if (stored && typeof stored.task_id === "string" && examples[stored.index_code] &&
+        ["nav", "close"].includes(stored.numerator_mode)) {
+      pendingTask = stored;
+      select.value = stored.index_code;
+      modeSelect.value = stored.numerator_mode;
+      editingIndex = select.value;
+      if (typeof stored.start === "string") document.getElementById("index-start").value = stored.start;
+      if (typeof stored.end === "string") document.getElementById("index-end").value = stored.end;
+      if (Array.isArray(stored.funds) && stored.funds.every(code => typeof code === "string")) {
+        fundInput.value = stored.funds.join(",");
+      }
+      showExamples();
+      followTask(stored);
+    }
+  } catch { /* Ignore unusable saved state. */ }
   select.addEventListener("change", () => {
     drafts.set(editingIndex, fundInput.value);
     editingIndex = select.value;

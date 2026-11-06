@@ -87,3 +87,20 @@ def test_other_trade_dates_rejected(monkeypatch):
     client.get.return_value = result([values("000001", 40, date(2026, 9, 1))])
     with pytest.raises(ValueError, match="其他交易日"):
         PublicMemberCap(client).daily(CODE, DAY, MEMBERS)
+
+
+def test_missing_later_page_fails_instead_of_recording_a_completed_gap(monkeypatch):
+    monkeypatch.setitem(MEMBER_COUNTS, CODE, 2)
+    client = Mock()
+    empty = Mock()
+    empty.json.return_value = {"result": None, "message": "无返回数据"}
+    client.get.side_effect = [result([values("000001", "30")], 2), empty]
+    with pytest.raises(ValueError, match="后续分页缺失"):
+        PublicMemberCap(client).daily(CODE, DAY, MEMBERS)
+
+
+def test_empty_first_page_is_a_gap(monkeypatch):
+    monkeypatch.setitem(MEMBER_COUNTS, CODE, 2)
+    client = Mock()
+    client.get.return_value.json.return_value = {"result": None, "message": "无返回数据"}
+    assert PublicMemberCap(client).daily(CODE, DAY, MEMBERS) is None

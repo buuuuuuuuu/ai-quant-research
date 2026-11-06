@@ -226,3 +226,29 @@ body:has(.app-sidebar) dialog::backdrop { background: rgba(10, 32, 27, .45); }
   font-variant-numeric: tabular-nums;
   padding: 6px 12px;
 }
+
+/* Index fund selection and the actual published group. */
+.fund-picker-actions, #index-selected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .65rem;
+}
+.fund-observation #index-examples button[aria-pressed="true"] {
+  background: #e5f2ec;
+  border-color: #176c56;
+  color: #145441;
+}
+.fund-observation #index-selected button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fund-snapshot-scope {
+  padding: .85rem;
+  background: #f0f6f3;
+  border-left: 3px solid #176c56;
+  overflow-wrap: anywhere;
+}
+.fund-observation #index-task { overflow-wrap: anywhere; }
+.fund-observation #index-resume[hidden] { display: none; }

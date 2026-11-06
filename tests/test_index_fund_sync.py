@@ -67,6 +67,7 @@ def test_confirmed_background_sync_publishes_snapshot_with_gaps(tmp_path, index_
         assert ("sse:monthly_report" in data["inputs"]["sources"]) == (index_code == "000300")
         if index_code == "000905":
             assert data["inputs"]["cap_evidence"][0]["members"] == 500
+            assert data["inputs"]["index_membership"] == [["000001", "2020-01-01", None]]
             assert data["spec"]["cap_source"] in data["inputs"]["sources"]
         assert data['result']['points'][1]['ratio_fraction'] is None
         assert data['result']['scope_verified'] is False

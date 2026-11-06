@@ -13,7 +13,9 @@
 
   // The Y labels end before the plot; X labels sit in a separate band below it.
   function chartAxes(svg, points, low, high, flat, width = 700) {
-    const left = 18 + Math.max(low.length, high.length) * 8, right = width - 14;
+    // Chinese unit glyphs are wider than the monospace digits.
+    const labelWidth = text => [...text].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 12 : 8), 0);
+    const left = 24 + Math.max(labelWidth(low), labelWidth(high)), right = width - 14;
     const xAt = i => left + i * (right - left) / Math.max(points.length - 1, 1);
     function label(x, y, anchor, text) {
       const node = document.createElementNS("http://www.w3.org/2000/svg", "text");

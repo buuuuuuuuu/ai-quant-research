@@ -94,6 +94,7 @@ async function run(width) {
       check(dates[0].right < dates[1].left, name + " date labels overlap");
       const circles = [...svg.querySelectorAll("circle")];
       const price = labels[0].getBoundingClientRect();
+      check(price.left >= svg.getBoundingClientRect().left, name + " value clipped at left edge");
       check(price.right < circles[0].getBoundingClientRect().left, name + " value overlaps plot");
       if (name !== "ratio") {
         check(labels[0].textContent.includes(name === "numerator" ? "亿元" : "万亿元"), "compact CNY unit");

@@ -327,3 +327,16 @@ test("refresh resumes a stored task without posting another synchronization", as
   assert.ok(calls.every(call => !call.options));
   assert.equal(storage.size, 0);
 });
+
+test("a removed saved task releases tracking so a new sync can be submitted", async () => {
+  const storage = new Map([["index-fund-pending-task", JSON.stringify({
+    task_id: "gone", status: "queued", index_code: "000905", numerator_mode: "nav",
+  })]]);
+  const elements = syncHarness(async url => url.includes("/tasks/") ?
+    {ok: false, status: 404} : {ok: true, json: async () => ({snapshot: null})}, storage);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(storage.size, 0);
+  assert.equal(elements["index-submit"].disabled, false);
+  assert.equal(elements["index-submit"].textContent, "同步所选基金");
+  assert.match(elements["index-task"].textContent, /原同步任务已不存在/);
+});

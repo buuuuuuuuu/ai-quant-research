@@ -358,6 +358,11 @@
       while (["queued", "running"].includes(current.status)) {
         taskStatus.textContent = `指数 ${task.index_code} · ${current.message || "正在查询任务"}（${current.progress || 0}%）`;
         const response = await fetch(`/api/v1/index-funds/tasks/${encodeURIComponent(task.task_id)}`);
+        if (response.status === 404) {
+          saveTask(null);
+          taskStatus.textContent = "原同步任务已不存在，请确认上方参数后重新同步。";
+          return;
+        }
         if (!response.ok) throw new Error("HTTP " + response.status);
         current = await response.json();
         if (["queued", "running"].includes(current.status)) await new Promise(resolve => setTimeout(resolve, 2000));

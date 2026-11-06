@@ -8,25 +8,67 @@
 </head>
 <body>
 {% include "app-nav.html" %}
-<main>
-  <p class="eyebrow">市场观察</p>
-  <h1>指数基金规模观察</h1>
-  <p>查看选定基金规模（份额乘单位净值或收盘价）与指数流通市值之比。比例不等于基金实际持股比例。</p>
-  <section class="panel fund-observation">
+<link rel="stylesheet" href="/assets/market-workspace.css?v={{ asset_version }}">
+<main class="market-workspace" data-market-kind="index">
+  <header class="market-page-heading">
+    <div><p class="eyebrow">市场观察</p><h1>指数基金规模观察</h1></div>
+    <nav class="market-pages" aria-label="市场类型"><a href="/market/index-funds" aria-current="page">指数基金</a><a href="/market/gold">黄金</a></nav>
+  </header>
+  <div class="market-layout">
+    {% include "market-watchlist.html" %}
+    <section class="panel fund-observation market-main">
+      <header class="market-instrument">
+        <div><span class="market-badge">本地快照</span><h2 id="market-title">{{ selected_name }}</h2><span id="market-code">{{ selected_index }}</span></div>
+        <button type="button" class="primary-button" data-market-open="settings">选择基金 / 同步</button>
+      </header>
     <div class="fund-field">
       <label for="index-code">选择指数</label>
       <select id="index-code">
-          <option value="000300">沪深300</option>
-          <option value="000016">上证50</option>
-          <option value="000905">中证500</option>
-          <option value="000852">中证1000</option>
-          <option value="932000">中证2000</option>
-          <option value="000510">中证A500</option>
-          <option value="399006">创业板指</option>
-          <option value="000688">科创50</option>
+          <option value="000300"{% if selected_index == "000300" %} selected{% endif %}>沪深300</option>
+          <option value="000016"{% if selected_index == "000016" %} selected{% endif %}>上证50</option>
+          <option value="000905"{% if selected_index == "000905" %} selected{% endif %}>中证500</option>
+          <option value="000852"{% if selected_index == "000852" %} selected{% endif %}>中证1000</option>
+          <option value="932000"{% if selected_index == "932000" %} selected{% endif %}>中证2000</option>
+          <option value="000510"{% if selected_index == "000510" %} selected{% endif %}>中证A500</option>
+          <option value="399006"{% if selected_index == "399006" %} selected{% endif %}>创业板指</option>
+          <option value="000688"{% if selected_index == "000688" %} selected{% endif %}>科创50</option>
       </select>
     </div>
 
+
+      <p class="market-explanation">观察所选基金规模与指数流通市值之比；比例不等于基金实际持股比例。</p>
+      <div class="market-tabs" role="tablist" aria-label="指数观察内容">
+        <button type="button" id="market-tab-chart" role="tab" aria-controls="market-chart" aria-selected="true" data-market-tab="chart">走势与明细</button>
+        <button type="button" id="market-tab-profiles" role="tab" aria-controls="market-profiles" aria-selected="false" tabindex="-1" data-market-tab="profiles">基金资料</button>
+        <button type="button" id="market-tab-settings" role="tab" aria-controls="market-settings" aria-selected="false" tabindex="-1" data-market-tab="settings">基金选择与同步</button>
+      </div>
+      <section id="market-chart" role="tabpanel" aria-labelledby="market-tab-chart" data-market-panel="chart">
+        <div class="market-range-bar" role="group" aria-label="查看本地快照范围">
+          <button type="button" data-market-range="7d">近7天</button><button type="button" data-market-range="30d">近30天</button><button type="button" data-market-range="90d">近90天</button><button type="button" data-market-range="1">近1年</button><button type="button" data-market-range="3">近3年</button><button type="button" data-market-range="all">全部</button>
+          <label for="index-range" class="market-range-label">范围</label>
+          <select id="index-range"><option value="7d">近7天</option><option value="30d">近30天</option><option value="90d">近90天</option><option value="1">最近1年</option><option value="3" selected>最近3年</option><option value="5">最近5年</option><option value="all">完整快照</option><option value="custom">自定义</option></select>
+        </div>
+        <div id="market-custom-range" class="market-custom-range" hidden>
+          <label for="view-start">开始日期</label><input id="view-start" type="date">
+          <label for="view-end">结束日期</label><input id="view-end" type="date">
+          <button id="view-apply" class="secondary-button" type="button">应用范围</button>
+        </div>
+        <p class="market-range-note">区间截至快照最后交易日；图中点击选日期，滚轮缩放，方向键逐日查看。</p>
+        <p id="index-status" role="status">正在读取本地数据…</p>
+        <div id="index-result"></div>
+        <button type="button" class="secondary-button" data-market-open="settings">修改基金与同步区间</button>
+      </section>
+      <section id="market-profiles" role="tabpanel" aria-labelledby="market-tab-profiles" data-market-panel="profiles" hidden>
+    <section class="fund-profiles" aria-labelledby="fund-profiles-title">
+      <h2 id="fund-profiles-title">基金详情</h2>
+      <p>点击基金名称展开：成立多久、投资范围、调仓方式及披露查询。包含当前指数示例和手动填写的基金。</p>
+      <div id="index-fund-profiles"></div>
+    </section>
+
+
+      </section>
+      <section id="market-settings" role="tabpanel" aria-labelledby="market-tab-settings" data-market-panel="settings" hidden>
+        <h3>选择基金与同步历史数据</h3>
     <form id="index-sync">
       <p>选择要统计的基金，最多10只。下方提供部分跟踪该指数的 ETF 示例，支持手动补充。</p>
       <p>最多同步1831个自然日；长区间可能耗时较久。失败后使用相同指数、日期及基金重试，可继续已完成的分区。</p>
@@ -60,47 +102,17 @@
         <p id="index-sync-hint" class="fund-full-row" hidden>流通市值按当日成分股汇总，使用免费公开数据。成分或估值缺失的日期显示为 —。</p>
         <button id="index-submit" aria-describedby="index-sync-hint" class="primary-button" type="submit">同步所选基金</button>
       </div>
-      <p id="index-task" role="status"></p>
-      <button id="index-resume" class="secondary-button" type="button" hidden>继续查询同步进度</button>
     </form>
 
-    <section class="fund-profiles" aria-labelledby="fund-profiles-title">
-      <h2 id="fund-profiles-title">基金详情</h2>
-      <p>点击基金名称展开：成立多久、投资范围、调仓方式及披露查询。包含当前指数示例和手动填写的基金。</p>
-      <div id="index-fund-profiles"></div>
+
+      </section>
+      <div class="market-task-status"><p id="index-task" role="status"></p><button id="index-resume" class="secondary-button" type="button" hidden>继续查询同步进度</button></div>
     </section>
-
-    <fieldset>
-      <legend>查看范围（仅本地快照，最近年数截至快照最后交易日）</legend>
-      <div class="fund-fields">
-        <div class="fund-field fund-full-row">
-          <label for="index-range">时间范围</label>
-          <select id="index-range">
-            <option value="3">最近3年</option>
-          <option value="1">最近1年</option>
-          <option value="5">最近5年</option>
-          <option value="all">完整快照</option>
-          <option value="custom">自定义</option>
-          </select>
-        </div>
-        <div class="fund-field">
-          <label for="view-start">自定义开始</label>
-          <input id="view-start" type="date">
-        </div>
-        <div class="fund-field">
-          <label for="view-end">自定义结束</label>
-          <input id="view-end" type="date">
-        </div>
-        <button id="view-apply" class="secondary-button" type="button">应用查看范围</button>
-      </div>
-    </fieldset>
-
-    <p id="index-status" role="status">正在读取本地数据…</p>
-    <div id="index-result"></div>
-  </section>
+  </div>
 </main>
 <script src="/assets/date-chart.js?v={{ asset_version }}" defer></script>
 <script src="/assets/fund-profiles.js?v={{ asset_version }}" defer></script>
 <script src="/assets/index-funds.js?v={{ asset_version }}" defer></script>
+<script src="/assets/market-workspace.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

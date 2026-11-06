@@ -1,6 +1,7 @@
 """Exercise real SVG coordinate transforms and date axes when Chromium is installed."""
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,9 +34,9 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
                     {"trade_date": day, "numerator_cny": str(price), "denominator_cny": "10000",
                      "ratio_fraction": str(price / 10000)} for day, price in closes.items()
                 ]}}
-    mock = "<script>window.fetch=async()=>({ok:true,json:async()=>(" + json.dumps(
+    mock = "<script>window.requests=[];window.fetch=async(url,options)=>{window.requests.push({url,options});return {ok:true,json:async()=>(" + json.dumps(
         {"snapshot": snapshot}
-    ) + ")});</script>"
+    ) + ")};};</script>"
     (tmp_path / "chart.html").write_text(html.replace("</head>", mock + "</head>"))
     harness = """<!doctype html><meta charset="utf-8"><body><output id="result">pending</output>
 <script>
@@ -51,7 +52,7 @@ async function run(width) {
   const doc = frame.contentDocument, win = frame.contentWindow;
   const gold = !!doc.querySelector(".gold-chart");
   const charts = [...doc.querySelectorAll(gold ? ".gold-chart svg" : "#index-result svg")];
-  check(charts.length === (gold ? 1 : 2), "chart count");
+  check(charts.length === 1, "chart count");
   for (const svg of charts) {
     const position = svg.createSVGPoint();
     position.x = gold ? 500 : 370; position.y = 100;
@@ -82,6 +83,26 @@ async function run(width) {
     }
   }
   if (!gold) {
+    check(!doc.querySelector("#market-chart").hidden, "chart is initial panel");
+    check(doc.querySelector("#market-settings").hidden, "settings initially hidden");
+    const search = doc.querySelector("#market-search");
+    search.value = "zz500"; search.dispatchEvent(new win.Event("input"));
+    check([...doc.querySelectorAll(".market-watch-row")].filter(row => !row.hidden).length === 1, "index search");
+    doc.querySelector('[data-market-pick="000905"]').click();
+    check(doc.querySelector("#index-code").value === "000905", "watchlist switches index");
+    check(doc.querySelector("#market-title").textContent === "中证500", "instrument heading");
+    const star = doc.querySelector('[data-market-star="000905"]');
+    star.click();
+    const stored = JSON.parse(win.localStorage.getItem("market-favorites-v1"));
+    check(stored.includes("000905") === (star.getAttribute("aria-pressed") === "true"), "favorite saved");
+    // Leave deterministic storage for subsequent viewport fixtures.
+    if (star.getAttribute("aria-pressed") === "true") star.click();
+    search.value = ""; search.dispatchEvent(new win.Event("input"));
+    doc.querySelector('[data-market-range="7d"]').click();
+    check(doc.querySelector("#index-range").value === "7d", "quick date range");
+    check(doc.querySelector('[data-market-range="7d"]').getAttribute("aria-pressed") === "true", "range state");
+    doc.querySelector("#market-tab-settings").click();
+    check(!doc.querySelector("#market-settings").hidden && doc.querySelector("#market-chart").hidden, "switch to settings");
     const picker = doc.querySelector("#index-code");
     picker.value = "000905";
     picker.dispatchEvent(new win.Event("change"));
@@ -98,6 +119,11 @@ async function run(width) {
     check(doc.querySelectorAll("#index-selected button").length === 5, "toggle selection");
     check(doc.querySelector(".fund-snapshot-scope").textContent.includes("SSE.510300"),
       "actual snapshot group");
+    doc.querySelector("#market-tab-profiles").focus();
+    doc.querySelector("#market-tab-profiles").dispatchEvent(new win.KeyboardEvent("keydown", {key: "ArrowLeft", bubbles: true}));
+    check(!doc.querySelector("#market-chart").hidden, "keyboard tab navigation");
+    doc.querySelector("#market-tab-profiles").click();
+    check(!doc.querySelector("#market-profiles").hidden, "profile tab");
     const cards = [...doc.querySelectorAll(".fund-profile")];
     check(cards.length === 5, "fund profiles count");
     const summary = cards[0].querySelector("summary");
@@ -109,11 +135,17 @@ async function run(width) {
     doc.querySelector("#index-selected button").click();
     check(doc.querySelector(".fund-profile").open, "profile remains open on selection change");
     check(doc.documentElement.scrollWidth <= width, "page overflow");
+    doc.querySelector("#market-tab-settings").click();
     for (const control of doc.querySelectorAll("#index-examples button, #index-selected button")) {
       check(control.getBoundingClientRect().right <= width, "picker overflow");
     }
     doc.querySelector("#index-clear-funds").click();
     check(doc.querySelector("#index-funds").value === "", "clear selection");
+    check(win.requests.every(request => !request.options?.method || request.options.method === "GET"), "navigation must not submit sync");
+    for (const name of ["chart", "settings", "profiles"]) {
+      doc.querySelector(`[data-market-tab="${name}"]`).click();
+      check(doc.documentElement.scrollWidth <= width, name + " page overflow");
+    }
   }
   frame.remove();
 }
@@ -133,3 +165,17 @@ async function run(width) {
         capture_output=True, text=True, timeout=45, check=True,
     )
     assert '<output id="result">passed</output>' in output.stdout, output.stdout[:2000]
+    # CI can retain real browser renders for review, without committing generated files.
+    if directory := os.environ.get("AI_QUANT_UI_SCREENSHOT_DIR"):
+        destination = Path(directory)
+        destination.mkdir(parents=True, exist_ok=True)
+        for width in (390, 768, 1440):
+            subprocess.run(
+                [CHROME, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
+                 "--allow-file-access-from-files", "--virtual-time-budget=1500",
+                 f"--user-data-dir={tmp_path / 'screenshot-profile'}",
+                 f"--window-size={width},1800", "--force-device-scale-factor=1",
+                 f"--screenshot={destination / f'{page}-{width}.png'}",
+                 (tmp_path / "chart.html").as_uri()],
+                capture_output=True, text=True, timeout=30, check=True,
+            )

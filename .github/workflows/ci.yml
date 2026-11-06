@@ -38,6 +38,17 @@ jobs:
 
       - name: Execute offline tests
         run: uv run pytest
+        env:
+          AI_QUANT_UI_SCREENSHOT_DIR: ${{ runner.temp }}/market-ui
+
+      - name: Upload market UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-ui-screenshots
+          path: ${{ runner.temp }}/market-ui
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Validate browser JavaScript
         run: for script in src/ai_quant_assistant/web/static/*.js; do node --check "$script"; done

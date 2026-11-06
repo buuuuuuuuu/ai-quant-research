@@ -63,8 +63,9 @@ def index_fund_router(database, templates, asset_version, actor, manager):
         return {"evidence_id": evidence_id, "verification": "unverified", "message": "已记录来源线索；未核验证据真实性或历史资格，不用于自动排名。"}
 
     @router.get("/market/index-funds", include_in_schema=False)
-    def page(request: Request):
-        return templates.TemplateResponse(request=request, name="index-funds.html", context={"asset_version": asset_version, "username": actor})
+    def page(request: Request, index: str = "000300"):
+        selected = index if index in INDEXES else "000300"
+        return templates.TemplateResponse(request=request, name="index-funds.html", context={"asset_version": asset_version, "username": actor, "selected_index": selected, "selected_name": INDEXES[selected]})
 
     @router.get("/api/v1/index-funds/{index_code}")
     def latest(index_code: str, numerator_mode: Literal["nav", "close"] | None = None):

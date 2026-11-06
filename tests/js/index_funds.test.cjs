@@ -88,7 +88,7 @@ test("additional trends use snapshot inputs, keep gaps and require no new reques
   await new Promise(resolve => setImmediate(resolve));
   const root = elements["index-result"], metric = descendants(root).filter(e => e.tag === "select").at(-1);
   metric.value = "SSE.510300"; metric.listeners.change();
-  assert.ok(descendants(root).some(e => e.textContent === "2.00"));
+  assert.ok(descendants(root).some(e => e.textContent === "2.00%"));
   metric.value = "denominator"; metric.listeners.change();
   assert.ok(descendants(root).some(e => e.textContent === "10,000.00"));
   assert.equal(calls, 1);
@@ -158,6 +158,30 @@ test("custom display range uses local snapshot without changing export and rejec
   assert.match(elements["index-status"].textContent, /请填写有效/);
   assert.ok(descendants(elements["index-result"]).some(e => e.textContent.includes("0 / 1 个交易日")));
   assert.ok(calls.every(c => c.options === undefined));
+});
+
+test("seven calendar days ends at the saved snapshot date and keeps gaps", async () => {
+  const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav";
+  elements["index-range"].value = "7d";
+  const snapshot = {snapshot_id:"week", spec:{funds:["SSE.510300"]}, inputs:{}, result:{points:[
+    {trade_date:"2025-12-31", numerator_cny:"100", denominator_cny:"1000", ratio_fraction:"0.1"},
+    {trade_date:"2026-01-01", numerator_cny:"200", denominator_cny:"1000", ratio_fraction:"0.2"},
+    {trade_date:"2026-01-05", numerator_cny:null, denominator_cny:null, ratio_fraction:null},
+    {trade_date:"2026-01-07", numerator_cny:"300", denominator_cny:"1000", ratio_fraction:"0.3"},
+  ]}};
+  const calls = [];
+  const document = {getElementById:id => elements[id], createElement:tag => new Element(tag), createElementNS:(_ns, tag) => new Element(tag)};
+  vm.runInNewContext(source, {document, window:{}, fetch:async (url, options) => {calls.push({url,options}); return {ok:true,json:async()=>({snapshot})};}, setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  const nodes = descendants(elements["index-result"]);
+  assert.ok(nodes.some(node => node.textContent.includes("2 / 3 个交易日")));
+  const dates = nodes.filter(node => node.tag === "option").map(node => node.value);
+  assert.ok(dates.includes("2026-01-01") && dates.includes("2026-01-07"));
+  assert.ok(!dates.includes("2025-12-31"));
+  assert.equal(nodes.filter(node => node.tag === "svg").length, 1);
+  assert.ok(calls.every(call => !call.options));
 });
 
 test("fund examples append once, respect the cap, and keep each index draft separate", async () => {

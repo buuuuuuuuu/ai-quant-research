@@ -9,9 +9,12 @@
 </head>
 <body>
 {% include "app-nav.html" %}
-<main class="gold-market">
-  <p class="eyebrow">市场观察</p>
-  <h1>黄金走势</h1>
+<link rel="stylesheet" href="/assets/market-workspace.css?v={{ asset_version }}">
+<main class="gold-market market-workspace" data-market-kind="gold">
+  <header class="market-page-heading"><div><p class="eyebrow">市场观察</p><h1>黄金走势</h1></div><nav class="market-pages" aria-label="市场类型"><a href="/market/index-funds">指数基金</a><a href="/market/gold" aria-current="page">黄金</a></nav></header>
+  <div class="market-layout">
+  {% include "market-watchlist.html" %}
+  <div class="market-main">
   <p><a href="{{ source }}">上海黄金交易所</a> · Au99.99 现货日收盘价 · 人民币元/克</p>
   <section class="panel gold-panel" aria-label="黄金日行情">
     <div class="gold-toolbar">
@@ -67,8 +70,11 @@
     </details>
     {% endif %}
   </section>
+  </div>
+  </div>
 </main>
 <script src="/assets/date-chart.js?v={{ asset_version }}" defer></script>
 <script src="/assets/gold.js?v={{ asset_version }}" defer></script>
+<script src="/assets/market-workspace.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

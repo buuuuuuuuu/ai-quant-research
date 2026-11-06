@@ -1,6 +1,7 @@
 """Exercise real SVG coordinate transforms and date axes when Chromium is installed."""
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -30,12 +31,12 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
     html = client.get(f"/market/{page}?days=7").text.replace('"/assets/', f'"{STATIC.as_uri()}/')
     snapshot = {"snapshot_id": "test", "spec": {"funds": ["SSE.510300"]}, "inputs": {},
                 "result": {"points": [
-                    {"trade_date": day, "numerator_cny": str(price), "denominator_cny": "10000",
-                     "ratio_fraction": str(price / 10000)} for day, price in closes.items()
+                    {"trade_date": day, "numerator_cny": str(price * 100_000_000), "denominator_cny": "10000000000000",
+                     "ratio_fraction": str(price / 100000)} for day, price in closes.items()
                 ]}}
-    mock = "<script>window.fetch=async()=>({ok:true,json:async()=>(" + json.dumps(
+    mock = "<script>window.requests=[];window.fetch=async(url,options)=>{window.requests.push({url,options});return {ok:true,json:async()=>(" + json.dumps(
         {"snapshot": snapshot}
-    ) + ")});</script>"
+    ) + ")};};</script>"
     (tmp_path / "chart.html").write_text(html.replace("</head>", mock + "</head>"))
     harness = """<!doctype html><meta charset="utf-8"><body><output id="result">pending</output>
 <script>
@@ -51,10 +52,11 @@ async function run(width) {
   const doc = frame.contentDocument, win = frame.contentWindow;
   const gold = !!doc.querySelector(".gold-chart");
   const charts = [...doc.querySelectorAll(gold ? ".gold-chart svg" : "#index-result svg")];
-  check(charts.length === (gold ? 1 : 2), "chart count");
+  check(charts.length === 1, "chart count");
   for (const svg of charts) {
     const position = svg.createSVGPoint();
-    position.x = gold ? 500 : 370; position.y = 100;
+    position.x = gold ? 500 : (Number(svg.querySelector("circle").getAttribute("cx")) +
+      Number([...svg.querySelectorAll("circle")].at(-1).getAttribute("cx"))) / 2; position.y = 100;
     const screen = position.matrixTransform(svg.getScreenCTM());
     const coords = {clientX: screen.x, clientY: screen.y, bubbles: true};
     svg.dispatchEvent(new win.MouseEvent("click", coords));
@@ -82,6 +84,47 @@ async function run(width) {
     }
   }
   if (!gold) {
+    const metric = doc.querySelector(".market-trends select");
+    for (const name of ["numerator", "denominator", "ratio"]) {
+      metric.value = name; metric.dispatchEvent(new win.Event("change"));
+      await new Promise(resolve => win.setTimeout(resolve, 60));
+      const svg = doc.querySelector(".market-trends svg");
+      const labels = [...svg.querySelectorAll("text")];
+      const dates = labels.slice(-2).map(node => node.getBoundingClientRect());
+      check(dates[0].right < dates[1].left, name + " date labels overlap");
+      const circles = [...svg.querySelectorAll("circle")];
+      const price = labels[0].getBoundingClientRect();
+      check(price.left >= svg.getBoundingClientRect().left, name + " value clipped at left edge");
+      check(price.right < circles[0].getBoundingClientRect().left, name + " value overlaps plot");
+      if (name !== "ratio") {
+        check(labels[0].textContent.includes(name === "numerator" ? "亿元" : "万亿元"), "compact CNY unit");
+        circles[0].dispatchEvent(new win.MouseEvent("click", {bubbles: true}));
+        check(doc.querySelector(".market-trends p").textContent.includes(name === "numerator" ? "85,100,000,000.00" : "10,000,000,000,000.00"), "full CNY readout");
+      }
+    }
+    check(!doc.querySelector("#market-chart").hidden, "chart is initial panel");
+    check(doc.querySelector("#market-settings").hidden, "settings initially hidden");
+    const disclosure = doc.querySelector("#market-list-disclosure");
+    check(disclosure.open === (width > 700), "mobile watchlist starts compact");
+    if (!disclosure.open) disclosure.querySelector("summary").click();
+    const search = doc.querySelector("#market-search");
+    search.value = "zz500"; search.dispatchEvent(new win.Event("input"));
+    check([...doc.querySelectorAll(".market-watch-row")].filter(row => !row.hidden).length === 1, "index search");
+    doc.querySelector('[data-market-pick="000905"]').click();
+    check(doc.querySelector("#index-code").value === "000905", "watchlist switches index");
+    check(doc.querySelector("#market-title").textContent === "中证500", "instrument heading");
+    const star = doc.querySelector('[data-market-star="000905"]');
+    star.click();
+    const stored = JSON.parse(win.localStorage.getItem("market-favorites-v1"));
+    check(stored.includes("000905") === (star.getAttribute("aria-pressed") === "true"), "favorite saved");
+    // Leave deterministic storage for subsequent viewport fixtures.
+    if (star.getAttribute("aria-pressed") === "true") star.click();
+    search.value = ""; search.dispatchEvent(new win.Event("input"));
+    doc.querySelector('[data-market-range="7d"]').click();
+    check(doc.querySelector("#index-range").value === "7d", "quick date range");
+    check(doc.querySelector('[data-market-range="7d"]').getAttribute("aria-pressed") === "true", "range state");
+    doc.querySelector("#market-tab-settings").click();
+    check(!doc.querySelector("#market-settings").hidden && doc.querySelector("#market-chart").hidden, "switch to settings");
     const picker = doc.querySelector("#index-code");
     picker.value = "000905";
     picker.dispatchEvent(new win.Event("change"));
@@ -98,6 +141,11 @@ async function run(width) {
     check(doc.querySelectorAll("#index-selected button").length === 5, "toggle selection");
     check(doc.querySelector(".fund-snapshot-scope").textContent.includes("SSE.510300"),
       "actual snapshot group");
+    doc.querySelector("#market-tab-profiles").focus();
+    doc.querySelector("#market-tab-profiles").dispatchEvent(new win.KeyboardEvent("keydown", {key: "ArrowLeft", bubbles: true}));
+    check(!doc.querySelector("#market-chart").hidden, "keyboard tab navigation");
+    doc.querySelector("#market-tab-profiles").click();
+    check(!doc.querySelector("#market-profiles").hidden, "profile tab");
     const cards = [...doc.querySelectorAll(".fund-profile")];
     check(cards.length === 5, "fund profiles count");
     const summary = cards[0].querySelector("summary");
@@ -109,11 +157,17 @@ async function run(width) {
     doc.querySelector("#index-selected button").click();
     check(doc.querySelector(".fund-profile").open, "profile remains open on selection change");
     check(doc.documentElement.scrollWidth <= width, "page overflow");
+    doc.querySelector("#market-tab-settings").click();
     for (const control of doc.querySelectorAll("#index-examples button, #index-selected button")) {
       check(control.getBoundingClientRect().right <= width, "picker overflow");
     }
     doc.querySelector("#index-clear-funds").click();
     check(doc.querySelector("#index-funds").value === "", "clear selection");
+    check(win.requests.every(request => !request.options?.method || request.options.method === "GET"), "navigation must not submit sync");
+    for (const name of ["chart", "settings", "profiles"]) {
+      doc.querySelector(`[data-market-tab="${name}"]`).click();
+      check(doc.documentElement.scrollWidth <= width, name + " page overflow");
+    }
   }
   frame.remove();
 }
@@ -132,4 +186,27 @@ async function run(width) {
          f"--user-data-dir={tmp_path / 'profile'}", "--dump-dom", path.as_uri()],
         capture_output=True, text=True, timeout=45, check=True,
     )
+    # CI can retain real browser renders for review, without committing generated files.
+    if directory := os.environ.get("AI_QUANT_UI_SCREENSHOT_DIR"):
+        destination = Path(directory)
+        destination.mkdir(parents=True, exist_ok=True)
+        renders = [(page, "chart.html")]
+        if page == "index-funds":
+            cap_script = """<script>window.addEventListener('load', () => {
+              const metric = document.querySelector('.market-trends select');
+              metric.value = 'denominator'; metric.dispatchEvent(new Event('change'));
+            });</script>"""
+            (tmp_path / "chart-cap.html").write_text((tmp_path / "chart.html").read_text() + cap_script)
+            renders.append(("index-funds-cap", "chart-cap.html"))
+        for name, filename in renders:
+            for width in (390, 768, 1440):
+                subprocess.run(
+                    [CHROME, "--headless", "--no-sandbox", "--disable-dev-shm-usage",
+                     "--allow-file-access-from-files", "--virtual-time-budget=1500",
+                     f"--user-data-dir={tmp_path / 'screenshot-profile'}",
+                     f"--window-size={width},1800", "--force-device-scale-factor=1",
+                     f"--screenshot={destination / f'{name}-{width}.png'}",
+                     (tmp_path / filename).as_uri()],
+                    capture_output=True, text=True, timeout=30, check=True,
+                )
     assert '<output id="result">passed</output>' in output.stdout, output.stdout[:2000]

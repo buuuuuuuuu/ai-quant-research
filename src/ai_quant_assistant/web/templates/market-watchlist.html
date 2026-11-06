@@ -1,0 +1,19 @@
+<aside class="market-watchlist" aria-label="市场列表与自选">
+  <div class="market-watch-heading"><h2>市场列表</h2><span>指数 · 黄金</span></div>
+  <details id="market-list-disclosure" open>
+  <summary>搜索市场 / 我的自选</summary>
+  <label for="market-search">搜索名称或代码 <kbd>/</kbd></label>
+  <input id="market-search" type="search" placeholder="中证500 / 000905" autocomplete="off">
+  <label class="market-favorites-filter"><input id="market-favorites-only" type="checkbox"> 只看自选</label>
+  <nav id="market-watch-items" aria-label="选择市场">
+    {% for code, name, alias in [("000300", "沪深300", "hs300"), ("000016", "上证50", "sz50"), ("000905", "中证500", "zz500"), ("000852", "中证1000", "zz1000"), ("932000", "中证2000", "zz2000"), ("000510", "中证A500", "zza500"), ("399006", "创业板指", "cyb"), ("000688", "科创50", "kc50"), ("gold", "黄金 Au99.99", "黄金 gold au9999")] %}
+    <div class="market-watch-row" data-market-code="{{ code }}" data-market-name="{{ name }}" data-market-alias="{{ alias }}">
+      <a data-market-pick="{{ code }}" href="{{ '/market/gold' if code == 'gold' else '/market/index-funds?index=' + code }}"><strong>{{ name }}</strong><small>{{ "元/克 · 日收盘价" if code == "gold" else code }}</small></a>
+      <button type="button" data-market-star="{{ code }}" aria-pressed="false" aria-label="将{{ name }}加入自选">☆</button>
+    </div>
+    {% endfor %}
+  </nav>
+  <p id="market-no-match" hidden>没有匹配项，可修改搜索或取消“只看自选”。</p>
+  </details>
+  <p id="market-watch-note">自选仅保存在当前浏览器。切换市场只读取本地数据。</p>
+</aside>

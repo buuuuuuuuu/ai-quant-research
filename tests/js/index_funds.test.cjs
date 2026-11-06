@@ -88,7 +88,7 @@ test("additional trends use snapshot inputs, keep gaps and require no new reques
   await new Promise(resolve => setImmediate(resolve));
   const root = elements["index-result"], metric = descendants(root).filter(e => e.tag === "select").at(-1);
   metric.value = "SSE.510300"; metric.listeners.change();
-  assert.ok(descendants(root).some(e => e.textContent === "2.00"));
+  assert.ok(descendants(root).some(e => e.textContent === "2.00%"));
   metric.value = "denominator"; metric.listeners.change();
   assert.ok(descendants(root).some(e => e.textContent === "10,000.00"));
   assert.equal(calls, 1);
@@ -160,6 +160,30 @@ test("custom display range uses local snapshot without changing export and rejec
   assert.ok(calls.every(c => c.options === undefined));
 });
 
+test("seven calendar days ends at the saved snapshot date and keeps gaps", async () => {
+  const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  elements["index-code"].value = "000300"; elements["index-numerator"].value = "nav";
+  elements["index-range"].value = "7d";
+  const snapshot = {snapshot_id:"week", spec:{funds:["SSE.510300"]}, inputs:{}, result:{points:[
+    {trade_date:"2025-12-31", numerator_cny:"100", denominator_cny:"1000", ratio_fraction:"0.1"},
+    {trade_date:"2026-01-01", numerator_cny:"200", denominator_cny:"1000", ratio_fraction:"0.2"},
+    {trade_date:"2026-01-05", numerator_cny:null, denominator_cny:null, ratio_fraction:null},
+    {trade_date:"2026-01-07", numerator_cny:"300", denominator_cny:"1000", ratio_fraction:"0.3"},
+  ]}};
+  const calls = [];
+  const document = {getElementById:id => elements[id], createElement:tag => new Element(tag), createElementNS:(_ns, tag) => new Element(tag)};
+  vm.runInNewContext(source, {document, window:{}, fetch:async (url, options) => {calls.push({url,options}); return {ok:true,json:async()=>({snapshot})};}, setTimeout});
+  await new Promise(resolve => setImmediate(resolve));
+  const nodes = descendants(elements["index-result"]);
+  assert.ok(nodes.some(node => node.textContent.includes("2 / 3 个交易日")));
+  const dates = nodes.filter(node => node.tag === "option").map(node => node.value);
+  assert.ok(dates.includes("2026-01-01") && dates.includes("2026-01-07"));
+  assert.ok(!dates.includes("2025-12-31"));
+  assert.equal(nodes.filter(node => node.tag === "svg").length, 1);
+  assert.ok(calls.every(call => !call.options));
+});
+
 test("fund examples append once, respect the cap, and keep each index draft separate", async () => {
   const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range",
     "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
@@ -215,15 +239,31 @@ test("large CNY labels stay left of the plot when the index cap is missing", asy
     trade_date: "2026-11-0" + (i + 2), numerator_cny: amount, denominator_cny: null, ratio_fraction: null,
   }));
   const snapshot = {snapshot_id: "large", spec: {funds: ["SSE.510300"]}, result: {points}, inputs: {}};
-  vm.runInNewContext(source, {document, window: {}, fetch: async () => ({ok: true, json: async () => ({snapshot})}), setTimeout});
+  const observers = new Set();
+  class ResizeObserver {
+    observe() { observers.add(this); }
+    disconnect() { observers.delete(this); }
+  }
+  let payload = {snapshot};
+  vm.runInNewContext(source, {document, window: {ResizeObserver}, fetch: async () => ({ok: true, json: async () => payload}), setTimeout});
   await new Promise(resolve => setImmediate(resolve));
   const nodes = descendants(elements["index-result"]);
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "194,842,433,071.93"));
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "—"));
-  const label = nodes.find(n => n.tag === "text" && n.textContent === "169,447,599,578.56");
+  const label = nodes.find(n => n.tag === "text" && n.textContent === "1,694.48亿元");
   const firstX = Number(nodes.find(n => n.tag === "path").attributes.d.match(/M([\d.]+)/)[1]);
   assert.equal(label.attributes["text-anchor"], "end");
   assert.ok(Number(label.attributes.x) <= firstX - 10);
+  nodes.find(n => n.tag === "circle").listeners.click();
+  assert.ok(descendants(elements["index-result"]).some(n => n.textContent.includes("169,447,599,578.56")), "selected readout retains full CNY amount");
+  const metric = nodes.filter(n => n.tag === "select").at(-1);
+  for (let i = 0; i < 5; i++) {
+    metric.listeners.change();
+    assert.equal(observers.size, 1, "replacing a chart must release the previous observer");
+  }
+  payload = {snapshot: null};
+  await elements["index-numerator"].listeners.change();
+  assert.equal(observers.size, 0, "empty snapshots release chart observers");
 });
 
 function syncHarness(fetch, storage = new Map()) {
@@ -306,10 +346,17 @@ test("interrupted polling resumes the submitted task and prevents duplicate subm
   assert.match(elements["index-task"].textContent, /后台可能仍在运行/);
   assert.equal(elements["index-resume"].hidden, false);
   assert.equal(storage.size, 1);
+  for (const id of ["index-code", "index-numerator", "index-funds", "index-start", "index-end", "index-add-examples", "index-clear-funds"]) {
+    assert.equal(elements[id].disabled, true, id + " must remain locked while the task is unresolved");
+  }
+  assert.ok(elements["index-selected"].children.every(control => control.disabled));
+  assert.equal(elements["index-resume"].disabled, false);
   await submit();
   assert.equal(posts, 1);
   assert.equal(storage.size, 0);
   assert.match(elements["index-task"].textContent, /同步完成/);
+  assert.equal(elements["index-code"].disabled, false);
+  assert.equal(elements["index-funds"].disabled, false);
 });
 
 test("refresh resumes a stored task without posting another synchronization", async () => {

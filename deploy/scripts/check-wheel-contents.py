@@ -4,6 +4,9 @@ from zipfile import ZipFile
 
 required = {
     "ai_quant_assistant/web/static/fund-profiles.js",
+    "ai_quant_assistant/web/static/market-workspace.js",
+    "ai_quant_assistant/web/static/market-workspace.css",
+    "ai_quant_assistant/web/templates/market-watchlist.html",
     "ai_quant_assistant/reports/presentation.py",
     "ai_quant_assistant/reports/templates/factor_lab.html.j2",
     "ai_quant_assistant/reports/templates/factor_backtest.html.j2",

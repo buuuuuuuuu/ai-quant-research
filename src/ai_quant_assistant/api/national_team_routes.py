@@ -12,6 +12,14 @@ from ai_quant_assistant.storage.national_team import Scope, SyncScope, validate_
 
 
 class NationalTeamTaskManager(ManagedStockTaskManager):
+    def submit(self, **kwargs):
+        # This service returns the task itself, unlike the generic service's
+        # (task, created) pair. Preserve its contract for the scheduler too.
+        task = self.service.request(**kwargs)
+        if task["status"] == "queued":
+            self.dispatch()
+        return task
+
     def dispatch(self):
         if self.service.database.path.is_file() and not self.stop.is_set():
             self.service.tick()

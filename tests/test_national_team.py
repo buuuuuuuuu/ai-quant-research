@@ -220,3 +220,44 @@ def test_scheduler_submits_once_and_stops_when_disabled(app, monkeypatch):
     service.tick()
     with service.database.connect(read_only=True) as c:
         assert c.execute("SELECT count(*) FROM operation_task").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("mode", ["daily", "minute"])
+def test_confirmed_sync_api_dispatches_and_completes(app, mode):
+    import time
+
+    service = app.state.national_team
+    service.database.initialize()
+    with service.database.connect() as c:
+        for n, day in enumerate(DAYS):
+            c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'fixture','fixture',?)", [day, n])
+
+    class Provider:
+        def bars(self, code, start, end, minute=False):
+            if minute:
+                return [{"kind": "minute", "code": code, "stamp": DAYS[-1] + " 09:31", "amount": "10", "close": "2.5"}]
+            return [r for r in rows() if r["kind"] == "daily" and r["code"] == code]
+
+        def fetch_nav(self, code, start, end):
+            return [r for r in rows() if r["kind"] == "nav" and r["code"] == code]
+
+        def fetch_shares(self, market, day, codes):
+            return [r for r in rows() if r["kind"] == "shares" and r["stamp"] == day]
+
+    service.provider = Provider()
+    with TestClient(app) as client:
+        response = client.post("/api/v1/national-team/sync", json={**scope().model_dump(mode="json"), "mode": mode, "confirm": True})
+        assert response.status_code == 202, response.text
+        task_id = response.json()["task_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            task = client.get(f"/api/v1/national-team/tasks/{task_id}").json()
+            if task["status"] not in {"queued", "running"}:
+                break
+            time.sleep(0.02)
+        assert task["status"] == "succeeded", task
+        result = client.post("/api/v1/national-team/query", json=scope().model_dump(mode="json")).json()
+        if mode == "daily":
+            assert result["daily"][0]["flow"] == "100.0"
+        else:
+            assert result["minute"][0]["amount"] == "20"

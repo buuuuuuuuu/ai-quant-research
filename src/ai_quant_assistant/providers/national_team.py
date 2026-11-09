@@ -67,9 +67,11 @@ class NationalTeamProvider:
 
     def fetch_nav(self, code, start, end):
         result, expected = [], None
-        for page in range(1, 21):
+        # Match the public endpoint's established 20-row pagination. A multi-year
+        # request can require more than 20 pages; never discard it at that boundary.
+        for page in range(1, 501):
             response = requests.get("https://api.fund.eastmoney.com/f10/lsjz", timeout=20,
-                                    params={"fundCode": code.split(".")[1], "pageIndex": page, "pageSize": 200,
+                                    params={"fundCode": code.split(".")[1], "pageIndex": page, "pageSize": 20,
                                             "startDate": start, "endDate": end},
                                     headers={"Referer": "https://fundf10.eastmoney.com/", "User-Agent": "Mozilla/5.0"})
             response.raise_for_status()
@@ -78,6 +80,8 @@ class NationalTeamProvider:
             if expected is not None and count != expected:
                 raise ValueError("净值分页总数发生变化，请重试")
             expected = count
+            if expected < 0 or expected > 10000:
+                raise ValueError("净值总数超出允许范围")
             records = payload["Data"]["LSJZList"]
             for row in records:
                 if not start <= row["FSRQ"] <= end:

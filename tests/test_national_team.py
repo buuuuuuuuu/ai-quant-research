@@ -261,3 +261,56 @@ def test_confirmed_sync_api_dispatches_and_completes(app, mode):
             assert result["daily"][0]["flow"] == "100.0"
         else:
             assert result["minute"][0]["amount"] == "20"
+
+
+def test_nav_pagination_continues_past_twenty_pages(monkeypatch):
+    from datetime import timedelta
+
+    from ai_quant_assistant.providers.national_team import NationalTeamProvider
+
+    pages = []
+    class Response:
+        def __init__(self, page):
+            self.page = page
+        def raise_for_status(self):
+            pass
+        def json(self):
+            day = (date(2025, 3, 1) + timedelta(days=self.page)).isoformat()
+            return {"TotalCount": 21, "Data": {"LSJZList": [{"FSRQ": day, "DWJZ": "2.5"}]}}
+    def get(url, **kwargs):
+        assert kwargs["params"]["pageSize"] == 20
+        pages.append(kwargs["params"]["pageIndex"])
+        return Response(pages[-1])
+    monkeypatch.setattr("ai_quant_assistant.providers.national_team.requests.get", get)
+    assert len(NationalTeamProvider().fetch_nav("SSE.510300", "2025-03-01", "2025-03-31")) == 21
+    assert pages[-1] == 21
+
+
+def test_nav_failure_does_not_prevent_share_collection(app):
+    service = app.state.national_team
+    service.database.initialize()
+    with service.database.connect() as c:
+        for n, day in enumerate(DAYS):
+            c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'fixture','fixture',?)", [day, n])
+    calls = []
+    class Provider:
+        def bars(self, code, start, end, minute=False):
+            return [r for r in rows() if r["kind"] == "daily" and r["code"] == code]
+        def fetch_nav(self, code, start, end):
+            calls.append("nav")
+            raise ValueError("净值分页不完整，未发布此基金净值")
+        def fetch_shares(self, market, day, codes):
+            calls.append("shares:"+market)
+            return [r for r in rows() if r["kind"] == "shares" and r["stamp"] == day and r["code"].startswith(market)]
+    service.provider = Provider()
+    request = scope().model_dump()
+    request["funds"] = DEFAULT_FUNDS[:6]
+    task = service.request(**request, confirm=True)
+    service.run(task["task_id"])
+    assert calls.count("nav") == 5
+    assert "shares:SSE" in calls and "shares:SZSE" in calls
+    result = service.read(scope())
+    assert result["daily"][0]["details"][0]["shares"] == "120"
+    assert result["daily"][0]["details"][0]["missing"] == ["当日单位净值"]
+    assert result["daily"][0]["flow"] is None
+    assert any(e.get("reason") == "净值分页不完整，未发布此基金净值" for e in result["batches"][0]["errors"])

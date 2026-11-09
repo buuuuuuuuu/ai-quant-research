@@ -87,8 +87,13 @@ def calculate(funds, days, rows, start, end, selected_day=None, threshold="10000
             # Explicit corporate actions invalidate the simple difference formula.
             if current.get("corporate_action") or prior.get("corporate_action"):
                 flow = None
+            missing = [name for name, value in (("当日份额", current.get("shares")),
+                       ("前一交易日份额", prior.get("shares")), ("当日单位净值", nav.get("nav"))) if value is None]
+            if current.get("corporate_action") or prior.get("corporate_action"):
+                missing.append("份额折算待核验")
             detail.append({**fund, "shares": current.get("shares"), "nav": nav.get("nav"),
                            "change": number(change), "flow": number(flow), "amount": quote.get("amount"),
+                           "missing": missing,
                            "corporate_action": bool(current.get("corporate_action") or prior.get("corporate_action"))})
         flow = total([Decimal(x["flow"]) if x["flow"] is not None else None for x in detail])
         amount = total([Decimal(x["amount"]) if x["amount"] is not None else None for x in detail])

@@ -228,29 +228,42 @@ class NationalTeamService:
             else:
                 for code in [*codes, "INDEX.000001"]:
                     calls.append((f"daily:{code}", lambda code=code: provider.bars(code, days[0], spec["end"])))
-                for code in codes:
-                    calls.append((f"nav:{code}", lambda code=code: provider.fetch_nav(code, days[0], spec["end"])))
-                for day in days:
+                months = sorted({d[:7] for d in days}, reverse=True)
+                for month in months:
+                    month_days = [d for d in days if d.startswith(month)]
+                    for code in codes:
+                        calls.append((f"nav:{code}:{month}", lambda code=code, month_days=month_days: provider.fetch_nav(code, month_days[0], month_days[-1])))
+                for day in reversed(days):
                     for market in sorted({c.split(".")[0] for c in codes}):
                         calls.append((f"shares:{market}:{day}", lambda market=market, day=day: provider.fetch_shares(market, day, codes)))
-            rows, errors, failures = [], [], 0
+            rows, errors, failures, skipped = [], [], {}, {}
             for i, (key, fetch) in enumerate(calls):
+                family = ":".join(key.split(":")[:2]) if key.startswith("shares:") else key.split(":")[0]
+                if failures.get(family, 0) >= 5:
+                    skipped[family] = skipped.get(family, 0) + 1
+                    continue
                 if not self.tasks.progress(task_id, owner_id=owner, progress=int(95 * i / len(calls)), message=f"采集 {key}"):
                     return
                 try:
                     rows.extend(validate_rows(fetch()))
-                    failures = 0
+                    failures[family] = 0
                 except Exception as exc:
                     # Never include provider URLs, headers or credential values.
-                    errors.append({"partition": key, "error": type(exc).__name__})
-                    failures += 1
-                    if failures >= 5:
-                        if not rows:
-                            raise ValueError("连续来源失败，请检查网络与数据源后重试") from exc
-                        errors.append({"partition": "remaining", "error": "StoppedAfterFiveFailures", "count": len(calls) - i - 1})
-                        break
+                    detail = {"partition": key, "error": type(exc).__name__}
+                    response = getattr(exc, "response", None)
+                    if response is not None:
+                        detail["http_status"] = response.status_code
+                    if type(exc) is ValueError and str(exc) in {
+                        "净值分页不完整，未发布此基金净值", "净值分页总数发生变化，请重试",
+                        "净值来源返回范围外数据", "上交所返回了不同统计日期", "上交所份额响应被截断",
+                    }:
+                        detail["reason"] = str(exc)
+                    errors.append(detail)
+                    failures[family] = failures.get(family, 0) + 1
+            errors.extend({"partition": family, "error": "StoppedAfterFiveFailures", "count": count} for family, count in skipped.items())
             if not rows:
-                raise ValueError("来源未返回有效记录，保留已有数据")
+                self.tasks.fail(task_id, owner_id=owner, message="所有来源均未返回有效记录，已有数据保留", error="请查看各来源错误", result={"errors": errors})
+                return
             self.save(spec, rows, "public:exchange/eastmoney", errors, task_id, owner)
         except Exception as exc:
             self.tasks.fail(task_id, owner_id=owner, message="采集失败，已有数据保留", error=type(exc).__name__ + ": 请检查来源或交易日历后重试")

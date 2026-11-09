@@ -9,13 +9,17 @@
       return {code: parts[0].toUpperCase(), name: parts[1], group: parts[2]};
     });
   }
+  function countsText(counts) {
+    if (!counts) return "旧任务未记录各类返回条数";
+    return `本次接口返回：日线 ${counts.daily||0} 条、份额 ${counts.shares||0} 条、净值 ${counts.nav||0} 条、分钟 ${counts.minute||0} 条（含已存储的重复记录）`;
+  }
   function pathFor(points, key, x, y) {
     let path = "", open = false;
     points.forEach((p, i) => { const value = numeric(p[key]); if (value === null || !Number.isFinite(value)) {open = false; return;}
       path += `${open ? "L" : "M"}${x(i).toFixed(2)},${y(value).toFixed(2)} `; open = true;
     }); return path;
   }
-  if (typeof module !== "undefined") module.exports = {money, numeric, parseFunds, pathFor};
+  if (typeof module !== "undefined") module.exports = {money, numeric, parseFunds, pathFor, countsText};
   if (typeof document === "undefined") return;
   const $ = id => document.getElementById(id), api = "/api/v1/national-team";
   const el = (tag, text, cls) => {const node = document.createElement(tag); if(text !== undefined) node.textContent = text; if(cls) node.className=cls; return node;};
@@ -55,8 +59,8 @@
   function render(data){observers.forEach(o=>o.disconnect());observers=[];current=data;$("nt-results").hidden=false;$("nt-banner").textContent=(data.demo?"合成示例：虚构价格、交易日和份额，不是市场数据。 ":"")+data.warning;
     const last=data.daily.at(-1),lastMinute=[...data.minute].reverse().find(p=>p.cumulative!==null&&p.cumulative!==undefined);
     $("nt-metrics").replaceChildren();for(const [label,value,note] of [["观察ETF",data.funds.length+"只","固定名单"],["最近日净申购估算",last?.flow==null?"待补齐":money(last.flow)+"亿元",last?.date||"暂无数据"],["日度完整覆盖",(last?.covered||0)+" / "+data.funds.length,"份额与净值同时可用"],["盘中累计成交",money(lastMinute?.cumulative)+"亿元",data.selected_day+" "+(lastMinute?.time||"待更新")]]){const card=el("div",undefined,"nt-metric");card.append(el("span",label),el("strong",value),el("small",note));$("nt-metrics").append(card);}
-    const sourceErrors=(data.batches||[]).flatMap(b=>b.errors||[]);
-    $("nt-coverage").textContent=last?`${last.date}：当日份额 ${(last.details||[]).filter(x=>x.shares!=null).length}/${data.funds.length}，单位净值 ${(last.details||[]).filter(x=>x.nav!=null).length}/${data.funds.length}，可计算申赎 ${last.covered}/${data.funds.length}。`+(last.covered<data.funds.length?" 缺失原因见逐日明细。收盘后净值或份额可能尚未披露；自动分钟采集不会补齐日度数据。":"")+(sourceErrors.length?" 最近来源错误："+sourceErrors.slice(0,8).map(e=>e.partition+"："+(e.reason||e.error)+(e.http_status?" HTTP "+e.http_status:"")).join("；"):""):"暂无交易日数据。";
+    const sourceErrors=data.latest_daily?.result?.errors||[];
+    $("nt-coverage").textContent=last?`${last.date}：当日份额 ${(last.details||[]).filter(x=>x.shares!=null).length}/${data.funds.length}，单位净值 ${(last.details||[]).filter(x=>x.nav!=null).length}/${data.funds.length}，可计算申赎 ${last.covered}/${data.funds.length}。`+(last.covered<data.funds.length?" 缺失原因见逐日明细。收盘后净值或份额可能尚未披露；自动分钟采集不会补齐日度数据。":"")+(data.latest_daily?" 最近日度任务 "+data.latest_daily.start+" 至 "+data.latest_daily.end+"，结束于 "+data.latest_daily.completed_at+"；"+countsText(data.latest_daily.result?.received_counts)+"。":" 未找到与当前名单和日期匹配的已结束日度任务。")+(sourceErrors.length?" 该任务来源提示："+sourceErrors.slice(0,8).map(e=>e.partition+"："+(e.reason||e.error)+(e.http_status?" HTTP "+e.http_status:"")).join("；"):""):"暂无交易日数据。";
     const green="#216c53",blue="#4c73a1",gold="#af7d21";
     chart("nt-minute-chart","逐分钟合计成交额",data.minute,[{key:"amount",name:"成交额",color:green}]);
     chart("nt-cumulative-chart","累计成交额与同期比较",data.minute,[{key:"cumulative",name:"所选日",color:green},{key:"previous",name:"上一交易日",color:blue},{key:"mean20",name:"前20交易日均值",color:gold}]);
@@ -70,12 +74,12 @@
     const recent=data.daily.filter(p=>!cutoff||p.date>=cutoff.toISOString().slice(0,10));
     table($("nt-heatmap"),["分类（名单内只数）",...recent.map(p=>p.date.slice(5))],groups.map(g=>[g+"（"+data.funds.filter(f=>f.group===g).length+"）",...recent.map(p=>({text:money(p.groups[g]?.flow),cls:numeric(p.groups[g]?.flow)>0?"nt-positive":numeric(p.groups[g]?.flow)<0?"nt-negative":""}))]));
     $("nt-detail-day").replaceChildren();for(const p of data.daily) {const option=el("option",p.date);option.value=p.date;$("nt-detail-day").append(option);}if(latest)$("nt-detail-day").value=latest;details();
-    $("nt-provenance").textContent=JSON.stringify({batches:data.batches,funds:data.funds,scope:data.scope,start:data.start,end:data.end,version:data.version,threshold:data.threshold,excluded:data.excluded,input_sha256:data.input_sha256,as_of:data.as_of},null,2);
+    $("nt-provenance").textContent=JSON.stringify({latest_daily:data.latest_daily,batches:data.batches,funds:data.funds,scope:data.scope,start:data.start,end:data.end,version:data.version,threshold:data.threshold,excluded:data.excluded,input_sha256:data.input_sha256,as_of:data.as_of},null,2);
   }
   function details(){const p=current?.daily.find(x=>x.date===$("nt-detail-day").value);table($("nt-details"),["基金","分类","份额（份）","单位净值","份额变化","估算净申购（亿元）","成交额（亿元）","缺失原因"],(p?.details||[]).map(x=>[x.name+" "+x.code,x.group,x.shares??"—",x.nav??"—",x.change??"—",x.corporate_action?"折算待核验":money(x.flow),money(x.amount),(x.missing||[]).join("、")||"完整"]));}
   async function query(){const own=++generation,body=scope();$("nt-status").textContent="正在读取本地数据…";try {const data=await request("/query",body);if(own!==generation)return;render(data);dirty=false;$("nt-status").textContent=data.daily.length?"已读取本地数据；编辑参数后须重新查询。":"本地无可用交易日历；可先体验合成示例或同步数据。";} catch(error) {if(own===generation) throw error;}}
   function guard(fn){return async()=>{try{await fn();}catch(e){$("nt-status").textContent=e.message;}};}
-  async function poll(){clearTimeout(taskTimer);if(!taskId)return;try{const t=await request("/tasks/"+encodeURIComponent(taskId));$("nt-task").textContent=t.status+" · "+t.progress+"% · "+t.message+(t.error?" · "+t.error:"")+(t.result?.errors?.length?" · "+t.result.errors.slice(0,5).map(e=>e.partition+":"+(e.reason||e.error)+(e.http_status?" HTTP "+e.http_status:"")).join("；"):"");if(["queued","running"].includes(t.status)){taskTimer=setTimeout(poll,2500);}else{$("nt-resume").hidden=true;sessionStorage.removeItem("nt-task");taskId=null;$("nt-task").textContent+="。请点击查看本地数据刷新结果。";}}catch(e){$("nt-task").textContent="进度查询失败："+e.message;$("nt-resume").hidden=false;}}
+  async function poll(){clearTimeout(taskTimer);if(!taskId)return;try{const t=await request("/tasks/"+encodeURIComponent(taskId));$("nt-task").textContent=t.status+" · "+t.progress+"% · "+t.message+(t.result?" · "+(t.result.mode==="minute"?"分钟采集":"日度采集")+" "+(t.result.start||"")+" 至 "+(t.result.end||"")+" · "+countsText(t.result.received_counts):"")+(t.error?" · "+t.error:"")+(t.result?.errors?.length?" · "+t.result.errors.slice(0,5).map(e=>e.partition+":"+(e.reason||e.error)+(e.http_status?" HTTP "+e.http_status:"")).join("；"):"");if(["queued","running"].includes(t.status)){taskTimer=setTimeout(poll,2500);}else{$("nt-resume").hidden=true;sessionStorage.removeItem("nt-task");taskId=null;$("nt-task").textContent+="。请点击查看本地数据刷新结果。";}}catch(e){$("nt-task").textContent="进度查询失败："+e.message;$("nt-resume").hidden=false;}}
   function confirmed(){if(!$("nt-confirm").checked)throw Error("请勾选确认后再采集或更改计划");}
   async function sync(mode){confirmed();const t=await request("/sync",{...scope(),mode,confirm:true});taskId=t.task_id;sessionStorage.setItem("nt-task",taskId);poll();}
   async function schedule(enabled){confirmed();const result=await request("/schedule",{scope:scope(),enabled,confirm:true});$("nt-schedule").textContent=result.enabled?"交易时段自动采集已启用（服务器统一运行）；关闭页面后仍执行。":"自动采集已停止；已提交的任务会完成。";}

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {money,numeric,parseFunds,pathFor} = require('../../src/ai_quant_assistant/web/static/national-team.js');
+const {money,numeric,parseFunds,pathFor,countsText} = require('../../src/ai_quant_assistant/web/static/national-team.js');
 test('missing money remains unknown and units are hundred million',()=>{
   assert.equal(money(null),'—');assert.equal(money('0'),'0.00');assert.equal(money('123000000'),'1.23');assert.equal(numeric(undefined),null);
 });
@@ -10,4 +10,8 @@ test('editable scope uses explicit group and rejects malformed rows',()=>{
 });
 test('chart gaps are not bridged and zero remains a valid point',()=>{
   assert.equal(pathFor([{v:0},{v:null},{v:2}],'v',i=>i,v=>v),'M0.00,0.00 M2.00,2.00 ');
+});
+test('collection counts distinguish empty responses from legacy missing diagnostics',()=>{
+  assert.match(countsText({daily:6}),/份额 0 条、净值 0 条/);
+  assert.match(countsText(undefined),/旧任务未记录/);
 });

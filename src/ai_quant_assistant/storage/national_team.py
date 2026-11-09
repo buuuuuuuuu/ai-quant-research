@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from threading import RLock
@@ -94,6 +95,7 @@ class NationalTeamService:
 
     def save(self, spec, rows, source, errors=(), task_id=None, owner=None):
         rows = validate_rows(rows, max_rows=600000)
+        received_counts = dict(Counter(r["kind"] for r in rows))
         batch = "national-team-" + uuid4().hex
         self.database.initialize()
         with self.database.connect() as c:
@@ -116,7 +118,7 @@ class NationalTeamService:
                 if rows:
                     c.executemany("INSERT INTO national_team_observation VALUES (?,?,?,?,?)", [(batch, r["kind"], r["code"], r["stamp"], _canonical(r)) for r in rows])
                 if task_id:
-                    result = _canonical({"batch_id": batch, "records": len(rows), "errors": errors})
+                    result = _canonical({"batch_id": batch, "records": len(rows), "received_counts": received_counts, "mode": spec.get("mode"), "start": spec.get("start"), "end": spec.get("end"), "errors": errors})
                     c.execute("UPDATE operation_task SET status='succeeded',progress=100,message=?,result_json=?,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP,claim_key=NULL WHERE task_id=? AND owner_id=?", ["已保存；部分来源失败" if errors else "采集完成；覆盖情况以看板为准", result, task_id, owner])
                 c.execute("COMMIT")
             except Exception:
@@ -142,10 +144,19 @@ class NationalTeamService:
         spec = scope.model_dump(mode="json")
         start = (scope.start - timedelta(days=45)).isoformat()
         days = self.days(start, spec["end"])
-        rows, batches = [], []
+        rows, batches, latest_daily = [], [], None
         if self.database.path.is_file():
             with self.database.connect(read_only=True) as c:
                 codes = [f.code for f in scope.funds] + ["INDEX.000001"]
+                tasks = c.execute("""SELECT spec_json,result_json,status,message,completed_at FROM operation_task
+                    WHERE json_extract_string(spec_json,'$.dataset')='national_team'
+                    AND json_extract_string(spec_json,'$.mode')='daily' AND completed_at IS NOT NULL
+                    ORDER BY completed_at DESC LIMIT 30""").fetchall()
+                for t in tasks:
+                    task_spec = json.loads(t[0])
+                    if {f["code"] for f in task_spec["funds"]} == set(codes) - {"INDEX.000001"} and task_spec["start"] <= spec["end"] and task_spec["end"] >= spec["start"]:
+                        latest_daily = {"start": task_spec["start"], "end": task_spec["end"], "completed_at": t[4].isoformat(), "status": t[2], "message": t[3], "result": json.loads(t[1]) if t[1] else None}
+                        break
                 placeholders = ",".join("?" for _ in codes)
                 raw = c.execute(f"""SELECT payload_json, batch_id FROM (
                     SELECT o.*, row_number() OVER (PARTITION BY kind,code,stamp ORDER BY b.created_at DESC,b.batch_id DESC) AS rank
@@ -158,7 +169,7 @@ class NationalTeamService:
                 if ids:
                     batches = [{"batch_id": r[0], "source": r[1], "fetched_at": r[2].isoformat(), "errors": json.loads(r[3])} for r in c.execute("SELECT batch_id,source,created_at,errors_json FROM national_team_batch WHERE batch_id IN (" + ",".join("?" for _ in ids) + ") ORDER BY created_at DESC", ids).fetchall()]
         result = calculate(spec["funds"], days, rows, spec["start"], spec["end"], spec["selected_day"], spec["threshold"], spec["excluded"])
-        result.update(batches=batches, calendar_days=len(days), as_of=datetime.now(UTC).isoformat(),
+        result.update(batches=batches, latest_daily=latest_daily, calendar_days=len(days), as_of=datetime.now(UTC).isoformat(),
                       input_sha256=hashlib.sha256(_canonical(sorted(rows, key=lambda r: (r["kind"], r["code"], r["stamp"]))).encode()).hexdigest())
         return result
 
@@ -245,7 +256,10 @@ class NationalTeamService:
                 if not self.tasks.progress(task_id, owner_id=owner, progress=int(95 * i / len(calls)), message=f"采集 {key}"):
                     return
                 try:
-                    rows.extend(validate_rows(fetch()))
+                    fetched = validate_rows(fetch())
+                    if not fetched:
+                        errors.append({"partition": key, "error": "EmptyResponse", "reason": "接口未返回所请求范围的数据"})
+                    rows.extend(fetched)
                     failures[family] = 0
                 except Exception as exc:
                     # Never include provider URLs, headers or credential values.
@@ -262,7 +276,7 @@ class NationalTeamService:
                     failures[family] = failures.get(family, 0) + 1
             errors.extend({"partition": family, "error": "StoppedAfterFiveFailures", "count": count} for family, count in skipped.items())
             if not rows:
-                self.tasks.fail(task_id, owner_id=owner, message="所有来源均未返回有效记录，已有数据保留", error="请查看各来源错误", result={"errors": errors})
+                self.tasks.fail(task_id, owner_id=owner, message="所有来源均未返回有效记录，已有数据保留", error="请查看各来源错误", result={"errors": errors, "received_counts": {}, "mode": spec["mode"], "start": spec["start"], "end": spec["end"]})
                 return
             self.save(spec, rows, "public:exchange/eastmoney", errors, task_id, owner)
         except Exception as exc:

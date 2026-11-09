@@ -314,3 +314,31 @@ def test_nav_failure_does_not_prevent_share_collection(app):
     assert result["daily"][0]["details"][0]["missing"] == ["当日单位净值"]
     assert result["daily"][0]["flow"] is None
     assert any(e.get("reason") == "净值分页不完整，未发布此基金净值" for e in result["batches"][0]["errors"])
+
+
+def test_empty_daily_inputs_are_visible_and_received_counts_survive_dedup(app):
+    service = app.state.national_team
+    service.database.initialize()
+    with service.database.connect() as c:
+        for n, day in enumerate(DAYS):
+            c.execute("INSERT INTO trading_calendar(exchange,trade_date,is_open,source,source_batch_id,session_no) VALUES ('SSE',?,TRUE,'fixture','fixture',?)", [day, n])
+    class Provider:
+        def bars(self, code, start, end, minute=False):
+            return [r for r in rows() if r["kind"] == "daily" and r["code"] == code]
+        def fetch_nav(self, *args):
+            return []
+        def fetch_shares(self, *args):
+            return []
+    service.provider = Provider()
+    for run in range(2):
+        task = service.request(**scope().model_dump(), confirm=True)
+        service.run(task["task_id"])
+        finished = service.tasks.get(task["task_id"])
+        assert finished["result"]["received_counts"] == {"daily": 6}
+        assert any(e["partition"].startswith("nav:") and e["error"] == "EmptyResponse" for e in finished["result"]["errors"])
+        assert any(e["partition"].startswith("shares:") and e["error"] == "EmptyResponse" for e in finished["result"]["errors"])
+        if run:
+            assert finished["result"]["records"] == 0
+        latest = service.read(scope())["latest_daily"]
+        assert latest["result"] == finished["result"]
+        assert latest["start"] == "2025-03-04"

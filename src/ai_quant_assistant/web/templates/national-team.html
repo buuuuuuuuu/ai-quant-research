@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>国家队看板 · 澄明</title>
+<link rel="stylesheet" href="/assets/workbench.css?v={{ asset_version }}">
+<link rel="stylesheet" href="/assets/national-team.css?v={{ asset_version }}"></head>
+<body>{% include "app-nav.html" %}<main class="nt-page">
+<p class="eyebrow">市场观察 / ETF OBSERVATORY</p><h1>国家队看板</h1>
+<p class="nt-lead">重点 ETF 成交与申赎观察。看清交易活跃度，核对份额变化。</p>
+<p class="nt-note">ETF 成交额和净申购无法识别买方身份；此处不代表已确认的国家队交易。公开数据可能延迟，资金估算不用于时点回测。</p>
+<section class="panel"><h2>观察范围</h2>
+<form id="nt-form"><div class="nt-fields">
+<label>开始日期<input type="date" id="nt-start" required value="2023-10-09"></label>
+<label>结束日期<input type="date" id="nt-end" required></label>
+<label>分钟查看日期<input type="date" id="nt-day" required></label>
+<label>样本阈值（亿元）<input type="number" id="nt-threshold" min="0" max="10000000" value="100" step="1" required></label>
+</div><details><summary>查看与编辑基金名单、排除日期</summary>
+<p>每行：基金代码,名称,指数分类。默认20只是示例固定名单，不代表历史Top20。支持12类、最多100只；分类统计仅覆盖名单内基金。</p>
+<label for="nt-funds">基金名单</label><textarea id="nt-funds" rows="9" required></textarea>
+<p id="nt-groups"></p><label>排除的样本日期（逗号分隔）<input id="nt-excluded" placeholder="例如 2024-02-06,2024-02-07"></label>
+<p>排除设置会随导出的结果保存，不会更改原始数据。</p></details>
+<label class="nt-check"><input type="checkbox" id="nt-refresh" checked> 每60秒刷新本地结果，不触发数据采集</label>
+<div class="nt-actions"><button class="primary-button" type="submit">查看本地数据</button>
+<button type="button" id="nt-demo" class="secondary-button">体验合成示例</button>
+<button type="button" id="nt-export" class="secondary-button">导出当前结果 JSON</button></div></form>
+<details class="nt-collection"><summary>数据采集与导入</summary><p>仅在明确确认后联网。先在数据管理同步交易日历（含开始日期之前45天）。分钟公开源仅保留近约5个交易日，较早记录需持续积累或导入。</p>
+<label class="nt-check"><input type="checkbox" id="nt-confirm"> 我确认采集上方名单和日期的数据</label>
+<div class="nt-actions"><button type="button" id="nt-daily">采集日度数据</button><button type="button" id="nt-minute">采集近期分钟</button>
+<button type="button" id="nt-auto">启用交易时段每分钟采集</button><button type="button" id="nt-stop">停止自动采集</button></div>
+<p id="nt-schedule" role="status"></p><p id="nt-task" role="status"></p><button type="button" id="nt-resume" hidden>继续查询任务</button>
+<label>导入标准 JSON 数据<input type="file" id="nt-file" accept="application/json,.json"></label>
+<button type="button" id="nt-import">确认导入文件</button><p>最多16 MiB，文件应包含 scope、source、rows；格式与字段见项目文档 national-team-dashboard.md。导入来源保留为未核验。</p>
+</details><p id="nt-status" role="status" aria-live="polite">正在读取观察名单…</p></section>
+<div id="nt-results" hidden>
+<div id="nt-banner" class="nt-note"></div><div id="nt-metrics" class="nt-metrics"></div>
+<section class="panel"><h2>盘中分钟观测</h2><p>连续竞价分钟成交额，单位亿元；不含09:30集合竞价。缺失分钟不补零，时间统一为北京时间。</p>
+<div id="nt-minute-chart"></div><div id="nt-cumulative-chart"></div><div id="nt-index-minute"></div><p id="nt-history"></p></section>
+<section class="panel"><h2>大额申购观察</h2><p>净申购估算＝份额变化×当日单位净值。超阈值日期是历史观察样本，不能据此判断国家队入场。</p>
+<div id="nt-flow-chart"></div><p id="nt-samples"></p><div class="nt-pair"><div id="nt-sample-profile"></div><div id="nt-normal-profile"></div></div>
+<div class="nt-pair"><div id="nt-sample-index"></div><div id="nt-normal-index"></div></div></section>
+<section class="panel"><h2>日度资金全景</h2><div id="nt-daily-chart"></div><div id="nt-index-daily"></div>
+<h3>近一个月分类净申购估算</h3><p>单位亿元。仅统计当前固定名单；未纳入的分类或缺失值显示“—”，不代表全市场。</p><div id="nt-heatmap" class="nt-scroll"></div></section>
+<section class="panel"><h2>逐日明细与来源</h2><label>选择交易日<select id="nt-detail-day"></select></label>
+<div id="nt-details" class="nt-scroll"></div><details><summary>查看来源、采集时间与输入摘要</summary><pre id="nt-provenance"></pre></details></section>
+</div></main><script src="/assets/date-chart.js?v={{ asset_version }}" defer></script><script src="/assets/national-team.js?v={{ asset_version }}" defer></script></body></html>

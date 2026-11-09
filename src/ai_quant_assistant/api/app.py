@@ -178,8 +178,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         datasets=(ResearchDataPlans.dataset,),
         worker_name="research-data",
     )
+    from ai_quant_assistant.api.national_team_routes import (
+        NationalTeamTaskManager,
+        national_team_router,
+    )
     from ai_quant_assistant.storage.index_fund_sync import IndexFundSync
+    from ai_quant_assistant.storage.national_team import NationalTeamService
 
+    national_team_service = NationalTeamService(database)
+    national_team_tasks = NationalTeamTaskManager(national_team_service, datasets=(national_team_service.dataset,), worker_name="national-team")
     index_fund_tasks = ManagedStockTaskManager(IndexFundSync(database), datasets=(IndexFundSync.dataset,), worker_name="index-fund")
     security_master_tasks = SecurityMasterTaskManager(
         SecurityMasterRefreshService.from_settings(
@@ -261,7 +268,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
                 "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
-                "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "gold.js", "gold.css", "date-chart.js",
+                "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "gold.js", "gold.css", "date-chart.js", "national-team.js", "national-team.css",
             )
         )
     ).hexdigest()[:16]
@@ -271,11 +278,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         managed_stock_tasks.start()
         research_data_tasks.start()
         index_fund_tasks.start()
+        national_team_tasks.start()
         daily_signal_manager.start()
         yield
         managed_stock_tasks.shutdown()
         research_data_tasks.shutdown()
         index_fund_tasks.shutdown()
+        national_team_tasks.shutdown()
         task_manager.shutdown()
         factor_lab_manager.shutdown()
         daily_signal_manager.shutdown()
@@ -293,6 +302,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.database = database
+    app.state.national_team = national_team_service
     app.state.backtest_tasks = task_manager
     app.state.backtest_runs = run_repository
     app.state.factor_lab_tasks = factor_lab_manager
@@ -334,6 +344,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ))
     from ai_quant_assistant.api.index_fund_routes import index_fund_router
 
+    app.include_router(national_team_router(national_team_service, national_team_tasks, templates, asset_version, resolved_settings.web_username))
     app.include_router(index_fund_router(database, templates, asset_version, resolved_settings.web_username, index_fund_tasks))
     from ai_quant_assistant.api.research_dashboard_routes import research_dashboard_router
     from ai_quant_assistant.api.stock_research_routes import stock_research_router

@@ -65,6 +65,7 @@ uv run python examples/offline-demo/demo.py --output .demo/first --serve
 | 主题 | 文档 |
 |---|---|
 | 离线可运行示例 | [数据与结果说明](examples/offline-demo/README.md) |
+| 国家队看板 | [重点ETF成交、申赎估算与试用说明](docs/national-team-dashboard.md) |
 | 日线策略 | [策略口径](docs/daily-signal-backtest-m12a.md) · [审计](docs/daily-signal-audit-m12d.md) · [可信度与范围](docs/backtest-trust-m12f.md) |
 | 财务、实验与事件 | [财务因子](docs/factor-backtest.md) · [多因子实验](docs/factor-lab.md) · [事件研究](docs/golden-path.md) |
 | 数据与范围 | [股票池](docs/stock-pools.md) · [数据字典](docs/data-dictionary.md) |

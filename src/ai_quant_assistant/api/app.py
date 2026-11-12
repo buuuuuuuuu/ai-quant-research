@@ -269,6 +269,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "stock-research.css", "research-dashboard.js", "research-dashboard.css",
                 "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
                 "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "gold.js", "gold.css", "date-chart.js", "national-team.js", "national-team.css",
+                "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "market-workspace.js", "market-workspace.css", "gold.js", "gold.css", "date-chart.js",
             )
         )
     ).hexdigest()[:16]

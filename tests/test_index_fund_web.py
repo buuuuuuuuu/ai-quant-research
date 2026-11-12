@@ -13,6 +13,12 @@ def test_index_page_reads_only_saved_snapshot(tmp_path):
         assert "指数基金规模观察" in page and 'id="index-fund-profiles"' in page
         assert page.index('/assets/fund-profiles.js') < page.index('/assets/index-funds.js')
         assert client.get('/assets/fund-profiles.js').status_code == 200
+        chosen = client.get('/market/index-funds?index=000905').text
+        assert '<h2 id="market-title">中证500</h2>' in chosen
+        assert '<option value="000905" selected>' in chosen
+        assert '<option value="000300" selected>' in client.get('/market/index-funds?index=unknown').text
+        assert client.get('/assets/market-workspace.js').status_code == 200
+        assert client.get('/assets/market-workspace.css').status_code == 200
         assert client.get("/api/v1/index-funds/000300").json()["snapshot"] is None
         assert client.get("/api/v1/index-funds/invalid").status_code == 404
         store = IndexFundSnapshotStore(app.state.database)

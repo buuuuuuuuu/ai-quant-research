@@ -7,7 +7,7 @@ from typing import Any
 
 from ai_quant_assistant.domain.models import DEFAULT_RESEARCH_SYMBOLS
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 
 @dataclass(frozen=True, slots=True)
@@ -1446,6 +1446,27 @@ MIGRATIONS = (
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )""",
             "CREATE INDEX index_fund_evidence_fund_idx ON index_fund_evidence(fund_id, created_at)",
+        ),
+    ),
+    Migration(
+        version=22,
+        name="national_team_observations",
+        statements=(
+            """CREATE TABLE national_team_batch (
+                batch_id VARCHAR PRIMARY KEY, source VARCHAR NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                spec_json VARCHAR NOT NULL, errors_json VARCHAR NOT NULL
+            )""",
+            """CREATE TABLE national_team_observation (
+                batch_id VARCHAR NOT NULL, kind VARCHAR NOT NULL, code VARCHAR NOT NULL,
+                stamp VARCHAR NOT NULL, payload_json VARCHAR NOT NULL,
+                PRIMARY KEY(batch_id, kind, code, stamp)
+            )""",
+            "CREATE INDEX national_team_stamp_idx ON national_team_observation(stamp, code)",
+            """CREATE TABLE national_team_schedule (
+                schedule_id INTEGER PRIMARY KEY, enabled BOOLEAN NOT NULL,
+                spec_json VARCHAR NOT NULL, next_at TIMESTAMPTZ, error VARCHAR
+            )""",
         ),
     ),
 )

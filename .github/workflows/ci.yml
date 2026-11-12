@@ -39,7 +39,10 @@ jobs:
       - name: Install Chinese fonts for browser renders
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y fonts-noto-cjk
+          sudo apt-get install -y fonts-noto-cjk nginx
+
+      - name: Check HTTP and HTTPS proxy cache and compression
+        run: uv run pytest tests/test_nginx_assets.py
 
       - name: Check market browser interactions and render screenshots
         run: uv run pytest tests/test_market_chart_browser.py
@@ -56,7 +59,7 @@ jobs:
           retention-days: 7
 
       - name: Execute remaining offline tests
-        run: uv run pytest --ignore=tests/test_market_chart_browser.py
+        run: uv run pytest --ignore=tests/test_market_chart_browser.py --ignore=tests/test_nginx_assets.py
 
       - name: Validate browser JavaScript
         run: for script in src/ai_quant_assistant/web/static/*.js; do node --check "$script"; done

@@ -263,14 +263,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=web_root / "templates")
     asset_version = hashlib.sha256(
         b"".join(
-            (web_root / "static" / name).read_bytes()
-            for name in (
-                "workbench.js", "managed-stocks.js", "research-data.js", "stock-research.js",
-                "stock-research.css", "research-dashboard.js", "research-dashboard.css",
-                "workbench.css", "stock-pools.css", "app-shell.css", "ui-foundation.css",
-                "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "gold.js", "gold.css", "date-chart.js", "national-team.js", "national-team.css",
-                "app-shell.js", "run-center.js", "index-funds.js", "fund-profiles.js", "market-workspace.js", "market-workspace.css", "gold.js", "gold.css", "date-chart.js",
-            )
+            path.name.encode() + b"\0" + path.read_bytes() + b"\0"
+            for path in sorted((web_root / "static").iterdir())
+            if path.suffix in {".css", ".js"}
         )
     ).hexdigest()[:16]
 
@@ -433,6 +428,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name="login.html",
             context={
                 "version": __version__,
+                "asset_version": asset_version,
                 "next_path": safe_next_path(request.query_params.get("next")),
                 "error": None,
             },
@@ -462,6 +458,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 name="login.html",
                 context={
                     "version": __version__,
+                    "asset_version": asset_version,
                     "next_path": next_path,
                     "error": "登录失败次数过多，请 5 分钟后重试。",
                 },
@@ -479,6 +476,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 name="login.html",
                 context={
                     "version": __version__,
+                    "asset_version": asset_version,
                     "next_path": next_path,
                     "error": "用户名或密码不正确。",
                 },

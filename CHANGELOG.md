@@ -1,5 +1,20 @@
 # 变更记录
 
+## 未发布：读路径查询提速与静态资源缓存
+
+- `LocalDatabase.status()` 改为单条 `UNION ALL` 统计全部核心关系行数，不再为每个关系单独执行
+  一次 `COUNT(*)`；计数结果与逐表统计完全一致，实测 0.048s → 0.010s。
+- `research_overview()` 与 `PlatformMonitor.quality()` 的证券聚合先在 `published_daily_bar`、
+  `published_financial_report` 内按 `security_id` 预聚合，再与 `security_master` 左连接，消除
+  5000+ 证券 × 行情 × 财报的中间结果放大。返回列与取值不变（生产数据逐值比对一致），
+  实测 0.95s → 0.018s、0.32s → 0.019s。
+- `deploy/nginx` 的 HTTP/HTTPS 模板为代理响应显式开启 gzip（JS、CSS、JSON、SVG），并让带
+  `?v=<16位内容哈希>` 的 `/assets/` 走一年缓存；无版本号和旧版本号必须重新验证。原始优化提交记录的测量：脚本 200,596B → 54,090B、研究看板 JSON
+  245,490B → 24,971B、首页 HTML 43,197B → 10,685B。
+- 登录页及错误响应统一使用内容哈希，哈希自动覆盖 JS/CSS；补充查询语义和真实 Nginx 代理回归。
+- Nginx 模板需单独部署，应用更新脚本不会覆盖生产代理配置；操作步骤见 `docs/platform-operations.md`。
+- 本轮不改数据库结构、同步语义、接口字段或依赖版本。
+
 ## 未发布：定时同步失败隔离
 
 - `ops sync` 的股票、指数、公告、财务四个数据集阶段改为独立发布：单个股票或单个分区的失败

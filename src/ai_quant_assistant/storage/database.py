@@ -173,13 +173,19 @@ class LocalDatabase:
                         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
                     ).fetchone()[0]
                 )
-            relations = {
-                relation: int(
-                    connection.execute(f'SELECT COUNT(*) FROM "{relation}"').fetchone()[0]
+            present = [relation for relation in CORE_RELATIONS if relation in available]
+            relations: dict[str, int] = {}
+            if present:
+                # One round trip beats one COUNT(*) per relation: DuckDB plans the
+                # union once, which keeps status() cheap for read-heavy pages.
+                count_sql = " UNION ALL ".join(
+                    f"SELECT '{relation}' AS relation, COUNT(*) AS rows FROM \"{relation}\""
+                    for relation in present
                 )
-                for relation in CORE_RELATIONS
-                if relation in available
-            }
+                relations = {
+                    str(relation): int(rows)
+                    for relation, rows in connection.execute(count_sql).fetchall()
+                }
         return {
             "initialized": version > 0,
             "database_path": str(self.path),
@@ -197,18 +203,29 @@ class LocalDatabase:
         with self.connect(read_only=True) as connection:
             securities = connection.execute(
                 """
-                SELECT security.symbol, security.name, security.exchange,
-                       security.list_date, MIN(bar.trade_date) AS start_date,
-                       MAX(bar.trade_date) AS end_date,
-                       COUNT(DISTINCT bar.trade_date) AS price_rows,
-                       COUNT(DISTINCT report.report_id) AS report_count
+                SELECT security.symbol, security.name, security.exchange, security.list_date,
+                       bar.start_date, bar.end_date,
+                       COALESCE(bar.price_rows, 0) AS price_rows,
+                       COALESCE(report.report_count, 0) AS report_count
                 FROM security_master AS security
-                LEFT JOIN published_daily_bar AS bar
-                  ON bar.security_id = security.security_id AND bar.adjustment = 'qfq'
-                LEFT JOIN published_financial_report AS report
+                LEFT JOIN (
+                    SELECT security_id,
+                           MIN(trade_date) AS start_date,
+                           MAX(trade_date) AS end_date,
+                           COUNT(DISTINCT trade_date) AS price_rows
+                    FROM published_daily_bar
+                    WHERE adjustment = 'qfq'
+                    GROUP BY security_id
+                ) AS bar
+                  ON bar.security_id = security.security_id
+                LEFT JOIN (
+                    SELECT security_id, COUNT(DISTINCT report_id) AS report_count
+                    FROM published_financial_report
+                    GROUP BY security_id
+                ) AS report
                   ON report.security_id = security.security_id
-                GROUP BY security.symbol, security.name, security.exchange, security.list_date
-                HAVING COUNT(bar.trade_date) > 0 OR COUNT(report.report_id) > 0
+                WHERE COALESCE(bar.price_rows, 0) > 0
+                   OR COALESCE(report.report_count, 0) > 0
                 ORDER BY security.symbol
                 """
             ).fetchdf()

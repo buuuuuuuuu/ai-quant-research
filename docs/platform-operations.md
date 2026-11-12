@@ -217,3 +217,28 @@ Web 运维面板显示最近同步批次、任务进度、失败信息、已验�
 ## M10-B 升级（Schema v17）
 
 新增research_brief及带时区首次采集字段，旧数据字段不回填猜测值。按既有停写→v16备份并验证→安装→服务用户data init→确认当前/预期17→新备份verify→恢复服务流程；更新脚本默认预期17。JSON与HTML在同一数据库事务内，备份天然包含简报。回退先保全新资料并恢复验证过的v16备份，禁止旧程序直接写v17。详见[并发、风险和升级说明](research-dashboard-brief.md)。
+
+## 读路径优化与 Nginx 缓存更新
+
+本次 SQL 优化不迁移数据库。`update-production-from-git.sh` 只更新应用及 systemd，
+不会覆盖 `/etc/nginx/` 的配置；gzip 和缓存策略需要单独部署。
+
+1. 备份正在使用的 Nginx 站点配置，确认 `/etc/nginx/sites-enabled/ai-quant` 的实际目标。
+2. 选用 `deploy/nginx/ai-quant-http.conf` 或 `ai-quant-https.conf` 中的一份模板，
+   将自己的 `server_name`、证书路径及既有定制配置合入后再更新站点文件。
+   顶部 `map` 必须保留在 `http` 上下文（Ubuntu 的 `sites-enabled` 默认在此处加载），
+   不能粘贴到 `server` 内。不要直接用模板占位域名覆盖生产配置。
+3. 执行 `nginx -t`，通过后执行 `systemctl reload nginx`。检查失败时恢复备份，不重启服务。
+4. 对实际站点地址检查：无版本号和 `?v=0.2.0` 的 `/assets/workbench.css`
+   应返回 `Cache-Control: no-cache`；使用页面源码中实际的 16 位哈希应返回
+   `Cache-Control: max-age=31536000`。请求加 `Accept-Encoding: gzip`，且响应足够大时，
+   应返回 `Content-Encoding: gzip` 与 `Vary: Accept-Encoding`。
+   `/health`、动态 API 和静态资源 404 不应获得一年缓存。
+
+登录页（含登录失败和限流页面）与其他页面使用同一个资源内容哈希。
+哈希自动覆盖静态目录中的 JS/CSS，修改文件而不提升软件版本号也会更新资源 URL。
+如果之前部署过无条件一年缓存，已经缓存的旧地址不会被服务器远程清除；
+新页面的哈希 URL 会避开旧缓存，必要时对旧页面执行强制刷新。
+
+性能记录中的生产耗时与压缩体积来自原始优化提交的测量，不能作为所有机器的性能保证。
+本仓库回归覆盖 SQL 的去重、缺失值、过滤以及 HTTP/HTTPS 实际代理缓存和压缩行为。

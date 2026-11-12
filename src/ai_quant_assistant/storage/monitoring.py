@@ -306,17 +306,29 @@ class PlatformMonitor:
             securities = connection.execute(
                 """
                 SELECT security.symbol, security.name,
-                       MAX(bar.trade_date) AS latest_trade_date,
-                       COUNT(DISTINCT bar.trade_date) AS price_rows,
-                       MAX(report.report_period_end) AS latest_financial_period,
-                       COUNT(DISTINCT report.report_id) AS financial_reports
+                       bar.latest_trade_date,
+                       COALESCE(bar.price_rows, 0) AS price_rows,
+                       report.latest_financial_period,
+                       COALESCE(report.financial_reports, 0) AS financial_reports
                 FROM security_master AS security
-                LEFT JOIN published_daily_bar AS bar
-                  ON bar.security_id = security.security_id AND bar.adjustment = 'qfq'
-                LEFT JOIN published_financial_report AS report
+                LEFT JOIN (
+                    SELECT security_id,
+                           MAX(trade_date) AS latest_trade_date,
+                           COUNT(DISTINCT trade_date) AS price_rows
+                    FROM published_daily_bar
+                    WHERE adjustment = 'qfq'
+                    GROUP BY security_id
+                ) AS bar
+                  ON bar.security_id = security.security_id
+                LEFT JOIN (
+                    SELECT security_id,
+                           MAX(report_period_end) AS latest_financial_period,
+                           COUNT(DISTINCT report_id) AS financial_reports
+                    FROM published_financial_report
+                    GROUP BY security_id
+                ) AS report
                   ON report.security_id = security.security_id
                 WHERE security.status = 'active'
-                GROUP BY security.symbol, security.name
                 ORDER BY security.symbol LIMIT 500
                 """
             ).fetchall()

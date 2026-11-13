@@ -263,6 +263,12 @@ async function run(width) {
                 renders.append((f"index-funds-{panel}", filename))
             renders.append(("overview-shell", "overview.html"))
         for name, filename in renders:
+            # Virtual-time screenshots can freeze a CSS transition midway through
+            # switching tabs. Capture final states while keeping app motion unchanged.
+            render_path = tmp_path / filename
+            render_path.write_text(render_path.read_text() +
+                                   "<style>*, *::before, *::after { transition: none !important; "
+                                   "animation: none !important; }</style>")
             for width in (390, 768, 1440):
                 subprocess.run(
                     [CHROME, "--headless", "--no-sandbox", "--disable-dev-shm-usage",

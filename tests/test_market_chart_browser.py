@@ -179,6 +179,8 @@ async function run(width) {
     doc.querySelector("#index-selected button").click();
     check(doc.querySelectorAll("#index-selected button").length === 4, "remove fund");
     const firstExample = doc.querySelector("#index-examples button");
+    // Compare the settled selection cue, not an intermediate hover/color animation.
+    firstExample.style.transition = "none";
     const unselectedColor = win.getComputedStyle(firstExample).backgroundColor;
     firstExample.focus();
     firstExample.click();

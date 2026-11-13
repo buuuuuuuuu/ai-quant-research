@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,6 +29,11 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
         "closes": closes, "updated_at": "2026-11-07T13:00:00+00:00",
     }))
     client = TestClient(create_app(settings))
+    # Render the real overview shell without its data-loading scripts; footer geometry
+    # must match the reading column even when the sidebar is hidden or the column caps.
+    overview = client.get("/").text.replace('"/assets/', f'"{STATIC.as_uri()}/')
+    overview = re.sub(r"<script\b[^>]*>.*?</script>", "", overview, flags=re.DOTALL)
+    (tmp_path / "overview.html").write_text(overview)
     html = client.get(f"/market/{page}?days=7").text.replace('"/assets/', f'"{STATIC.as_uri()}/')
     snapshot = {"snapshot_id": "test", "spec": {"funds": ["SSE.510300"]}, "inputs": {},
                 "result": {"points": [
@@ -41,6 +47,23 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
     harness = """<!doctype html><meta charset="utf-8"><body><output id="result">pending</output>
 <script>
 function check(condition, msg) { if (!condition) throw Error(msg); }
+function contained(node, container, msg) {
+  const rect = node.getBoundingClientRect(), bounds = container.getBoundingClientRect();
+  check(rect.width > 0 && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1, msg);
+}
+async function checkFooter(width) {
+  const frame = document.createElement("iframe");
+  frame.width = width; frame.height = 900;
+  const ready = new Promise(resolve => frame.onload = resolve);
+  frame.src = "overview.html"; document.body.append(frame); await ready;
+  const doc = frame.contentDocument, win = frame.contentWindow;
+  const footer = doc.querySelector("body > footer");
+  const column = doc.querySelector("main > .page-heading").getBoundingClientRect();
+  const bounds = footer.getBoundingClientRect(), style = win.getComputedStyle(footer);
+  check(Math.abs(bounds.left + parseFloat(style.paddingLeft) - column.left) <= 1, "footer left alignment");
+  check(Math.abs(bounds.right - parseFloat(style.paddingRight) - column.right) <= 1, "footer right alignment");
+  frame.remove();
+}
 async function run(width) {
   const frame = document.createElement("iframe");
   frame.width = width;
@@ -84,6 +107,17 @@ async function run(width) {
     }
   }
   if (!gold) {
+    const stats = [...doc.querySelectorAll(".market-stats > div")];
+    stats.forEach(card => {
+      const value = card.querySelector("dd");
+      contained(value, card, "stat value clipped");
+      if (width <= 600) {
+        const range = doc.createRange(); range.selectNodeContents(value);
+        check(range.getClientRects().length === 1, "mobile stat amount wraps");
+      }
+    });
+    if (width <= 600) check(stats[0].getBoundingClientRect().bottom <= stats[1].getBoundingClientRect().top,
+      "mobile stats need separate rows");
     const metric = doc.querySelector(".market-trends select");
     for (const name of ["numerator", "denominator", "ratio"]) {
       metric.value = name; metric.dispatchEvent(new win.Event("change"));
@@ -125,6 +159,15 @@ async function run(width) {
     check(doc.querySelector('[data-market-range="7d"]').getAttribute("aria-pressed") === "true", "range state");
     doc.querySelector("#market-tab-settings").click();
     check(!doc.querySelector("#market-settings").hidden && doc.querySelector("#market-chart").hidden, "switch to settings");
+    for (const field of doc.querySelectorAll("#market-settings .fund-field")) {
+      const label = field.querySelector("label").getBoundingClientRect();
+      const control = field.querySelector("input, select");
+      contained(control, field, "form control clipped");
+      check(control.getBoundingClientRect().left - label.right >= 12, "label touches control");
+    }
+    const start = doc.querySelector("#index-start").getBoundingClientRect();
+    const end = doc.querySelector("#index-end").getBoundingClientRect();
+    check(end.top >= start.bottom + 12 || end.left >= start.right + 12, "date controls crowded");
     const picker = doc.querySelector("#index-code");
     picker.value = "000905";
     picker.dispatchEvent(new win.Event("change"));
@@ -136,9 +179,12 @@ async function run(width) {
     doc.querySelector("#index-selected button").click();
     check(doc.querySelectorAll("#index-selected button").length === 4, "remove fund");
     const firstExample = doc.querySelector("#index-examples button");
+    const unselectedColor = win.getComputedStyle(firstExample).backgroundColor;
     firstExample.focus();
     firstExample.click();
     check(doc.querySelectorAll("#index-selected button").length === 5, "toggle selection");
+    check(win.getComputedStyle(firstExample).backgroundColor !== unselectedColor,
+      "selected example has no visual feedback");
     check(doc.querySelector(".fund-snapshot-scope").textContent.includes("SSE.510300"),
       "actual snapshot group");
     doc.querySelector("#market-tab-profiles").focus();
@@ -154,6 +200,11 @@ async function run(width) {
     check(cards[0].textContent.includes("2013-02-06"), "fund inception");
     check(cards[0].textContent.includes("已披露持仓不等于实时持仓"), "holdings limitation");
     check(cards[0].querySelector('a[href$="ccmx_510500.html"]'), "holdings source");
+    for (const node of cards[0].querySelectorAll("dt, dd, a")) contained(node, cards[0], "profile content clipped");
+    const term = cards[0].querySelector("dt").getBoundingClientRect();
+    const definition = cards[0].querySelector("dd").getBoundingClientRect();
+    check(width <= 600 ? definition.top >= term.bottom : definition.left >= term.right + 12,
+      "profile label and value layout");
     doc.querySelector("#index-selected button").click();
     check(doc.querySelector(".fund-profile").open, "profile remains open on selection change");
     check(doc.documentElement.scrollWidth <= width, "page overflow");
@@ -174,6 +225,7 @@ async function run(width) {
 (async () => {
   try {
     for (const width of [390, 768, 1440]) await run(width);
+    for (const width of [390, 768, 1440, 1920]) await checkFooter(width);
     document.querySelector("#result").textContent = "passed";
   } catch (error) { document.querySelector("#result").textContent = String(error); }
 })();
@@ -198,6 +250,16 @@ async function run(width) {
             });</script>"""
             (tmp_path / "chart-cap.html").write_text((tmp_path / "chart.html").read_text() + cap_script)
             renders.append(("index-funds-cap", "chart-cap.html"))
+            for panel in ("settings", "profiles"):
+                panel_script = """<script>window.addEventListener('load', () => {
+                  document.querySelector('#index-add-examples').click();
+                  document.querySelector('#market-tab-PANEL').click();
+                  if ('PANEL' === 'profiles') document.querySelector('.fund-profile summary').click();
+                });</script>""".replace("PANEL", panel)
+                filename = f"{panel}.html"
+                (tmp_path / filename).write_text((tmp_path / "chart.html").read_text() + panel_script)
+                renders.append((f"index-funds-{panel}", filename))
+            renders.append(("overview-shell", "overview.html"))
         for name, filename in renders:
             for width in (390, 768, 1440):
                 subprocess.run(

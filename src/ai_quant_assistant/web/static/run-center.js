@@ -2702,7 +2702,7 @@ const RunCenterUI = (() => {
             )
               .map(
                 ([key, label]) =>
-                  `<div class="entry-card"><span>${label}</span><h3>${esc(known(p.sections[key]?.total))}${p.sections[key]?.truncated ? "（截断）" : ""}</h3></div>`,
+                  `<div class="entry-card"><span>${label}</span><h3>${esc(known(p.sections[key]?.total))}${p.sections[key]?.truncated ? '<small class="truncated-badge">截断</small>' : ""}</h3></div>`,
               )
               .join(
                 "",

@@ -191,7 +191,10 @@ test("overview reuses one bounded dashboard read without creating plans or choos
     else {
       assert.match(h.element("overview-pool").innerHTML, /&lt;script&gt;/);
       assert.match(h.element("overview-pool").innerHTML, /未记录/);
-      assert.match(h.element("overview-pool").innerHTML, /2（截断）/);
+      assert.match(
+        h.element("overview-pool").innerHTML,
+        /2<small class="truncated-badge">截断<\/small>/,
+      );
     }
   }
 });

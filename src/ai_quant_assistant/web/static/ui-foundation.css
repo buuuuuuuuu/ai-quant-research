@@ -36,7 +36,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
-body:has(.app-sidebar) { min-width: 0; }
+body:has(.app-sidebar) { min-width: 0; --col-pad: clamp(16px, 2.4vw, 36px); }
 
 /* The shell column: fixed sidebar on the left, one centred reading column on the right. */
 body:has(.app-sidebar) > main {
@@ -44,7 +44,7 @@ body:has(.app-sidebar) > main {
   width: calc(100% - var(--sidebar-width));
   max-width: none;
   min-width: 0;
-  padding: 28px clamp(16px, 2.4vw, 36px) 88px;
+  padding: 28px var(--col-pad) 88px;
   box-sizing: border-box;
   overflow-x: clip;
 }
@@ -52,6 +52,32 @@ body:has(.app-sidebar) > main > * {
   min-width: 0;
   max-width: var(--content-max);
   margin-inline: auto;
+}
+/* The page footer sits outside main and carries its own 1320px cap, so re-anchor it to the
+   same reading column and keep its hairline inside that column instead of running under the sidebar. */
+body:has(.app-sidebar) > footer {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  border-top: 0;
+  padding-block: 22px 30px;
+  padding-inline: calc(var(--sidebar-width) + var(--col-pad)
+    + max(0px, (100% - var(--sidebar-width) - 2 * var(--col-pad) - var(--content-max)) / 2));
+  color: #66766d;
+  font-size: 11.5px;
+}
+body:has(.app-sidebar) > footer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  height: 0;
+  left: calc(var(--sidebar-width) + var(--col-pad)
+    + max(0px, (100% - var(--sidebar-width) - 2 * var(--col-pad) - var(--content-max)) / 2));
+  right: calc(var(--col-pad)
+    + max(0px, (100% - var(--sidebar-width) - 2 * var(--col-pad) - var(--content-max)) / 2));
+  border-top: 1px solid var(--line);
 }
 
 /* Top bar */
@@ -281,6 +307,8 @@ body:has(.app-sidebar) dialog::backdrop { background: rgba(10, 32, 27, .45); }
 
 @media (max-width: 1100px) {
   body:has(.app-sidebar) > main { margin-left: 0; width: 100%; }
+  body:has(.app-sidebar) > footer { padding-inline: var(--col-pad); }
+  body:has(.app-sidebar) > footer::before { left: var(--col-pad); right: var(--col-pad); }
   .app-sidebar { left: 0; width: min(268px, 82vw); transform: translateX(-105%); transition: transform .2s ease; }
   .app-sidebar.is-open { transform: translateX(0); }
   #nav-toggle { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; background: #fff; color: var(--forest); font-size: 13px; }
@@ -290,7 +318,10 @@ body:has(.app-sidebar) dialog::backdrop { background: rgba(10, 32, 27, .45); }
   .app-topbar { height: 58px; padding-inline: 14px; gap: 10px; }
   .app-sidebar { top: 58px; }
   #nav-backdrop { top: 58px; height: calc(100dvh - 58px); }
-  body:has(.app-sidebar) > main { margin-top: 58px; padding: 16px 13px 72px; }
+  body:has(.app-sidebar) { --col-pad: 13px; }
+  body:has(.app-sidebar) > main { margin-top: 58px; padding: 16px var(--col-pad) 72px; }
+  body:has(.app-sidebar) > footer { padding-inline: var(--col-pad); font-size: 11px; }
+  body:has(.app-sidebar) > footer::before { left: var(--col-pad); right: var(--col-pad); }
   .app-brand { font-size: 16px; gap: 8px; }
   .app-brand small, .app-user, .app-topbar-shortcut { display: none !important; }
   .app-logo { width: 30px; height: 30px; font-size: 15px; border-radius: 8px; }

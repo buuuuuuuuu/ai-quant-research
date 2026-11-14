@@ -20,7 +20,6 @@ from ai_quant_assistant.domain.models import (
 )
 from ai_quant_assistant.reports.daily_signal_writer import (
     DailySignalReportWriter,
-    daily_signal_chart,
     daily_signal_result_view,
 )
 from ai_quant_assistant.reports.presentation import display_money
@@ -504,23 +503,6 @@ def test_result_view_uses_saved_account_orders_and_final_positions_only():
     assert len(view["executed"]) == 1 and len(view["unfilled"]) == 1
     assert view["final_positions"][0]["asset_ratio"] == pytest.approx(650 / 1030)
     assert "realized_pnl" not in view["final_positions"][0]
-
-
-def test_daily_signal_chart_has_axes_ticks_and_preserves_missing_gaps():
-    chart = daily_signal_chart(
-        pd.DataFrame(
-            [
-                {"date": "2024-01-02", "portfolio_nav": 1.0, "benchmark_nav": 1.0},
-                {"date": "2024-01-03", "portfolio_nav": None, "benchmark_nav": 1.0},
-                {"date": "2024-01-04", "portfolio_nav": 1.0, "benchmark_nav": 1.0},
-            ]
-        )
-    )
-    assert chart["x_ticks"][0]["label"] == "2024-01-02"
-    assert chart["x_ticks"][-1]["label"] == "2024-01-04"
-    assert len(chart["y_ticks"]) == 6
-    assert len(chart["segments"]["portfolio_nav"]) == 2
-    assert len(chart["segments"]["benchmark_nav"]) == 1
 
 
 def test_existing_factor_backtest_artifacts_are_not_reused(tmp_path):

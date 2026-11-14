@@ -8,6 +8,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from ai_quant_assistant.reports.chart_assets import NAV_KEYS, assets, chart_rows
 from ai_quant_assistant.reports.presentation import display_money, install_filters
 
 
@@ -28,20 +29,6 @@ class FactorBacktestReportWriter:
     @staticmethod
     def _money(value: Any) -> str:
         return display_money(value)
-
-    @staticmethod
-    def _chart_points(nav: pd.DataFrame, column: str) -> str:
-        if nav.empty:
-            return ""
-        values = pd.to_numeric(nav[column], errors="coerce").fillna(1.0)
-        combined = nav[["portfolio_nav", "benchmark_nav"]].apply(pd.to_numeric, errors="coerce")
-        low, high = float(combined.min().min()), float(combined.max().max())
-        span = high - low or 1.0
-        width, height = 960.0, 260.0
-        return " ".join(
-            f"{index * width / max(len(values) - 1, 1):.1f},{height - (value - low) * height / span:.1f}"
-            for index, value in enumerate(values)
-        )
 
     def write(
         self,
@@ -108,8 +95,8 @@ class FactorBacktestReportWriter:
             spec=spec,
             metrics=metrics,
             diagnostics=diagnostics,
-            portfolio_points=self._chart_points(nav, "portfolio_nav"),
-            benchmark_points=self._chart_points(nav, "benchmark_nav"),
+            nav_rows=chart_rows(nav, NAV_KEYS),
+            chart_assets=assets(),
             start_date=nav["date"].min() if not nav.empty else "",
             end_date=nav["date"].max() if not nav.empty else "",
             trades=trades.tail(30).to_dict(orient="records"),

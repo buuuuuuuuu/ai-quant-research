@@ -29,3 +29,12 @@
 #center-price-chart:focus-visible,.price-day-navigation button:focus-visible,.price-day-peek button:focus-visible,.price-day-detail button:focus-visible{outline:3px solid #b47b2c;outline-offset:3px}
 .center-delete-button{margin-top:8px;padding:6px 9px;border:1px solid #c98980;border-radius:6px;background:#fff9f7;color:#893729;cursor:pointer;white-space:nowrap}.center-delete-button:hover,.center-delete-button:focus-visible{background:#f9e8e3;outline-color:#893729}.center-delete-button:disabled{opacity:.6;cursor:wait}#center-history-feedback:not(:empty){padding:9px 12px;border-left:3px solid var(--green);background:#f0f7ef;white-space:normal;overflow-wrap:anywhere}
 .daily-result-layout{grid-template-columns:minmax(0,1fr);min-width:0;max-width:100%}.daily-result-layout>article,.daily-result-layout>section,.daily-result-layout>details{min-width:0}.daily-executions .table-shell{width:100%;max-width:100%;overflow-x:auto}
+
+.workbench-time-chart { min-width: 0; margin-block: 1rem; }
+.workbench-time-chart:empty { display: none; }
+.workbench-time-plot { width: 100%; height: clamp(210px, 30vw, 320px); }
+.workbench-time-plot:focus-visible { outline: 2px solid var(--green); }
+.workbench-time-chart > :is(output, small, label, a) { display: block; margin-top: .45rem; }
+.workbench-time-chart output { font-variant-numeric: tabular-nums; }
+.workbench-time-chart > a { font-size: .75rem; color: var(--muted); }
+.workbench-time-chart input[type=range] { width: min(75%, 30rem); vertical-align: middle; }

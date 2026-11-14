@@ -1249,6 +1249,8 @@ const RunCenterUI = (() => {
   }
   async function detail(query) {
     const own = ++sequence;
+    const previousChart = $("factor-nav-chart");
+    if (previousChart) window.WorkbenchCharts.clear(previousChart);
     let row;
     try {
       row = await get("/api/v1/run-center/record?" + query);
@@ -1331,7 +1333,7 @@ const RunCenterUI = (() => {
         signals: "信号明细",
         orders: "订单与成交",
         candidates: "候选选择",
-        series: "因子有效性时间序列",
+        series: row.kind === "factor_backtest" ? "逐日净值记录" : "因子有效性时间序列",
       };
       const fragment = Object.entries(names)
         .filter(([k]) => data[k] != null && !(row.kind === "daily_signal" && ["signals", "orders", "positions", "series"].includes(k)))
@@ -1678,51 +1680,9 @@ const RunCenterUI = (() => {
         }
       }
       if (row.kind === "factor_backtest" && data.series?.length) {
-        const series = data.series.filter(
-          (r) =>
-            Number.isFinite(r.portfolio_nav) &&
-            Number.isFinite(r.benchmark_nav),
-        );
-        if (series.length) {
-          const values = series.flatMap((r) => [
-            r.portfolio_nav,
-            r.benchmark_nav,
-          ]);
-          const min = Math.min(...values),
-            max = Math.max(...values),
-            span = max - min || 1;
-          const points = (k) =>
-            series
-              .map(
-                (r, i) =>
-                  15 +
-                  (870 * i) / Math.max(1, series.length - 1) +
-                  "," +
-                  (220 - (200 * (r[k] - min)) / span),
-              )
-              .join(" ");
-          $("center-result").insertAdjacentHTML(
-            "afterbegin",
-            '<article><h3>净值走势</h3><p>深绿：策略；浅灰：基准。拖动滑块查看对应日期的值。</p><svg role="img" aria-label="策略与基准净值" viewBox="0 0 900 240"><polyline fill="none" stroke="#9aafa1" stroke-width="2" points="' +
-              points("benchmark_nav") +
-              '"/><polyline fill="none" stroke="#24523b" stroke-width="3" points="' +
-              points("portfolio_nav") +
-              '"/></svg><label>查看日期 <input id="center-chart-position" type="range" min="0" max="' +
-              (series.length - 1) +
-              '" value="0"></label><output id="center-chart-value" aria-live="polite"></output></article>',
-          );
-          const show = () => {
-            const r = series[Number($("center-chart-position").value)];
-            $("center-chart-value").textContent =
-              r.date +
-              " · 策略 " +
-              r.portfolio_nav +
-              " · 基准 " +
-              r.benchmark_nav;
-          };
-          $("center-chart-position").addEventListener("input", show);
-          show();
-        }
+        $("center-result").insertAdjacentHTML("afterbegin",
+          '<article><h3>净值走势</h3><p>深绿为策略净值，棕色为基准净值。</p><div id="factor-nav-chart" class="workbench-time-chart"></div></article>');
+        window.WorkbenchCharts.drawNav($("factor-nav-chart"), data.series, true);
       }
     } catch (e) {
       if (own === sequence)

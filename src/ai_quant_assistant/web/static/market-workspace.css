@@ -80,6 +80,103 @@ body:has(.app-sidebar) > main.market-workspace { padding: 20px 22px 60px; }
 .market-workspace .fund-profiles h2 { font-size: 18px; }
 .market-workspace .fund-profile summary, .market-workspace .fund-profile-body { font-size: 13px; }
 .market-workspace .gold-panel { padding: 18px; }
+/* Fund controls, selection feedback and expanded profiles. */
+.market-workspace .fund-observation .fund-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  max-width: 45rem;
+  gap: 16px 28px;
+  margin-top: 16px;
+}
+.market-workspace .fund-observation .fund-field {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr);
+  align-items: center;
+  column-gap: 16px;
+  min-width: 0;
+  max-width: 28rem;
+}
+.market-workspace .fund-observation .fund-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+.market-workspace .fund-observation .fund-full-row {
+  grid-column: 1 / -1;
+}
+.market-workspace .fund-observation .fund-fields > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  justify-content: center;
+}
+
+.market-workspace .fund-observation #index-examples:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.market-workspace .fund-observation #index-examples button {
+  font-variant-numeric: tabular-nums;
+  padding: 6px 12px;
+}
+
+/* Index fund selection and the actual published group. */
+.market-workspace .fund-picker-actions, .market-workspace #index-selected {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .65rem;
+}
+.market-workspace .fund-observation #index-examples button[aria-pressed="true"] {
+  background: #e5f2ec;
+  border-color: #176c56;
+  color: #145441;
+}
+.market-workspace .fund-observation #index-selected button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.market-workspace .fund-snapshot-scope {
+  padding: .85rem;
+  background: #f0f6f3;
+  border-left: 3px solid #176c56;
+  overflow-wrap: anywhere;
+}
+.market-workspace .fund-observation #index-task { overflow-wrap: anywhere; }
+.market-workspace .fund-observation #index-resume[hidden] { display: none; }
+
+.market-workspace .fund-profile {
+  margin: .65rem 0;
+  border: 1px solid #cdded6;
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+.market-workspace .fund-profile summary {
+  padding: 1rem;
+  cursor: pointer;
+  color: #145441;
+  font-weight: 600;
+  min-height: 44px;
+}
+.market-workspace .fund-profile summary:focus-visible { outline: 2px solid #176c56; outline-offset: 2px; }
+.market-workspace .fund-profile[open] summary { background: #f0f6f3; border-radius: 10px 10px 0 0; }
+.market-workspace .fund-profile-body { padding: 0 1rem 1rem; }
+.market-workspace .fund-profile dl {
+  display: grid;
+  grid-template-columns: 8em minmax(0, 1fr);
+  gap: .85rem 1.25rem;
+  line-height: 1.7;
+}
+.market-workspace .fund-profile dt { font-weight: 600; }
+.market-workspace .fund-profile dd { margin: 0; min-width: 0; }
+.market-workspace .fund-profile-links { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+.market-workspace .fund-profile-links a { display: inline-flex; align-items: center; min-height: 44px; }
+.market-workspace .fund-profile-body > p { color: #52685e; font-size: .9rem; line-height: 1.7; }
+@media (max-width: 600px) {
+  .market-workspace .fund-profile dl { grid-template-columns: minmax(0, 1fr); gap: .35rem; }
+  .market-workspace .fund-profile dd { margin-bottom: .75rem; }
+}
+
 @media (max-width: 900px) {
   .market-layout { grid-template-columns: 166px minmax(0, 1fr); gap: 12px; }
   .market-instrument h2 { font-size: 21px; }
@@ -105,4 +202,10 @@ body:has(.app-sidebar) > main.market-workspace { padding: 20px 22px 60px; }
   .market-stats > div { padding: 8px 5px; }
   .market-stats dd { font-size: 15px; }
   .market-pages a { padding: 7px 12px; }
+}
+
+@media (max-width: 600px) {
+  .market-stats { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .market-stats > div { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 10px 12px; }
+  .market-stats dd { margin: 0; font-size: 17px; }
 }

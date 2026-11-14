@@ -63,7 +63,9 @@ body:has(.app-sidebar) > footer {
   box-sizing: border-box;
   border-top: 0;
   padding-block: 22px 30px;
-  padding-inline: calc(var(--sidebar-width) + var(--col-pad)
+  padding-inline-start: calc(var(--sidebar-width) + var(--col-pad)
+    + max(0px, (100% - var(--sidebar-width) - 2 * var(--col-pad) - var(--content-max)) / 2));
+  padding-inline-end: calc(var(--col-pad)
     + max(0px, (100% - var(--sidebar-width) - 2 * var(--col-pad) - var(--content-max)) / 2));
   color: #66766d;
   font-size: 11.5px;

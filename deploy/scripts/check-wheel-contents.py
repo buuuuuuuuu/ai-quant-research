@@ -4,6 +4,8 @@ from zipfile import ZipFile
 
 gold_library = "ai_quant_assistant/web/static/vendor/lightweight-charts-5.3.0"
 required = {
+    "ai_quant_assistant/web/static/workbench-charts.js",
+    "ai_quant_assistant/web/templates/workbench-chart-assets.html",
     f"{gold_library}/lightweight-charts.standalone.production.js",
     f"{gold_library}/LICENSE.txt",
     f"{gold_library}/NOTICE.txt",

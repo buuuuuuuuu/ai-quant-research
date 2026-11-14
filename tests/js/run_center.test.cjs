@@ -80,7 +80,10 @@ function harness(
     location,
     URLSearchParams,
     structuredClone,
-    window: { confirm: options.confirm || (() => true), history: { replaceState() {} } },
+    window: { WorkbenchCharts: {
+      drawNav() { return {select() {}}; }, clear() {},
+      draw(host, rows, key, lines, options) {host.selectDay = options.onSelect; return {select() {}};},
+    }, confirm: options.confirm || (() => true), history: { replaceState() {} } },
     fetch: async (url, options = {}) => {
       calls.push({ url, options });
       const p = await responder(url, options);
@@ -946,19 +949,11 @@ test("nav chart keeps axes, legend, end ticks, gaps, and selected markers", () =
     { date: "2024-01-03", portfolio_nav: null, benchmark_nav: 1.01 },
     { date: "2024-01-04", portfolio_nav: 1.02, benchmark_nav: 1.01, cash: 400, position_value: 620, portfolio_value: 1020, total_cost: 2 },
   ];
-  const model = ui.navChartModel(rows, 2);
-  assert.equal(model.xTicks[0].label, "2024-01-02");
-  assert.equal(model.xTicks.at(-1).label, "2024-01-04");
-  assert.equal(model.segments.portfolio_nav.length, 2);
-  assert.equal(model.yTicks.length, 6);
-  const html = ui.renderNavChart(rows, 2);
-  assert.match(html, /累计净值（初始值=1.00）/);
+  const html = ui.navDayCard(rows[2]);
   assert.match(html, /策略累计净值/);
   assert.match(html, /基准累计净值/);
-  assert.match(html, /nav-selection/);
-  assert.match(html, /strategy-point/);
-  assert.match(html, /benchmark-point/);
-  assert.doesNotMatch(html, />价格</);
+  assert.match(html, /2024-01-04/);
+  assert.match(html, /620/);
 });
 
 test("daily result separates executions, unfilled orders, and final positions", () => {
@@ -1004,16 +999,11 @@ test("price signal chart keeps adjusted prices separate from raw execution event
     signals: [{ signal_date: "2024-01-04", action: "buy", signal_price: 12 }],
     orders: [{ planned_execution_date: "2024-01-05", execution_date: "2024-01-05", side: "buy", status: "executed", execution_price: 101 }],
   };
-  const model = ui.priceChartModel(payload, 3);
-  assert.equal(model.segments.signal_close.length, 2);
-  assert.deepEqual(model.events.map((item) => item.kind), ["buy-signal", "planned", "executed"]);
-  const html = ui.renderPriceSignalChart(payload, 3);
-  assert.match(html, /价格（信号复权口径）/);
-  assert.match(html, /点击曲线附近或事件圆点/);
-  assert.match(html, /data-price-event-date="2024-01-05"/);
-  assert.match(html, /price-selected-point/);
-  assert.match(html, /price-event executed/);
-  assert.doesNotMatch(html, /101\.00/);
+  const model = ui.priceChartData(payload);
+  assert.equal(model.rows[1].signal_close, null);
+  assert.deepEqual(model.markers.map(item => item.text), ["买入信号", "计划", "成交"]);
+  assert.deepEqual(model.lines.map(line => line.key), ["signal_close", "ma_2"]);
+  assert.deepEqual(ui.priceChartData(payload, "executed").markers.map(item => item.date), ["2024-01-05"]);
 });
 
 test("price chart selects actual saved dates across sampling and missing prices", () => {
@@ -1029,16 +1019,11 @@ test("price chart selects actual saved dates across sampling and missing prices"
     signals: [{ signal_date: "2024-01-03", action: "buy" }, { signal_date: "2024-01-03", action: "sell" }],
     orders: [{ planned_execution_date: "2024-01-04", execution_date: "2024-01-05", status: "executed", execution_price: 108 }],
   };
-  const model = ui.priceChartModel(payload, 1);
-  assert.equal(model.selected, null); // The exact unsampled row is read by the day endpoint.
-  assert.equal(model.dates[0], "2024-01-02");
-  assert.equal(model.dates.at(-1), "2024-01-08");
-  assert.equal(model.segments.signal_close.length, 2);
-  assert.equal(model.events.filter((event) => event.date === "2024-01-03").length, 2);
-  const html = ui.renderPriceSignalChart(payload, 1, 3, "all", { date: "2024-01-03", price: { signal_close: 11 } });
-  assert.match(html, /price-selected-point price-close/);
-  assert.match(html, /2024-01-03/);
-  assert.doesNotMatch(html, /108\.00/);
+  const model = ui.priceChartData(payload);
+  assert.deepEqual(model.rows.map(r => r.date), payload.date_index);
+  assert.equal(model.rows[1].signal_close, undefined);
+  assert.equal(model.rows[2].signal_close, null);
+  assert.equal(model.markers.filter(event => event.date === "2024-01-03").length, 2);
   assert.equal(ui.nearestPriceDateIndex(payload.date_index, "2024-01-06"), 3);
 });
 
@@ -1103,15 +1088,9 @@ test("day selection ignores an older date response and keeps the newer card", as
   assert.match(h.element("center-price-peek").innerHTML, /2024-01-03/);
   assert.equal(h.element("center-price-position").value, "1");
   assert.equal(h.element("center-price-date").value, "2024-01-03");
-  h.element("center-price-chart").listeners.click({
-    clientX: 76,
-    target: { closest: (selector) => selector === "[data-price-plot]" ? {} : null,
-      ownerSVGElement: { getBoundingClientRect: () => ({ left: 0, width: 900 }) } },
-  });
+  h.element("center-price-plot").selectDay("2024-01-02");
   assert.equal(h.element("center-price-position").value, "0");
-  h.element("center-price-chart").listeners.click({
-    target: { closest: (selector) => selector === "[data-price-event-date]" ? { getAttribute: () => "2024-01-03" } : null },
-  });
+  h.element("center-price-plot").selectDay("2024-01-03");
   assert.equal(h.element("center-price-position").value, "1");
   const panel = h.element("center-price-detail"), chartElement = h.element("center-price-chart");
   panel.contains = (target) => target === panel;
@@ -1131,14 +1110,13 @@ test("day selection ignores an older date response and keeps the newer card", as
 });
 
 test("event-only chart does not invent a signal price", () => {
-  const html = ui.renderPriceSignalChart({
+  const model = ui.priceChartData({
     symbol: "600519", date_index: ["2024-01-02"],
     series: [{ date: "2024-01-02", signal_close: null }],
     signals: [], orders: [{ execution_date: "2024-01-02", status: "unfilled" }],
   });
-  assert.match(html, /price-event blocked/);
-  assert.doesNotMatch(html, /price-selected-point/);
-  assert.match(html, /价格（信号复权口径）/);
+  assert.equal(model.rows[0].signal_close, null);
+  assert.equal(model.markers[0].text, "受限");
 });
 
 test("trade audit and account audit use saved values and preserve unknowns", () => {

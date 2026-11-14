@@ -3,7 +3,7 @@ const {readFileSync} = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const source = ["date-chart.js", "fund-profiles.js", "index-funds.js"].map(name =>
+const source = ["workbench-charts.js", "fund-profiles.js", "index-funds.js"].map(name =>
   readFileSync(path.join(__dirname, "../../src/ai_quant_assistant/web/static", name), "utf8")
 ).join("\n");
 
@@ -16,7 +16,7 @@ class Element {
   getAttribute(name) { return this.attributes?.[name]; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
 }
-function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
+function descendants(node) { return [node, ...(node.children || []).filter(child => typeof child === "object").flatMap(descendants)]; }
 
 test("daily details use the selected snapshot day and preserve missing values", async () => {
   const elements = Object.fromEntries(["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range", "view-start", "view-end", "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"].map(id => [id, new Element()]));
@@ -65,14 +65,9 @@ test("chart clicks and accessible date buttons select the same snapshot day, inc
   buttons()[0].listeners.click();
   assert.equal(select.value, "2026-09-02");
   assert.ok(descendants(root).some(e => e.textContent.includes("缺失：指数流通市值缺失")));
-  const circle = descendants(root).find(e => e.tag === "circle");
-  circle.listeners.click();
+  const range = descendants(root).find(e => e.type === "range");
+  range.value = "0"; range.listeners.input();
   assert.equal(select.value, "2026-09-01");
-  select.value = "2026-09-03";
-  let prevented = false;
-  circle.listeners.keydown({key:"Enter", preventDefault:() => { prevented = true; }});
-  assert.equal(select.value, "2026-09-01");
-  assert.equal(prevented, true);
   assert.equal(buttons()[0].disabled, true);
   buttons()[1].listeners.click();
   assert.equal(select.value, "2026-09-02");
@@ -88,9 +83,12 @@ test("additional trends use snapshot inputs, keep gaps and require no new reques
   await new Promise(resolve => setImmediate(resolve));
   const root = elements["index-result"], metric = descendants(root).filter(e => e.tag === "select").at(-1);
   metric.value = "SSE.510300"; metric.listeners.change();
-  assert.ok(descendants(root).some(e => e.textContent === "2.00%"));
+  const first = () => { const range = descendants(root).find(e => e.type === "range"); range.value = "0"; range.listeners.input(); };
+  first();
+  assert.ok(descendants(root).some(e => e.tag === "output" && e.textContent.includes("2.00%")));
   metric.value = "denominator"; metric.listeners.change();
-  assert.ok(descendants(root).some(e => e.textContent === "10,000.00"));
+  first();
+  assert.ok(descendants(root).some(e => e.tag === "output" && e.textContent.includes("10,000.00")));
   assert.equal(calls, 1);
 });
 
@@ -180,7 +178,7 @@ test("seven calendar days ends at the saved snapshot date and keeps gaps", async
   const dates = nodes.filter(node => node.tag === "option").map(node => node.value);
   assert.ok(dates.includes("2026-01-01") && dates.includes("2026-01-07"));
   assert.ok(!dates.includes("2025-12-31"));
-  assert.equal(nodes.filter(node => node.tag === "svg").length, 1);
+  assert.equal(nodes.filter(node => node.tag === "output").length, 1);
   assert.ok(calls.every(call => !call.options));
 });
 
@@ -228,7 +226,7 @@ test("fund examples append once, respect the cap, and keep each index draft sepa
   assert.ok(calls.every(c => !c.opts));
 });
 
-test("large CNY labels stay left of the plot when the index cap is missing", async () => {
+test("large CNY readouts remain available when the index cap is missing", async () => {
   const ids = ["index-code", "index-funds", "index-examples", "index-fund-profiles", "index-numerator", "index-range",
     "view-apply", "index-status", "index-result", "index-sync", "index-task", "index-submit", "index-sync-hint", "index-selected", "index-selected-count", "index-add-examples", "index-clear-funds", "index-resume", "index-start", "index-end"];
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
@@ -239,31 +237,23 @@ test("large CNY labels stay left of the plot when the index cap is missing", asy
     trade_date: "2026-11-0" + (i + 2), numerator_cny: amount, denominator_cny: null, ratio_fraction: null,
   }));
   const snapshot = {snapshot_id: "large", spec: {funds: ["SSE.510300"]}, result: {points}, inputs: {}};
-  const observers = new Set();
-  class ResizeObserver {
-    observe() { observers.add(this); }
-    disconnect() { observers.delete(this); }
-  }
   let payload = {snapshot};
-  vm.runInNewContext(source, {document, window: {ResizeObserver}, fetch: async () => ({ok: true, json: async () => payload}), setTimeout});
+  vm.runInNewContext(source, {document, window: {}, fetch: async () => ({ok: true, json: async () => payload}), setTimeout});
   await new Promise(resolve => setImmediate(resolve));
   const nodes = descendants(elements["index-result"]);
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "194,842,433,071.93"));
   assert.ok(nodes.some(n => n.tag === "td" && n.textContent === "—"));
-  const label = nodes.find(n => n.tag === "text" && n.textContent === "1,694.48亿元");
-  const firstX = Number(nodes.find(n => n.tag === "path").attributes.d.match(/M([\d.]+)/)[1]);
-  assert.equal(label.attributes["text-anchor"], "end");
-  assert.ok(Number(label.attributes.x) <= firstX - 10);
-  nodes.find(n => n.tag === "circle").listeners.click();
-  assert.ok(descendants(elements["index-result"]).some(n => n.textContent.includes("169,447,599,578.56")), "selected readout retains full CNY amount");
+  const range = nodes.find(node => node.type === "range");
+  range.value = "0"; range.listeners.input();
+  assert.ok(nodes.some(n => n.tag === "output" && n.textContent.includes("169,447,599,578.56")));
   const metric = nodes.filter(n => n.tag === "select").at(-1);
   for (let i = 0; i < 5; i++) {
     metric.listeners.change();
-    assert.equal(observers.size, 1, "replacing a chart must release the previous observer");
+    assert.equal(descendants(elements["index-result"]).filter(n => n.tag === "output").length, 1);
   }
   payload = {snapshot: null};
   await elements["index-numerator"].listeners.change();
-  assert.equal(observers.size, 0, "empty snapshots release chart observers");
+  assert.equal(descendants(elements["index-result"]).filter(n => n.tag === "output").length, 0);
 });
 
 function syncHarness(fetch, storage = new Map()) {

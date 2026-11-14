@@ -64,7 +64,7 @@ Market data and official documents are **not** relicensed by this repository. Th
 
 ### TradingView Lightweight Charts™
 
-The gold, data explorer and factor backtest charts share the unmodified standalone production build from
+The interactive market, research and backtest charts share the unmodified standalone production build from
 `lightweight-charts@5.3.0` (npm). The bundle, upstream Apache-2.0 LICENSE and
 NOTICE are distributed in `web/static/vendor/lightweight-charts-5.3.0/`.
 The standalone build includes fancy-canvas 2.1.0. Its MIT license is included alongside the bundle.

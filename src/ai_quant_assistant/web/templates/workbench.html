@@ -362,7 +362,7 @@
   </main>
 
   <footer><span>澄明 A 股研究工作台 · v{{ version }}</span><span>仅供量化研究，不构成投资建议</span></footer>
-  {% if page_id in ["data", "backtest"] %}{% include "workbench-chart-assets.html" %}{% endif %}
+  {% if page_id in ["data", "backtest", "lab"] %}{% include "workbench-chart-assets.html" %}{% endif %}
   <script src="/assets/run-center.js?v={{ asset_version }}" defer></script>
   <script src="/assets/workbench.js?v={{ asset_version }}" defer></script>
   <script src="/assets/managed-stocks.js?v={{ asset_version }}" defer></script>

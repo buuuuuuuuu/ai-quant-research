@@ -74,3 +74,16 @@ test("without the renderer, the date slider still reads ambiguous and missing re
   slider.events.input();
   assert.match(output.textContent, /基准净值 缺失/);
 });
+
+test("intraday comparisons align by clock and external selection does not trigger another request", () => {
+  const {host, ui, chart, series} = harness();
+  const selected = [];
+  const ctl = ui.draw(host, [{time:"13:00", a:null, b:20}, {time:"11:30", a:10, b:null}],
+    "time", [{key:"a",label:"所选日"}, {key:"b",label:"同期"}],
+    {title:"成交额", intraday:true, onSelect: time => selected.push(time)});
+  ctl.select("11:30");
+  assert.match(host.children[2].textContent, /已选 11:30 · 所选日 10 · 同期 缺失/);
+  assert.equal(selected.length, 0);
+  chart.click({time:series[0].points[1].time});
+  assert.deepEqual(selected, ["13:00"]);
+});

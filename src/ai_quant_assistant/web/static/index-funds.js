@@ -11,26 +11,6 @@
     return fraction === undefined ? grouped : grouped + "." + fraction;
   }
 
-  // The Y labels end before the plot; X labels sit in a separate band below it.
-  function chartAxes(svg, points, low, high, flat, width = 700) {
-    // Chinese unit glyphs are wider than the monospace digits.
-    const labelWidth = text => [...text].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 12 : 8), 0);
-    const left = 24 + Math.max(labelWidth(low), labelWidth(high)), right = width - 14;
-    const xAt = i => left + i * (right - left) / Math.max(points.length - 1, 1);
-    function label(x, y, anchor, text) {
-      const node = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      node.setAttribute("x", x); node.setAttribute("y", y);
-      node.setAttribute("text-anchor", anchor);
-      node.setAttribute("font-size", "12"); node.setAttribute("font-family", "monospace");
-      node.textContent = text; svg.append(node);
-    }
-    if (!flat) label(left - 12, 34, "end", high);
-    label(left - 12, flat ? 114 : 194, "end", low);
-    label(left, 215, "start", points[0].trade_date);
-    if (points.length > 1) label(right, 215, "end", points.at(-1).trade_date);
-    return xAt;
-  }
-
   const examples = window.FundProfiles.examples;
   const fundInput = document.getElementById("index-funds");
   const exampleList = document.getElementById("index-examples");
@@ -185,73 +165,8 @@
         result.append(summary);
       }
       let selectDay = () => {};
-      function addTrend(parent, values, format, name, axisFormat = format) {
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("viewBox", "0 0 700 220");
-        svg.setAttribute("role", "group");
-        svg.setAttribute("aria-label", name + "，方向键选日期，加减键缩放");
-        svg.style.width = "100%";
-        svg.style.maxHeight = "280px";
-        const readout = document.createElement("p");
-        readout.setAttribute("aria-live", "polite");
-        readout.textContent = "点击查看当日数据，滚轮缩放日期范围。";
-        let left, right, chartWidth = 700, visibleFirst = 0, visibleLast = points.length - 1;
-        function choose(index) {
-          selectDay(points[index].trade_date);
-          readout.textContent = points[index].trade_date + " · " + name + " " +
-            (values[index] == null ? "缺失" : format(values[index]));
-        }
-        function render(first, last) {
-          visibleFirst = first; visibleLast = last;
-          svg.setAttribute("viewBox", `0 0 ${chartWidth} 220`);
-          svg.replaceChildren();
-          const visible = points.slice(first, last + 1);
-          const active = values.slice(first, last + 1).filter(value => value != null);
-          const min = active.length ? Math.min(...active) : 0;
-          const max = active.length ? Math.max(...active) : 0;
-          const xAt = chartAxes(svg, visible, active.length ? axisFormat(min) : "—",
-            active.length ? axisFormat(max) : "—", min === max, chartWidth);
-          left = xAt(0); right = xAt(last - first);
-          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-          svg.append(path);
-          let d = "", connected = false;
-          for (let i = first; i <= last; i++) {
-            const value = values[i];
-            if (value == null) { connected = false; continue; }
-            const x = xAt(i - first), y = max === min ? 110 : 190 - (value - min) * 160 / (max - min);
-            d += (connected ? " L" : " M") + x + " " + y;
-            connected = true;
-            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-            circle.setAttribute("cx", x); circle.setAttribute("cy", y);
-            circle.setAttribute("r", "3"); circle.setAttribute("fill", "#32664f");
-            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-            title.textContent = points[i].trade_date + " · " + format(value);
-            circle.append(title);
-            circle.setAttribute("role", "button");
-            circle.setAttribute("tabindex", "-1");
-            circle.setAttribute("aria-label", title.textContent);
-            circle.addEventListener("click", event => { event?.stopPropagation(); selectIndex(i); });
-            circle.addEventListener("keydown", event => {
-              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectIndex(i); }
-            });
-            svg.append(circle);
-          }
-          path.setAttribute("d", d); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#32664f");
-        }
-        render(0, points.length - 1);
-        const selectIndex = bindDateChart(svg, {length: points.length, fractionAt: x => (x - left) / (right - left || 1),
-          render, select: choose});
-        parent.append(svg, readout);
-        if (window.ResizeObserver) {
-          const observer = new window.ResizeObserver(() => {
-            if (!svg.isConnected) { observer.disconnect(); return; }
-            const width = Math.max(300, Math.min(700, Math.floor(parent.clientWidth)));
-            if (width !== chartWidth) { chartWidth = width; render(visibleFirst, visibleLast); }
-          });
-          observer.observe(parent);
-          disconnectTrend = () => observer.disconnect();
-        }
-      }
+      let trend;
+      let selectedDate = (valid.at(-1) || points.at(-1))?.trade_date;
       const table = document.createElement("table"), head = document.createElement("tr");
       for (const text of ["交易日", "基金规模（元）", "流通市值（元）", "占比"]) { const th = document.createElement("th"); th.textContent = text; head.append(th); }
       table.append(head);
@@ -277,7 +192,10 @@
         }
         function showDetails() {
           details.replaceChildren();
-          const day = dateSelect.value, pointIndex = points.findIndex(p => p.trade_date === day), point = points[pointIndex];
+          const day = dateSelect.value;
+          selectedDate = day;
+          trend?.select(day);
+          const pointIndex = points.findIndex(p => p.trade_date === day), point = points[pointIndex];
           if (!point) return;
           previous.disabled = pointIndex === 0; next.disabled = pointIndex === points.length - 1;
           const daySummary = document.createElement("p");
@@ -312,6 +230,8 @@
       if (points.length && Array.isArray(payload.snapshot.spec.funds)) {
         const section = document.createElement("section"), label = document.createElement("label"), metric = document.createElement("select"), graph = document.createElement("div");
         section.className = "market-trends";
+        graph.className = "workbench-time-chart";
+        graph.id = "fund-trend";
         label.textContent = "图表指标 ";
         const options = [["ratio", "基金规模占比（%）"], ["numerator", "基金组合规模（元）"], ["denominator", "指数流通市值（元）"], ...payload.snapshot.spec.funds.map(fund => [fund, `${fund} 单只占比（%）`])];
         for (const [value, name] of options) { const option = document.createElement("option"); option.value = value; option.textContent = name; metric.append(option); }
@@ -339,7 +259,11 @@
           const unit = magnitude >= 1e12 ? [1e12, "万亿元"] : magnitude >= 1e8 ? [1e8, "亿元"] : magnitude >= 1e4 ? [1e4, "万元"] : [1, ""];
           const axisFormat = selected === "numerator" || selected === "denominator" ?
             value => money(value / unit[0]) + unit[1] : format;
-          addTrend(graph, values, format, name, axisFormat);
+          trend = window.WorkbenchCharts.draw(graph,
+            points.map((point, i) => ({trade_date: point.trade_date, value: values[i]})), "trade_date",
+            [{key: "value", label: name, color: "#32664f", format}], {title: name, axisFormatter: axisFormat, onSelect: selectDay});
+          trend?.select(selectedDate);
+          disconnectTrend = () => { window.WorkbenchCharts.clear(graph); trend = null; };
         }
         metric.addEventListener("change", drawMetric); drawMetric();
       }

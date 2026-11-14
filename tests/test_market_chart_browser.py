@@ -25,7 +25,7 @@ def test_click_and_wheel_at_three_viewport_widths(tmp_path, page):
     )
     closes = {f"2026-11-{i:02}": 850 + i for i in range(1, 8)}
     (tmp_path / "sge-au9999-daily.json").write_text(json.dumps({
-        "closes": closes, "updated_at": "2026-11-07T13:00:00+00:00",
+        "closes": {**closes, "2026-11-07": None} if page == "gold" else closes, "updated_at": "2026-11-07T13:00:00+00:00",
     }))
     client = TestClient(create_app(settings))
     html = client.get(f"/market/{page}?days=7").text.replace('"/assets/', f'"{STATIC.as_uri()}/')
@@ -51,20 +51,51 @@ async function run(width) {
   await ready;
   const doc = frame.contentDocument, win = frame.contentWindow;
   const gold = !!doc.querySelector(".gold-chart");
-  const charts = [...doc.querySelectorAll(gold ? ".gold-chart svg" : "#index-result svg")];
+  if (gold) {
+    const plot = doc.querySelector("#gold-plot"), readout = doc.querySelector("#gold-selected-day");
+    const waitForPaint = () => new Promise(resolve => win.setTimeout(resolve, 100));
+    await waitForPaint();
+    plot.scrollIntoView({behavior: "instant", block: "center"});
+    const canvases = [...plot.querySelectorAll("canvas")];
+    check(canvases.length > 0, "local TradingView chart did not load");
+    const bounds = canvases.map(c => c.getBoundingClientRect())
+      .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+    const x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+    const target = doc.elementFromPoint(x, y);
+    check(plot.contains(target), "plot hit testing");
+    const mouse = (type, at) => doc.elementFromPoint(at, y).dispatchEvent(
+      new win.MouseEvent(type, {bubbles: true, clientX: at, clientY: y, button: 0,
+        sourceCapabilities: new win.InputDeviceCapabilities({firesTouchEvents: false})}));
+    mouse("mouseenter", x); mouse("mousemove", x); mouse("mousedown", x); mouse("mouseup", x);
+    check(readout.textContent.includes("已选 2026-11-04") && readout.textContent.includes("854.00"), "pin daily quote: " + readout.textContent);
+    mouse("mousemove", x + bounds.width / 6);
+    check(readout.textContent.includes("已选 2026-11-04"), "selection moved with pointer");
+    const caption = doc.querySelector(".gold-chart figcaption");
+    const original = caption.textContent;
+    check(original.includes("2026-11-01 至 2026-11-07"), "calendar clips a trailing missing quote");
+    for (let i = 0; i < 7; i++) {
+      target.dispatchEvent(new win.WheelEvent("wheel", {clientX: x, clientY: y, deltaY: -120, bubbles: true, cancelable: true}));
+      await waitForPaint();
+    }
+    check(caption.textContent !== original, "wheel zoom did not change the date range");
+    plot.dispatchEvent(new win.KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    check(readout.textContent === "", "clear pinned day");
+    check(!win.requests.some(request => request.options?.method === "POST"), "view triggered refresh");
+    frame.remove();
+    return;
+  }
+  const charts = [...doc.querySelectorAll("#index-result svg")];
   check(charts.length === 1, "chart count");
   for (const svg of charts) {
     const position = svg.createSVGPoint();
-    position.x = gold ? 500 : (Number(svg.querySelector("circle").getAttribute("cx")) +
+    position.x = (Number(svg.querySelector("circle").getAttribute("cx")) +
       Number([...svg.querySelectorAll("circle")].at(-1).getAttribute("cx"))) / 2; position.y = 100;
     const screen = position.matrixTransform(svg.getScreenCTM());
     const coords = {clientX: screen.x, clientY: screen.y, bubbles: true};
     svg.dispatchEvent(new win.MouseEvent("click", coords));
-    const selected = gold ? doc.querySelector("#gold-selected-day").textContent :
-      doc.querySelector("#index-result select").value;
+    const selected = doc.querySelector("#index-result select").value;
     check(selected.includes("2026-11-04"), "selected date " + selected);
-    const range = () => gold ? doc.querySelector(".gold-chart figcaption").textContent :
-      [...svg.querySelectorAll("text")].slice(-2).map(el => el.textContent).join("/");
+    const range = () => [...svg.querySelectorAll("text")].slice(-2).map(el => el.textContent).join("/");
     const original = range();
     function wheel(deltaY) {
       const event = new win.WheelEvent("wheel", {...coords, cancelable: true, deltaY});
@@ -75,13 +106,6 @@ async function run(width) {
     check(range() !== original, "zoom in");
     wheel(100);
     check(range() === original, "zoom out");
-    if (gold) {
-      const ticks = [...doc.querySelectorAll(".gold-axis time")]
-        .filter(el => win.getComputedStyle(el).display !== "none")
-        .map(el => el.getBoundingClientRect());
-      check(ticks.length >= 3, "date ticks missing");
-      ticks.slice(1).forEach((tick, i) => check(ticks[i].right <= tick.left, "date labels overlap"));
-    }
   }
   if (!gold) {
     const metric = doc.querySelector(".market-trends select");

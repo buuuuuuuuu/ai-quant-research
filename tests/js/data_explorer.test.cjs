@@ -21,7 +21,10 @@ function harness(responder) {
   }
   const context = vm.createContext({
     document:{querySelector:element,querySelectorAll:() => []}, URLSearchParams,
-    window:{location:{assign() {assert.fail("unexpected redirect");}}},
+    window:{WorkbenchCharts:{
+      clear(target) { target.chart = null; target.textContent = ""; },
+      draw(target, rows, dateKey, lines) { target.chart = {rows, dateKey, lines}; },
+    },location:{assign() {assert.fail("unexpected redirect");}}},
     loadManagedStocks:async () => {managedLoads++;},
     fetch:async (url, options = {}) => {
       calls.push(url);
@@ -51,6 +54,7 @@ test("page initialization displays existing prices without a navigation click, s
   assert.equal(h.element("#data-explorer").scrolls, 0);
   assert.match(h.element("#explorer-entity-list").innerHTML, /003816.*中国广核/);
   assert.match(h.element("#explorer-table").innerHTML, /2024-01-05/);
+  assert.equal(h.element("#explorer-chart").chart.rows[0].close, 3.25);
   assert.match(h.calls[0], /managed_only=true/);
   assert.equal(h.managedLoads(), 1);
   await h.context.openExplorer("benchmarks");
@@ -100,4 +104,19 @@ test("automatic local refresh preserves the selected stock instead of jumping to
   await h.context.loadExplorerEntities(1);
   assert.match(h.element("#explorer-identity").innerHTML, /688111.*金山办公/);
   assert.match(h.element("#explorer-download").href, /688111\/prices/);
+});
+
+test("financial trend requires one metric and follows the report period", async () => {
+  const row = {report_period_end:"2024-03-31", metric_code:"eps", metric_label:"每股收益", unit:"元", metric_value:null};
+  const h = harness(url => url.includes("/financial-metrics?")
+    ? {items:[row, {...row, metric_code:"revenue"}], pagination}
+    : respond(url));
+  await h.context.openExplorer("financials");
+  const target = h.element("#explorer-chart");
+  assert.equal(target.chart, null);
+  assert.match(target.textContent, /请选择一个指标/);
+  h.context.renderExplorerChart([row]);
+  assert.equal(target.chart.dateKey, "report_period_end");
+  assert.equal(target.chart.lines[0].key, "metric_value");
+  assert.equal(target.chart.rows[0].metric_value, null);
 });

@@ -388,16 +388,7 @@ async function submitBacktest(event) {
 }
 
 function drawChart(series) {
-  const target = $("#nav-chart");
-  if (!series.length) { target.innerHTML = '<p class="empty-state">暂无净值数据</p>'; return; }
-  const width = 1100, height = 300, left = 52, right = 18, top = 16, bottom = 30;
-  const values = series.flatMap((row) => [Number(row.portfolio_nav), Number(row.benchmark_nav)]);
-  let min = Math.min(...values), max = Math.max(...values); if (max === min) { max += .01; min -= .01; }
-  const x = (index) => left + index * (width - left - right) / Math.max(series.length - 1, 1);
-  const y = (value) => top + (max - value) * (height - top - bottom) / (max - min);
-  const points = (key) => series.map((row, index) => `${x(index).toFixed(1)},${y(Number(row[key])).toFixed(1)}`).join(" ");
-  const grids = [0, .25, .5, .75, 1].map((ratio) => { const value = max - ratio * (max - min); const yy = y(value); return `<line class="chart-grid" x1="${left}" y1="${yy}" x2="${width-right}" y2="${yy}"/><text class="chart-label" x="0" y="${yy+4}">${value.toFixed(2)}</text>`; }).join("");
-  target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${grids}<polyline class="benchmark-line" points="${points("benchmark_nav")}"/><polyline class="strategy-line" points="${points("portfolio_nav")}"/><text class="chart-label" x="${left}" y="${height-5}">${escapeHtml(series[0].date)}</text><text class="chart-label" text-anchor="end" x="${width-right}" y="${height-5}">${escapeHtml(series.at(-1).date)}</text></svg>`;
+  window.WorkbenchCharts.drawNav($("#nav-chart"), series);
 }
 
 const tableConfigs = {
@@ -446,11 +437,23 @@ function labTable(columns, rows) {
 }
 
 function drawIcChart(series) {
-  const target = $("#lab-ic-chart"), values = series.filter((row) => row.rank_ic != null).slice(-80);
-  if (!values.length) { target.innerHTML = '<p class="empty-state">暂无有效 Rank IC 截面</p>'; return; }
-  const width = 1100, height = 180, mid = 90, step = (width - 30) / values.length;
-  const bars = values.map((row, index) => {const value = Math.max(-1, Math.min(1, Number(row.rank_ic))), size = Math.abs(value) * 74; return `<rect x="${15 + index * step}" y="${value >= 0 ? mid - size : mid}" width="${Math.max(step - 2, 2)}" height="${size}" fill="${value >= 0 ? "#237a5a" : "#c65b52"}"><title>${escapeHtml(row.signal_date)} ${escapeHtml(row.factor)} Rank IC ${value.toFixed(3)}</title></rect>`;}).join("");
-  target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Rank IC 时间序列"><line x1="0" y1="${mid}" x2="${width}" y2="${mid}" stroke="#cdd5cc"/>${bars}</svg>`;
+  const target = $("#lab-ic-chart");
+  for (const host of target.querySelectorAll(".workbench-time-chart")) window.WorkbenchCharts.clear(host);
+  target.replaceChildren();
+  const groups = new Map();
+  for (const row of series.filter(row => row.rank_ic != null).slice(-80)) {
+    if (!groups.has(row.factor)) groups.set(row.factor, []);
+    groups.get(row.factor).push(row);
+  }
+  if (!groups.size) target.textContent = "暂无有效 Rank IC 截面";
+  for (const [factor, rows] of groups) {
+    const host = document.createElement("div");
+    host.id = "lab-rank-" + target.children.length;
+    host.className = "workbench-time-chart";
+    target.append(host);
+    window.WorkbenchCharts.draw(host, rows, "signal_date",
+      [{key: "rank_ic", label: factor + " · Rank IC", histogram: true, color: "#237a5a"}], {title: factor + " · Rank IC"});
+  }
 }
 
 function renderLabRun(run) {
@@ -710,16 +713,22 @@ function explorerQuery(page = state.explorerPage, output = "json") {
 
 function renderExplorerChart(items) {
   const target = $("#explorer-chart");
-  if (!items.length || !["prices","benchmarks","financials"].includes(state.explorerDataset)) {target.innerHTML = ""; return;}
-  const dateKey = state.explorerDataset === "financials" ? "report_period_end" : "trade_date";
-  const valueKey = state.explorerDataset === "financials" ? "metric_value" : "close";
-  const ordered = [...items].filter((item) => Number.isFinite(Number(item[valueKey]))).sort((a,b) => String(a[dateKey]).localeCompare(String(b[dateKey])));
-  if (ordered.length < 2) {target.innerHTML = ""; return;}
-  const width=900,height=190,left=52,right=16,top=12,bottom=28, values=ordered.map((row)=>Number(row[valueKey]));
-  let min=Math.min(...values),max=Math.max(...values); if(min===max){min-=1;max+=1;}
-  const x=(i)=>left+i*(width-left-right)/Math.max(ordered.length-1,1), y=(v)=>top+(max-v)*(height-top-bottom)/(max-min);
-  const points=ordered.map((row,i)=>`${x(i).toFixed(1)},${y(Number(row[valueKey])).toFixed(1)}`).join(" ");
-  target.innerHTML=`<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="当前页数据趋势"><line class="chart-grid" x1="${left}" y1="${y(max)}" x2="${width-right}" y2="${y(max)}"/><line class="chart-grid" x1="${left}" y1="${y(min)}" x2="${width-right}" y2="${y(min)}"/><polyline class="strategy-line" points="${points}"/><text class="chart-label" x="0" y="${y(max)+4}">${max.toFixed(2)}</text><text class="chart-label" x="0" y="${y(min)+4}">${min.toFixed(2)}</text><text class="chart-label" x="${left}" y="${height-4}">${escapeHtml(ordered[0][dateKey])}</text><text class="chart-label" text-anchor="end" x="${width-right}" y="${height-4}">${escapeHtml(ordered.at(-1)[dateKey])}</text></svg>`;
+  const financial = state.explorerDataset === "financials";
+  if (!items.length || state.explorerDataset === "announcements") {
+    window.WorkbenchCharts.clear(target);
+    return;
+  }
+  if (financial && new Set(items.map(row => row.metric_code)).size > 1) {
+    window.WorkbenchCharts.clear(target);
+    target.textContent = "本页包含多个财务指标。请选择一个指标并应用筛选，即可按报告期查看走势。";
+    return;
+  }
+  const row = items[0];
+  const label = financial ? [row.metric_label || row.metric_code, row.unit].filter(Boolean).join(" · ")
+    : state.explorerDataset === "benchmarks" ? "收盘点位" : "收盘价（元）";
+  window.WorkbenchCharts.draw(target, items, financial ? "report_period_end" : "trade_date",
+    [{key: financial ? "metric_value" : "close", label, color: "#24523b"}],
+    {title: "当前页" + label + "走势"});
 }
 
 function explorerPagination(target, pagination, callback) {
@@ -884,6 +893,7 @@ async function loadExplorerRecords(page=1) {
   if (!state.explorerEntity) return;
   const generation=state.explorerGeneration, selection=state.explorerSelection, request=++state.explorerRecordRequest;
   const current=()=>generation===state.explorerGeneration && selection===state.explorerSelection && request===state.explorerRecordRequest;
+  window.WorkbenchCharts.clear($("#explorer-chart"));
   state.explorerPage=page; $("#explorer-table").innerHTML='<p class="empty-state">正在读取已发布记录…</p>';
   try {const payload=await requestJson(explorerQuery(page)); if(current()) renderExplorerTable(payload);}
   catch(error){if(current()) $("#explorer-table").innerHTML=`<p class="negative">${escapeHtml(error.message)}</p>`;}
@@ -899,7 +909,7 @@ async function selectExplorerEntity(item) {
   state.explorerEntity=item; state.explorerPage=1;
   $("#explorer-identity").innerHTML='<p class="empty-state">正在读取所选对象…</p>';
   $("#explorer-table").innerHTML='<p class="empty-state">正在读取所选对象的记录…</p>';
-  $("#explorer-chart").innerHTML=""; $("#explorer-pages").innerHTML="";
+  window.WorkbenchCharts.clear($("#explorer-chart")); $("#explorer-pages").innerHTML="";
   $("#explorer-download").removeAttribute("href");
   $$(".explorer-entity").forEach((button)=>button.classList.toggle("active",button.dataset.symbol===item.symbol));
   if (state.explorerDataset === "benchmarks") $("#explorer-identity").innerHTML=`<p class="eyebrow">BENCHMARK DETAIL</p><h3>${stockResearchLink(item.symbol, item.name)}</h3><div class="explorer-identity-grid"><div><span>覆盖日期</span><strong>${escapeHtml(item.start_date||"—")} → ${escapeHtml(item.end_date||"—")}</strong></div><div><span>行情记录</span><strong>${formatNumber(item.price_rows)} 行</strong></div><div><span>同步批次</span><strong>${formatNumber(item.batches)}</strong></div><div><span>供应商</span><strong>${escapeHtml(item.provider_source||"—")}</strong></div></div>`;
@@ -922,7 +932,7 @@ async function loadExplorerEntities(page=1) {
   state.explorerEntityPage=page; state.explorerEntity=null;
   $("#explorer-identity").innerHTML='<p class="empty-state">从左侧选择股票或指数。</p>';
   $("#explorer-table").innerHTML='<p class="empty-state">尚未选择数据。</p>';
-  $("#explorer-chart").innerHTML="";
+  window.WorkbenchCharts.clear($("#explorer-chart"));
   $("#explorer-pages").innerHTML=""; $("#explorer-entity-pages").innerHTML="";
   $("#explorer-download").removeAttribute("href");
   const target=$("#explorer-entity-list"); target.innerHTML='<p class="empty-state">正在读取可用对象…</p>';

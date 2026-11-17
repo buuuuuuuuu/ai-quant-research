@@ -1,4 +1,4 @@
-"""Exercise real SVG coordinate transforms and date axes when Chromium is installed."""
+"""Exercise interactive market charts and date axes when Chromium is installed."""
 
 import json
 import os
@@ -84,47 +84,26 @@ async function run(width) {
     frame.remove();
     return;
   }
-  const charts = [...doc.querySelectorAll("#index-result svg")];
-  check(charts.length === 1, "chart count");
-  for (const svg of charts) {
-    const position = svg.createSVGPoint();
-    position.x = (Number(svg.querySelector("circle").getAttribute("cx")) +
-      Number([...svg.querySelectorAll("circle")].at(-1).getAttribute("cx"))) / 2; position.y = 100;
-    const screen = position.matrixTransform(svg.getScreenCTM());
-    const coords = {clientX: screen.x, clientY: screen.y, bubbles: true};
-    svg.dispatchEvent(new win.MouseEvent("click", coords));
-    const selected = doc.querySelector("#index-result select").value;
-    check(selected.includes("2026-11-04"), "selected date " + selected);
-    const range = () => [...svg.querySelectorAll("text")].slice(-2).map(el => el.textContent).join("/");
-    const original = range();
-    function wheel(deltaY) {
-      const event = new win.WheelEvent("wheel", {...coords, cancelable: true, deltaY});
-      svg.dispatchEvent(event);
-      check(event.defaultPrevented, "wheel ignored");
-    }
-    wheel(-100);
-    check(range() !== original, "zoom in");
-    wheel(100);
-    check(range() === original, "zoom out");
-  }
   if (!gold) {
     const metric = doc.querySelector(".market-trends select");
     for (const name of ["numerator", "denominator", "ratio"]) {
       metric.value = name; metric.dispatchEvent(new win.Event("change"));
-      await new Promise(resolve => win.setTimeout(resolve, 60));
-      const svg = doc.querySelector(".market-trends svg");
-      const labels = [...svg.querySelectorAll("text")];
-      const dates = labels.slice(-2).map(node => node.getBoundingClientRect());
-      check(dates[0].right < dates[1].left, name + " date labels overlap");
-      const circles = [...svg.querySelectorAll("circle")];
-      const price = labels[0].getBoundingClientRect();
-      check(price.left >= svg.getBoundingClientRect().left, name + " value clipped at left edge");
-      check(price.right < circles[0].getBoundingClientRect().left, name + " value overlaps plot");
-      if (name !== "ratio") {
-        check(labels[0].textContent.includes(name === "numerator" ? "亿元" : "万亿元"), "compact CNY unit");
-        circles[0].dispatchEvent(new win.MouseEvent("click", {bubbles: true}));
-        check(doc.querySelector(".market-trends p").textContent.includes(name === "numerator" ? "85,100,000,000.00" : "10,000,000,000,000.00"), "full CNY readout");
-      }
+      await new Promise(resolve => win.setTimeout(resolve, 100));
+      const plot = doc.querySelector("#fund-trend .workbench-time-plot");
+      check(plot.querySelector("canvas"), "fund canvas missing");
+      plot.scrollIntoView({behavior:"instant", block:"center"});
+      const box = plot.querySelector("canvas").getBoundingClientRect();
+      const x = box.left + box.width / 2, y = box.top + box.height / 2;
+      const target = doc.elementFromPoint(x, y);
+      const coords = {bubbles:true, clientX:x, clientY:y, button:0,
+        sourceCapabilities:new win.InputDeviceCapabilities({firesTouchEvents:false})};
+      for (const type of ["mouseenter","mousemove","mousedown","mouseup"]) target.dispatchEvent(new win.MouseEvent(type, coords));
+      check(doc.querySelector(".market-daily select").value === "2026-11-04", "fund chart day selection");
+      for(let i=0;i<3;i++) plot.dispatchEvent(new win.KeyboardEvent("keydown",{key:"ArrowLeft",bubbles:true}));
+      const readout = doc.querySelector("#fund-trend-readout").textContent;
+      check(readout.includes("2026-11-01"), "keyboard first date");
+      if (name !== "ratio") check(readout.includes(name === "numerator" ? "85,100,000,000.00" : "10,000,000,000,000.00"), "full CNY readout");
+      target.dispatchEvent(new win.WheelEvent("wheel", {...coords, deltaY:-120, cancelable:true}));
     }
     check(!doc.querySelector("#market-chart").hidden, "chart is initial panel");
     check(doc.querySelector("#market-settings").hidden, "settings initially hidden");

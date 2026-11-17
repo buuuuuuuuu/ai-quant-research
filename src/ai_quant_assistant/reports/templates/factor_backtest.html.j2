@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>财务因子组合回测</title>
   <style>
-    :root { --navy:#173b5e; --blue:#2e74b5; --gold:#d8922b; --ink:#17212b; --muted:#66727d; --line:#d5dee7; --soft:#f3f6f9; --red:#a13b35; }
+    :root { --navy:#173b5e; --blue:#24523b; --gold:#99712f; --ink:#17212b; --muted:#66727d; --line:#d5dee7; --soft:#f3f6f9; --red:#a13b35; }
     * { box-sizing:border-box; } body { margin:0; background:#eef2f5; color:var(--ink); font-family:"Noto Sans SC","Microsoft YaHei",Arial,sans-serif; }
     main { max-width:1240px; margin:28px auto; background:#fff; padding:40px 46px; box-shadow:0 8px 30px rgba(24,43,61,.08); }
     h1,h2 { color:var(--navy); } h1 { margin:0 0 8px; } h2 { margin:30px 0 12px; }
@@ -13,7 +13,6 @@
     .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:20px 0; }
     .metric { background:var(--soft); padding:14px; border:1px solid var(--line); }
     .metric b { display:block; margin-top:6px; font-size:20px; color:var(--navy); }
-    svg { width:100%; height:300px; border:1px solid var(--line); background:#fff; padding:18px; }
     table { width:100%; border-collapse:collapse; font-size:13px; } th { background:var(--navy); color:#fff; text-align:left; padding:9px; }
     td { border:1px solid var(--line); padding:8px; vertical-align:top; } tr:nth-child(even) td { background:var(--soft); }
     .legend span { display:inline-block; margin-right:24px; } .portfolio { color:var(--blue); } .benchmark { color:var(--gold); }
@@ -37,10 +36,7 @@
   </div>
   <h2>净值曲线</h2>
   <div class="legend"><span class="portfolio">● 策略</span><span class="benchmark">● 基准</span> {{ start_date }} 至 {{ end_date }}</div>
-  <svg viewBox="0 0 960 260" preserveAspectRatio="none" role="img" aria-label="策略与基准净值曲线">
-    <polyline points="{{ benchmark_points }}" fill="none" stroke="#d8922b" stroke-width="3" vector-effect="non-scaling-stroke" />
-    <polyline points="{{ portfolio_points }}" fill="none" stroke="#2e74b5" stroke-width="3" vector-effect="non-scaling-stroke" />
-  </svg>
+  <div class="report-chart" id="report-nav"></div>
   <h2>最近因子选择</h2>
   <table><thead><tr><th>信号日</th><th>执行日</th><th>股票</th><th>因子值</th><th>排名</th><th>财报期</th><th>公开时间</th></tr></thead><tbody>
   {% for row in selections %}<tr><td>{{ row.signal_date }}</td><td>{{ row.execution_date }}</td><td>{{ row.symbol }}</td><td>{{ "%.4f"|format(row.factor_value) }}</td><td>{{ row.rank }}</td><td>{{ row.report_period_end }}</td><td>{{ row.published_at }}</td></tr>{% endfor %}
@@ -50,4 +46,5 @@
   {% for row in trades %}<tr><td>{{ row.date }}</td><td>{{ row.symbol }}</td><td>{{ row.side }}</td><td>{{ row.status }}</td><td>{{ row.shares }}</td><td>{{ row.price }}</td><td>{{ row.cost|money }}</td><td>{{ row.reason or '-' }}</td></tr>{% endfor %}
   </tbody></table>
   <p class="muted">约束：T+1、100 股整数买入、一字涨跌停与停牌阻断、佣金/滑点/卖出印花税。免费数据源可能修订历史数据；本报告不构成投资建议。</p>
+{% include "report-charts.html.j2" %}
 </main></body></html>

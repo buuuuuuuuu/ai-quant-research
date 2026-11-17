@@ -437,11 +437,23 @@ function labTable(columns, rows) {
 }
 
 function drawIcChart(series) {
-  const target = $("#lab-ic-chart"), values = series.filter((row) => row.rank_ic != null).slice(-80);
-  if (!values.length) { target.innerHTML = '<p class="empty-state">暂无有效 Rank IC 截面</p>'; return; }
-  const width = 1100, height = 180, mid = 90, step = (width - 30) / values.length;
-  const bars = values.map((row, index) => {const value = Math.max(-1, Math.min(1, Number(row.rank_ic))), size = Math.abs(value) * 74; return `<rect x="${15 + index * step}" y="${value >= 0 ? mid - size : mid}" width="${Math.max(step - 2, 2)}" height="${size}" fill="${value >= 0 ? "#237a5a" : "#c65b52"}"><title>${escapeHtml(row.signal_date)} ${escapeHtml(row.factor)} Rank IC ${value.toFixed(3)}</title></rect>`;}).join("");
-  target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Rank IC 时间序列"><line x1="0" y1="${mid}" x2="${width}" y2="${mid}" stroke="#cdd5cc"/>${bars}</svg>`;
+  const target = $("#lab-ic-chart");
+  for (const host of target.querySelectorAll(".workbench-time-chart")) window.WorkbenchCharts.clear(host);
+  target.replaceChildren();
+  const groups = new Map();
+  for (const row of series.filter(row => row.rank_ic != null).slice(-80)) {
+    if (!groups.has(row.factor)) groups.set(row.factor, []);
+    groups.get(row.factor).push(row);
+  }
+  if (!groups.size) target.textContent = "暂无有效 Rank IC 截面";
+  for (const [factor, rows] of groups) {
+    const host = document.createElement("div");
+    host.id = "lab-rank-" + target.children.length;
+    host.className = "workbench-time-chart";
+    target.append(host);
+    window.WorkbenchCharts.draw(host, rows, "signal_date",
+      [{key: "rank_ic", label: factor + " · Rank IC", histogram: true, color: "#237a5a"}], {title: factor + " · Rank IC"});
+  }
 }
 
 function renderLabRun(run) {

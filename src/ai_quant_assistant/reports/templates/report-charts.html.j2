@@ -1,0 +1,26 @@
+<style>
+.report-chart { min-width:0; width:100%; color:#173126 }
+.report-chart .workbench-time-plot { width:100%; height:clamp(220px,32vw,340px) }
+.report-chart .workbench-time-plot:focus-visible { outline:2px solid #32664f }
+.report-chart > :is(output, small, label, a) { display:block; margin:.4rem 0 }
+.report-chart table, .report-chart tr, .report-chart td { border:0; padding:0; margin:0; background:transparent }
+.report-chart tr:nth-child(even) td { background:transparent }
+.report-chart output { font-variant-numeric:tabular-nums }
+.report-chart input[type=range] { width:min(65%,32rem); vertical-align:middle }
+.report-chart a { font-size:.8rem }
+.report-license pre { white-space:pre-wrap; overflow-wrap:anywhere }
+</style>
+<script id="report-chart-data" type="application/json">{{ {"nav": nav_rows, "price": price_chart|default({})}|tojson }}</script>
+<script>{{ chart_assets.library|safe }}</script>
+<script>{{ chart_assets.renderer|safe }}</script>
+<script>
+(() => {
+  const {nav, price} = JSON.parse(document.getElementById("report-chart-data").textContent);
+  const navPlot = document.getElementById("report-nav");
+  if (navPlot) window.WorkbenchCharts.drawNav(navPlot, nav, true);
+  const pricePlot = document.getElementById("report-price");
+  if (pricePlot) window.WorkbenchCharts.draw(pricePlot, price.rows || [], "date", price.lines || [],
+    {title: "价格、移动平均线与交易事件", slider: true, markers: price.markers || []});
+})();
+</script>
+<details class="report-license"><summary>TradingView Lightweight Charts™ · 第三方许可</summary><pre>{{ chart_assets.notices }}</pre></details>

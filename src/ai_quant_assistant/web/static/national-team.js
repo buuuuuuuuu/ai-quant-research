@@ -13,17 +13,11 @@
     if (!counts) return "旧任务未记录各类返回条数";
     return `本次接口返回：日线 ${counts.daily||0} 条、份额 ${counts.shares||0} 条、净值 ${counts.nav||0} 条、分钟 ${counts.minute||0} 条（含已存储的重复记录）`;
   }
-  function pathFor(points, key, x, y) {
-    let path = "", open = false;
-    points.forEach((p, i) => { const value = numeric(p[key]); if (value === null || !Number.isFinite(value)) {open = false; return;}
-      path += `${open ? "L" : "M"}${x(i).toFixed(2)},${y(value).toFixed(2)} `; open = true;
-    }); return path;
-  }
-  if (typeof module !== "undefined") module.exports = {money, numeric, parseFunds, pathFor, countsText};
+  if (typeof module !== "undefined") module.exports = {money, numeric, parseFunds, countsText};
   if (typeof document === "undefined") return;
   const $ = id => document.getElementById(id), api = "/api/v1/national-team";
   const el = (tag, text, cls) => {const node = document.createElement(tag); if(text !== undefined) node.textContent = text; if(cls) node.className=cls; return node;};
-  let observers = [];
+  const charts = new Set();
   let dirty = false;
   let current = null, generation = 0, taskTimer = null, taskId = null, groups = [];
   async function request(path, body) {
@@ -39,24 +33,30 @@
   function chart(id, title, points, series, unit="亿元") {
     const box=$(id); box.replaceChildren(el("p", title, "nt-chart-label"));
     if(!points.some(p=>series.some(s=>numeric(p[s.key])!==null))) {box.append(el("p","暂无完整数据，采集或导入后显示。","nt-empty"));return;}
-    const ns="http://www.w3.org/2000/svg", svg=document.createElementNS(ns,"svg");svg.setAttribute("viewBox","0 0 850 255");svg.classList.add("nt-chart");svg.setAttribute("role","img");svg.setAttribute("aria-label",title+"；方向键查看、滚轮缩放");
-    const legend=el("div",undefined,"nt-chart-legend");for(const s of series){const label=el("span",s.name);label.style.color=s.color;legend.append(label);}box.append(legend,svg);
-    const caption=el("p","点击或使用左右方向键查看数值；滚轮缩放。","nt-chart-value");box.append(caption);
-    let first=0,last=points.length-1,width=850;
-    function node(tag,attrs,text){const n=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);if(text!==undefined)n.textContent=text;svg.append(n);return n;}
-    function render(a,b){first=a;last=b;width=Math.max(300,box.clientWidth);svg.setAttribute("viewBox",`0 0 ${width} 255`);svg.replaceChildren();const slice=points.slice(a,b+1),values=slice.flatMap(p=>series.map(s=>numeric(p[s.key]))).filter(v=>v!==null&&Number.isFinite(v));
-      if(!values.length)return;let min=unit==="点"?Math.min(...values):Math.min(0,...values),max=Math.max(...values,unit==="点"?-Infinity:0);if(max===min)max=min+1;
-      const x=i=>75+i/Math.max(1,slice.length-1)*(width-90),y=v=>205-(v-min)/(max-min)*170;
-      for(let i=0;i<4;i++){const v=min+(max-min)*i/3;node("line",{x1:75,x2:width-15,y1:y(v),y2:y(v),stroke:"#e1e9e4"});node("text",{x:67,y:y(v)+4,"text-anchor":"end",fill:"#63746a","font-size":12},unit==="亿元"?(v/1e8).toFixed(1):v.toFixed(2));}
-      node("text",{x:12,y:18,fill:"#63746a","font-size":12},unit);
-      for(const s of series)node("path",{d:pathFor(slice,s.key,x,y),fill:"none",stroke:s.color,"stroke-width":2});
-      for(const i of [...new Set([0,Math.floor((slice.length-1)/2),slice.length-1])])node("text",{x:x(i),y:235,"text-anchor":i===0?"start":i===slice.length-1?"end":"middle",fill:"#63746a","font-size":12},slice[i]?.date||slice[i]?.time||"");
-    }
-    const observer=new ResizeObserver(()=>render(first,last));observer.observe(box);observers.push(observer);
-    render(first,last);bindDateChart(svg,{length:points.length,fractionAt:x=>(x-75)/(width-90),render,select:i=>{const p=points[i];caption.textContent=(p.date||p.time)+" · "+series.map(s=>s.name+" "+(unit==="亿元"?money(p[s.key]):numeric(p[s.key])===null?"—":Number(p[s.key]).toFixed(2))+unit).join(" / ");}});
+    const legend = el("div", undefined, "nt-chart-legend");
+    const lines = series.map(({key, name, color}) => {
+      const label = el("span", name);
+      label.style.color = color;
+      legend.append(label);
+      return {key, label: name + "（" + unit + "）", color};
+    });
+    const host = el("div", undefined, "workbench-time-chart");
+    host.id = id + "-plot";
+    box.append(legend, host);
+    charts.add(host);
+    const intraday = points.some(point => point.time != null);
+    const rows = points.map(point => {
+      const row = {...point};
+      for (const {key} of lines) {
+        const value = numeric(point[key]);
+        row[key] = value === null ? null : unit === "亿元" ? value / 1e8 : value;
+      }
+      return row;
+    });
+    window.WorkbenchCharts.draw(host, rows, intraday ? "time" : "date", lines, {title, intraday});
   }
   function table(container, headers, rows) {const t=el("table"),head=el("thead"),hr=el("tr");headers.forEach(h=>hr.append(el("th",h)));head.append(hr);t.append(head);const body=el("tbody");rows.forEach(row=>{const tr=el("tr");row.forEach(v=>{const td=el("td",v?.text??v);if(v?.cls)td.className=v.cls;tr.append(td);});body.append(tr);});t.append(body);container.replaceChildren(t);}
-  function render(data){observers.forEach(o=>o.disconnect());observers=[];current=data;$("nt-results").hidden=false;$("nt-banner").textContent=(data.demo?"合成示例：虚构价格、交易日和份额，不是市场数据。 ":"")+data.warning;
+  function render(data){charts.forEach(window.WorkbenchCharts.clear);charts.clear();current=data;$("nt-results").hidden=false;$("nt-banner").textContent=(data.demo?"合成示例：虚构价格、交易日和份额，不是市场数据。 ":"")+data.warning;
     const last=data.daily.at(-1),lastMinute=[...data.minute].reverse().find(p=>p.cumulative!==null&&p.cumulative!==undefined);
     $("nt-metrics").replaceChildren();for(const [label,value,note] of [["观察ETF",data.funds.length+"只","固定名单"],["最近日净申购估算",last?.flow==null?"待补齐":money(last.flow)+"亿元",last?.date||"暂无数据"],["日度完整覆盖",(last?.covered||0)+" / "+data.funds.length,"份额与净值同时可用"],["盘中累计成交",money(lastMinute?.cumulative)+"亿元",data.selected_day+" "+(lastMinute?.time||"待更新")]]){const card=el("div",undefined,"nt-metric");card.append(el("span",label),el("strong",value),el("small",note));$("nt-metrics").append(card);}
     const sourceErrors=data.latest_daily?.result?.errors||[];

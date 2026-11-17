@@ -2,7 +2,12 @@
 from pathlib import Path
 from zipfile import ZipFile
 
+gold_library = "ai_quant_assistant/web/static/vendor/lightweight-charts-5.3.0"
 required = {
+    f"{gold_library}/lightweight-charts.standalone.production.js",
+    f"{gold_library}/LICENSE.txt",
+    f"{gold_library}/NOTICE.txt",
+    f"{gold_library}/fancy-canvas-LICENSE.txt",
     "ai_quant_assistant/web/static/fund-profiles.js",
     "ai_quant_assistant/web/static/market-workspace.js",
     "ai_quant_assistant/web/static/market-workspace.css",

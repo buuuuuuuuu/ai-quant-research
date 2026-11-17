@@ -61,3 +61,11 @@ Market data and official documents are **not** relicensed by this repository. Th
 - [Tesseract](https://github.com/tesseract-ocr/tesseract)
 
 升级依赖或新增第三方代码时更新本清单；发行物应携带实际所包含组件的许可和通知，本文不能替代那些文件。
+
+### TradingView Lightweight Charts™
+
+The gold chart embeds the unmodified standalone production build from
+`lightweight-charts@5.3.0` (npm). The bundle, upstream Apache-2.0 LICENSE and
+NOTICE are distributed in `web/static/vendor/lightweight-charts-5.3.0/`.
+The standalone build includes fancy-canvas 2.1.0. Its MIT license is included alongside the bundle.
+[Upstream source](https://github.com/tradingview/lightweight-charts/tree/v5.3.0).

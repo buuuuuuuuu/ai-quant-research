@@ -1,11 +1,10 @@
-from datetime import date
+import json
 from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ai_quant_assistant.api.app import create_app
-from ai_quant_assistant.api.gold_routes import chart_data
 from ai_quant_assistant.config import Settings
 from ai_quant_assistant.providers import gold_history
 
@@ -47,14 +46,6 @@ def test_gold_page_refresh_and_failed_retry(tmp_path, monkeypatch):
     assert gold_history.GoldHistory(settings.cache_dir).read() == before
 
 
-def test_gold_chart_breaks_on_missing_close():
-    chart = chart_data([("2024-04-17", 1201), ("2024-04-18", None), ("2024-04-19", 1234.5)])
-    assert (chart["high"], chart["low"]) == (1234.5, 1201)
-    assert chart["path"].count("M") == 2
-    assert chart_data([("2024-04-17", None)]) is None
-    assert "500.00,100.00" in chart_data([("2024-04-17", 1201)])["path"]
-
-
 def test_gold_rejects_conflicting_dates(monkeypatch):
     response = Mock()
     response.json.return_value = {"time": [
@@ -66,12 +57,20 @@ def test_gold_rejects_conflicting_dates(monkeypatch):
         gold_history.fetch_closes()
 
 
-def test_week_ticks_align_with_observations_across_new_year():
-    rows = [("2025-12-31", 900), ("2026-01-02", 910)]
-    chart = chart_data(rows, window_start=date(2025, 12, 27))
-    ticks = chart["ticks"]
-    assert len(ticks) == 7
-    assert [tick["label"] for tick in ticks if tick["compact"]] == ["12-27", "12-30", "01-02"]
-    assert [mark["x"] for mark in chart["markers"]] == [ticks[4]["x"], ticks[6]["x"]]
-    single = chart_data(rows[:1])
-    assert len(single["ticks"]) == 1 and single["ticks"][0]["x"] == 500
+@pytest.mark.parametrize(("closes", "expected_start"), [
+    ({"2025-12-31": 900, "2026-01-01": None, "2026-01-02": 910}, "2025-12-27"),
+    ({"2026-01-02": 910}, "2025-12-27"),
+    ({"2026-01-02": None}, None),
+])
+def test_week_chart_uses_calendar_dates_and_local_quotes(tmp_path, closes, expected_start):
+    history = gold_history.GoldHistory(tmp_path)
+    history.path.write_text(json.dumps({"closes": closes, "updated_at": None}))
+    client = TestClient(create_app(Settings(data_dir=tmp_path, cache_dir=tmp_path,
+                                           duckdb_path=tmp_path / "catalog.duckdb")))
+    page = client.get("/market/gold?days=7")
+    assert page.context["chart_start"] == expected_start
+    assert page.context["rows"] == sorted(closes.items())
+    if expected_start:
+        assert 'id="gold-plot"' in page.text and "/assets/vendor/lightweight-charts-" in page.text
+    else:
+        assert "所选区间没有有效收盘价" in page.text and 'id="gold-plot"' not in page.text

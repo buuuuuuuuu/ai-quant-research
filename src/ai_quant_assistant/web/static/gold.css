@@ -11,32 +11,13 @@
 .gold-periods { margin-block: 1.25rem; }
 .gold-periods a { padding: .4rem .6rem; }
 .gold-periods a[aria-current="page"] { background: #e6efea; border-radius: .4rem; font-weight: bold; }
-.gold-chart {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: .5rem .75rem;
-  margin: 1.5rem 0;
-  font-variant-numeric: tabular-nums;
-}
-.gold-chart svg {
-  width: 100%; height: clamp(10rem, 24vw, 17rem);
-  border-block: 1px solid #d7e3dc; color: #88601c;
-}
-.gold-scale { display: flex; flex-direction: column; justify-content: space-between; text-align: end; }
-.gold-scale.flat { justify-content: center; }
-.gold-guide { stroke: #d7e3dc; stroke-dasharray: 3 4; }
-.gold-axis, .gold-chart figcaption { grid-column: 2; }
-.gold-axis { position: relative; height: 1.4em; font-size: .875rem; }
-.gold-axis time { position: absolute; white-space: nowrap; transform: translateX(-50%); }
-.gold-axis time:first-child:not(:only-child) { transform: none; }
-.gold-axis time:last-child:not(:only-child) { transform: translateX(-100%); }
-.gold-chart figcaption { font-size: .875rem; }
-@media (max-width: 700px) {
-  .gold-chart .gold-wide-tick { display: none; }
-}
+.gold-chart { margin: 1.25rem 0 .5rem; min-width: 0; }
+#gold-plot { width: 100%; height: clamp(15rem, 28vw, 23rem); }
+#gold-plot:focus-visible { outline: 2px solid #176c58; outline-offset: 2px; }
+.gold-chart figcaption, #gold-selected-day { font-variant-numeric: tabular-nums; }
+.gold-chart figcaption, #gold-selection-help, .gold-credit { color: var(--muted); font-size: .8rem; }
+.gold-chart figcaption, #gold-selection-help, #gold-selected-day { margin: .5rem 0; }
+.gold-credit { display: block; margin-bottom: .75rem; }
 .gold-market summary { cursor: pointer; padding-block: .6rem; }
 .gold-market table { width: 100%; font-variant-numeric: tabular-nums; }
 .gold-market td:last-child, .gold-market th:last-child { text-align: right; }
-
-.gold-cursor { display: none; stroke: #27675b; stroke-dasharray: 4 3; pointer-events: none; }
-.gold-chart svg { overflow: hidden; }

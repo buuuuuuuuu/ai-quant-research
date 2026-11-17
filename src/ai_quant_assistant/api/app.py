@@ -82,6 +82,7 @@ from ai_quant_assistant.providers.base import MarketDataProvider
 from ai_quant_assistant.providers.fixture_provider import FixtureProvider
 from ai_quant_assistant.providers.local_provider import LocalFirstProvider
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
+from ai_quant_assistant.reports.chart_assets import upgrade_saved_report
 from ai_quant_assistant.research.batch_service import BatchInterimReportResearchService
 from ai_quant_assistant.research.daily_signal import DailySignalStrategyService
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
@@ -1595,21 +1596,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="backtest run not found") from exc
 
+    def report_response(path: Path, filename: str | None = None) -> Response:
+        upgraded = upgrade_saved_report(path)
+        if upgraded is None:
+            return FileResponse(path, media_type="text/html", filename=filename)
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'} if filename else {}
+        return Response(upgraded, media_type="text/html", headers=headers)
+
     @app.get("/api/v1/backtest-runs/{run_id}/downloads/{filename}")
-    def download_backtest_file(run_id: str, filename: str) -> FileResponse:
+    def download_backtest_file(run_id: str, filename: str) -> Response:
         try:
             path, media_type = run_repository.file(run_id, filename)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="backtest artifact not found") from exc
+        if filename == "report.html":
+            return report_response(path, f"{run_id}-{filename}")
         return FileResponse(path, media_type=media_type, filename=f"{run_id}-{filename}")
 
     @app.get("/reports/backtests/{run_id}", include_in_schema=False)
-    def backtest_report(run_id: str) -> FileResponse:
+    def backtest_report(run_id: str) -> Response:
         try:
             path, _ = run_repository.file(run_id, "report.html")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="backtest report not found") from exc
-        return FileResponse(path, media_type="text/html")
+        return report_response(path)
 
     @app.post("/api/v1/factor-lab", status_code=202)
     def create_factor_lab(request: FactorLabRequest) -> dict[str, Any]:
@@ -1829,20 +1839,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/v1/daily-signal-runs/{run_id}/downloads/{filename}")
-    def download_daily_signal_file(run_id: str, filename: str) -> FileResponse:
+    def download_daily_signal_file(run_id: str, filename: str) -> Response:
         try:
             path, media_type = daily_signal_repository.file(run_id, filename)
         except KeyError as exc:
             raise HTTPException(404, "daily signal artifact not found") from exc
+        if filename == "report.html":
+            return report_response(path, f"{run_id}-{filename}")
         return FileResponse(path, media_type=media_type, filename=f"{run_id}-{filename}")
 
     @app.get("/reports/daily-signals/{run_id}", include_in_schema=False)
-    def daily_signal_report(run_id: str) -> FileResponse:
+    def daily_signal_report(run_id: str) -> Response:
         try:
             path, _ = daily_signal_repository.file(run_id, "report.html")
         except KeyError as exc:
             raise HTTPException(404, "daily signal report not found") from exc
-        return FileResponse(path, media_type="text/html")
+        return report_response(path)
 
     @app.post(
         "/api/v1/research/interim-report-event-study",

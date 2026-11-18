@@ -14,7 +14,9 @@ import pandas as pd
 from ai_quant_assistant.domain.models import FactorBacktestSpec, FactorComponent, FactorLabSpec
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.reports.factor_lab_writer import FactorLabReportWriter
+from ai_quant_assistant.research.factor_analytics import analyze_factors
 from ai_quant_assistant.research.factor_backtest import FactorBacktestService
+from ai_quant_assistant.research.performance import methodology, performance_metrics
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.snapshots import write_json
 
@@ -83,7 +85,7 @@ class FactorLabService:
         )
 
     def _cross_sections(
-        self, spec: FactorLabSpec, benchmark: pd.DataFrame, prices: pd.DataFrame
+        self, spec: FactorLabSpec, benchmark: pd.DataFrame, prices: pd.DataFrame, analytics_snapshots=None
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         dates = pd.to_datetime(benchmark["date"]).dt.normalize().tolist()
         signals = self.backtests._rebalance_dates(pd.Series(dates), spec.rebalance_values[0])
@@ -145,6 +147,10 @@ class FactorLabService:
             turnover = len(previous_selected ^ selected) / len(union) if union else 0.0
             previous_selected = selected
             for row in composite.itertuples(index=False):
+                if analytics_snapshots is not None:
+                    analytics_snapshots.append({"signal_date": signal_day, "symbol": row.symbol,
+                        "composite_score": float(row.factor_value),
+                        **{component.code: _finite(factor_maps[component.code].get(row.symbol)) for component in spec.factors}})
                 if row.symbol not in entry_bars.index or row.symbol not in exit_bars.index:
                     continue
                 entry = entry_bars.loc[row.symbol]
@@ -264,23 +270,8 @@ class FactorLabService:
                 "sharpe_ratio": None,
                 "max_drawdown": None,
             }
-        strategy = pd.to_numeric(frame["portfolio_nav"])
-        benchmark = pd.to_numeric(frame["benchmark_nav"])
-        normalized = strategy / float(strategy.iloc[0])
-        returns = normalized.pct_change().dropna()
-        volatility = float(returns.std(ddof=1) * np.sqrt(252)) if len(returns) > 1 else 0.0
-        total = float(normalized.iloc[-1] - 1.0)
-        annualized = (
-            float((1.0 + total) ** (252 / max(len(frame) - 1, 1)) - 1.0) if total > -1 else -1.0
-        )
-        benchmark_return = float(benchmark.iloc[-1] / benchmark.iloc[0] - 1.0)
-        return {
-            "total_return": total,
-            "benchmark_return": benchmark_return,
-            "excess_return": total - benchmark_return,
-            "sharpe_ratio": annualized / volatility if volatility > 0 else 0.0,
-            "max_drawdown": abs(float((normalized / normalized.cummax() - 1.0).min())),
-        }
+        metrics = performance_metrics(frame)
+        return {**metrics, "benchmark_return": metrics["benchmark_total_return"]}
 
     @staticmethod
     def _walk_forward(nav: pd.DataFrame, folds: int, strategy: str) -> list[dict[str, Any]]:
@@ -347,14 +338,18 @@ class FactorLabService:
             raise ValueError("no published local stock prices cover the requested universe")
         dates = pd.to_datetime(benchmark["date"]).dt.normalize().tolist()
         segments = self._segments(dates, spec)
+        factor_snapshots = []
         cross_sections, ic_series, group_returns, coverage = self._cross_sections(
-            spec, benchmark, prices
+            spec, benchmark, prices, analytics_snapshots=factor_snapshots
         )
         if cross_sections.empty:
             raise ValueError(
                 "no point-in-time factor cross-sections with observable forward returns"
             )
-        progress(15, "因子截面、IC 与分组收益已计算")
+        analytics, analytics_methodology = analyze_factors(
+            pd.DataFrame(factor_snapshots), prices, pd.to_datetime(benchmark["date"]), spec.factors, spec.quantiles
+        )
+        progress(15, "因子截面、IC 与多周期分组收益已计算")
         started = datetime.now(UTC)
         run_id = self._run_id()
         directory = self.artifact_dir / "factor-lab" / run_id
@@ -431,6 +426,8 @@ class FactorLabService:
         ic_summary = self._ic_summary(ic_series)
         yearly = self._yearly_summary(ic_series)
         diagnostics = {
+            "performance_methodology": methodology(),
+            "factor_analytics": analytics_methodology,
             "point_in_time_rule": "published_at strictly before signal-day 15:00",
             "forward_return_rule": "next trading day open to next rebalance execution open",
             "model_selection_rule": "validation-period Sharpe ratio, then validation excess return",
@@ -462,6 +459,7 @@ class FactorLabService:
             walk_forward=pd.DataFrame(walk_rows),
             curves=pd.DataFrame(curve_rows),
             diagnostics=diagnostics,
+            **analytics,
         )
         completed = datetime.now(UTC)
         payload = {
@@ -480,6 +478,7 @@ class FactorLabService:
                     cross_sections.groupby("signal_date")["selection_turnover"].first().mean()
                 ),
             },
+            "factor_horizons": analytics["factor_horizons"].astype(object).where(analytics["factor_horizons"].notna(), None).to_dict("records"),
             "ic_summary": ic_summary.astype(object)
             .where(pd.notna(ic_summary), None)
             .to_dict(orient="records"),

@@ -23,6 +23,17 @@ from ai_quant_assistant.research.daily_signal_audit import (
     build_indicator_series,
     build_reproducibility,
 )
+from ai_quant_assistant.research.performance import (
+    methodology,
+    performance_metrics,
+    save_performance,
+)
+from ai_quant_assistant.research.technical_indicators import (
+    TA_KINDS,
+    add_indicators,
+    evaluate,
+    required_observations,
+)
 from ai_quant_assistant.storage.research_run_index import register_run
 from ai_quant_assistant.storage.snapshots import write_json
 
@@ -79,10 +90,15 @@ class DailySignalStrategyService:
     def _rule_values(
         rule: DailySignalRule, frame: pd.DataFrame, day: pd.Timestamp
     ) -> tuple[bool | None, dict[str, Any]]:
-        current = frame.loc[day] if day in frame.index else None
-        before = frame.shift(1).loc[day] if day in frame.index else None
-        if current is None:
+        if day not in frame.index:
             return None, {"reason": "missing_bar"}
+        index = frame.index.get_loc(day)
+        current = frame.iloc[index]
+        before = None
+        if rule.kind in {"ma_cross", "macd_cross"}:
+            before = frame.iloc[index - 1] if index else pd.Series(np.nan, index=frame.columns)
+        if rule.kind in TA_KINDS:
+            return evaluate(rule, current, before)
         if rule.kind == "close_vs_ma":
             left, right = current["signal_close"], current[f"ma_{rule.window}"]
             evidence = {"close": left, f"ma_{rule.window}": right}
@@ -131,9 +147,10 @@ class DailySignalStrategyService:
 
     @staticmethod
     def _features(
-        prices: pd.DataFrame, calendar: pd.DatetimeIndex, windows: set[int]
+        prices: pd.DataFrame, calendar: pd.DatetimeIndex, windows: set[int], rules=()
     ) -> dict[str, pd.DataFrame]:
         result = {}
+        use_talib = any(rule.kind in TA_KINDS for rule in rules)
         for symbol, rows in prices.groupby("symbol"):
             frame = rows.set_index("date").reindex(calendar)
             close = pd.to_numeric(frame["signal_close"], errors="coerce")
@@ -141,7 +158,7 @@ class DailySignalStrategyService:
                 frame[f"ma_{window}"] = close.rolling(window, min_periods=window).mean()
                 frame[f"return_{window}"] = close.div(close.shift(window)).sub(1)
                 frame[f"ma_deviation_{window}"] = close.div(frame[f"ma_{window}"]).sub(1)
-            result[symbol] = frame
+            result[symbol] = add_indicators(frame, rules) if use_talib else frame
         return result
 
     def _candidate_snapshot(self, spec, day, features) -> pd.DataFrame:
@@ -250,7 +267,7 @@ class DailySignalStrategyService:
         for rule in (*spec.buy_rules, *spec.sell_rules):
             windows.update(x for x in (rule.window, rule.short_window, rule.long_window) if x)
         windows.discard(None)
-        features = self._features(prices, full_calendar, windows)
+        features = self._features(prices, full_calendar, windows, (*spec.buy_rules, *spec.sell_rules))
         by_day = {day: rows.set_index("symbol") for day, rows in prices.groupby("date")}
         benchmark_close = benchmark.set_index("date")["close"]
         first_benchmark = float(benchmark_close.loc[research_days[0]])
@@ -664,26 +681,9 @@ class DailySignalStrategyService:
             )
         nav_frame = pd.DataFrame(nav)
         nav_frame["drawdown"] = nav_frame.portfolio_nav.div(nav_frame.portfolio_nav.cummax()).sub(1)
-        returns = nav_frame.portfolio_nav.pct_change().dropna()
-        total_return = float(nav_frame.portfolio_nav.iloc[-1] - 1)
-        annualized = (
-            (1 + total_return) ** (252 / max(len(nav_frame) - 1, 1)) - 1
-            if total_return > -1
-            else -1
-        )
-        volatility = float(returns.std(ddof=1) * np.sqrt(252)) if len(returns) > 1 else 0.0
         signals_frame, orders_frame = pd.DataFrame(signals), pd.DataFrame(orders)
         metrics = {
-            "total_return": total_return,
-            "benchmark_total_return": float(nav_frame.benchmark_nav.iloc[-1] - 1),
-            "excess_return": float(
-                nav_frame.portfolio_nav.iloc[-1] - nav_frame.benchmark_nav.iloc[-1]
-            ),
-            "annualized_return": annualized,
-            "annualized_volatility": volatility,
-            "sharpe_ratio": annualized / volatility if volatility > 0 else 0.0,
-            "max_drawdown": abs(float(nav_frame.drawdown.min())),
-            "final_value": float(nav_frame.portfolio_value.iloc[-1]),
+            **performance_metrics(nav_frame),
             "total_transaction_cost": total_cost,
             "signal_count": len(signals_frame),
             "order_attempt_count": len(orders_frame),
@@ -692,6 +692,8 @@ class DailySignalStrategyService:
             else 0,
         }
         diagnostics = {
+            "performance_methodology": methodology(),
+            "technical_indicators": {"engine": "TA-Lib", "version": "0.6.8", "legacy_ma": "pandas rolling", "gaps": "restart warmup", "macd": "12/26/9", "bollinger": "SMA +/- 2 standard deviations"},
             "timing_rule": "completed daily close creates signal; next benchmark trading-day open attempts execution",
             "indicator_price": spec.adjustment,
             "execution_and_valuation_price": "unadjusted",
@@ -734,7 +736,7 @@ class DailySignalStrategyService:
                 financial_source_batch_ids.extend(json.loads(value or "{}").values())
             except (AttributeError, TypeError, json.JSONDecodeError):
                 continue
-        required = max(windows, default=2) + 1
+        required = required_observations((*spec.buy_rules, *spec.sell_rules), windows)
         eligible_warmup = full_calendar[full_calendar <= pd.Timestamp(spec.start_date)]
         warmup_start = eligible_warmup[-required] if len(eligible_warmup) >= required else None
         reproducibility = build_reproducibility(
@@ -787,6 +789,7 @@ class DailySignalStrategyService:
             indicator_series=indicator_frame,
             display_metadata=display_metadata,
         )
+        artifacts.update(save_performance(directory, nav_frame))
         completed = datetime.now(UTC)
         payload = {
             "run_id": run_id,

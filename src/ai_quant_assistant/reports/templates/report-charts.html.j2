@@ -16,9 +16,15 @@
 <script>
 (() => {
   const {nav, price} = JSON.parse(document.getElementById("report-chart-data").textContent);
+  const risk = document.getElementById("performance-chart-data");
+  if (risk) window.WorkbenchCharts.draw(document.getElementById("report-rolling-risk"), JSON.parse(risk.textContent), "date", [{key:"rolling_sharpe",label:"63日滚动夏普",color:"#24523b"}], {title:"63个交易日滚动夏普"});
   const navPlot = document.getElementById("report-nav");
   if (navPlot) window.WorkbenchCharts.drawNav(navPlot, nav, true);
   const pricePlot = document.getElementById("report-price");
+  if (pricePlot) {
+    const indicators = document.createElement("div"); indicators.id="report-technical-chart"; indicators.className="report-chart"; pricePlot.after(indicators);
+    window.WorkbenchCharts.drawIndicators(indicators, price.rows || []);
+  }
   if (pricePlot) window.WorkbenchCharts.draw(pricePlot, price.rows || [], "date", price.lines || [],
     {title: "价格、移动平均线与交易事件", slider: true, markers: price.markers || []});
 })();

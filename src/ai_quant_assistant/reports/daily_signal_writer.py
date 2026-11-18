@@ -14,6 +14,7 @@ from ai_quant_assistant.reports.presentation import (
     install_filters,
     rule_label,
 )
+from ai_quant_assistant.research.performance import report_context
 
 FRAME_COLUMNS = {
     "signals": [
@@ -414,6 +415,7 @@ class DailySignalReportWriter:
             diagnostics=diagnostics,
         )
         html = self.environment.get_template("daily_signal.html.j2").render(
+            analytics=report_context(nav),
             spec=spec,
             metrics=metrics,
             diagnostics=diagnostics,

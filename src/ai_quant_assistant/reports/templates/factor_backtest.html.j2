@@ -15,6 +15,7 @@
     .metric b { display:block; margin-top:6px; font-size:20px; color:var(--navy); }
     table { width:100%; border-collapse:collapse; font-size:13px; } th { background:var(--navy); color:#fff; text-align:left; padding:9px; }
     td { border:1px solid var(--line); padding:8px; vertical-align:top; } tr:nth-child(even) td { background:var(--soft); }
+    .table-scroll { max-width:100%; overflow-x:auto; }
     .legend span { display:inline-block; margin-right:24px; } .portfolio { color:var(--blue); } .benchmark { color:var(--gold); }
     @media(max-width:760px){main{margin:0;padding:20px}.grid{grid-template-columns:1fr 1fr}table{font-size:11px}}
   </style>
@@ -31,20 +32,21 @@
     <div class="metric">最大回撤<b>{{ metrics.max_drawdown|pct }}</b></div>
     <div class="metric">年化收益<b>{{ metrics.annualized_return|pct }}</b></div>
     <div class="metric">年化波动<b>{{ metrics.annualized_volatility|pct }}</b></div>
-    <div class="metric">夏普比率<b>{{ "%.2f"|format(metrics.sharpe_ratio) }}</b></div>
+    <div class="metric">夏普比率<b>{{ "未记录" if metrics.sharpe_ratio is none else "%.2f"|format(metrics.sharpe_ratio) }}</b></div>
     <div class="metric">交易成本<b>{{ metrics.total_transaction_cost|money }}</b></div>
   </div>
   <h2>净值曲线</h2>
   <div class="legend"><span class="portfolio">● 策略</span><span class="benchmark">● 基准</span> {{ start_date }} 至 {{ end_date }}</div>
   <div class="report-chart" id="report-nav"></div>
   <h2>最近因子选择</h2>
-  <table><thead><tr><th>信号日</th><th>执行日</th><th>股票</th><th>因子值</th><th>排名</th><th>财报期</th><th>公开时间</th></tr></thead><tbody>
+  <div class="table-scroll"><table><thead><tr><th>信号日</th><th>执行日</th><th>股票</th><th>因子值</th><th>排名</th><th>财报期</th><th>公开时间</th></tr></thead><tbody>
   {% for row in selections %}<tr><td>{{ row.signal_date }}</td><td>{{ row.execution_date }}</td><td>{{ row.symbol }}</td><td>{{ "%.4f"|format(row.factor_value) }}</td><td>{{ row.rank }}</td><td>{{ row.report_period_end }}</td><td>{{ row.published_at }}</td></tr>{% endfor %}
-  </tbody></table>
+  </tbody></table></div>
   <h2>最近订单</h2>
-  <table><thead><tr><th>执行日</th><th>股票</th><th>方向</th><th>状态</th><th>数量</th><th>价格</th><th>成本</th><th>原因</th></tr></thead><tbody>
+  <div class="table-scroll"><table><thead><tr><th>执行日</th><th>股票</th><th>方向</th><th>状态</th><th>数量</th><th>价格</th><th>成本</th><th>原因</th></tr></thead><tbody>
   {% for row in trades %}<tr><td>{{ row.date }}</td><td>{{ row.symbol }}</td><td>{{ row.side }}</td><td>{{ row.status }}</td><td>{{ row.shares }}</td><td>{{ row.price }}</td><td>{{ row.cost|money }}</td><td>{{ row.reason or '-' }}</td></tr>{% endfor %}
-  </tbody></table>
+  </tbody></table></div>
   <p class="muted">约束：T+1、100 股整数买入、一字涨跌停与停牌阻断、佣金/滑点/卖出印花税。免费数据源可能修订历史数据；本报告不构成投资建议。</p>
+{% include "performance.html.j2" %}
 {% include "report-charts.html.j2" %}
 </main></body></html>

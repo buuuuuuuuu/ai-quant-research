@@ -500,10 +500,14 @@ class DailySignalRule:
             "ma_compare": {"above", "below"},
             "ma_cross": {"cross_above", "cross_below"},
             "return_threshold": {"above", "below"},
+            "rsi_threshold": {"above", "below"},
+            "atr_threshold": {"above", "below"},
+            "bollinger": {"above", "below"},
+            "macd_cross": {"cross_above", "cross_below"},
         }
         if self.kind not in allowed or self.operator not in allowed[self.kind]:
             raise ValueError("unsupported daily signal rule")
-        if self.kind in {"close_vs_ma", "return_threshold"}:
+        if self.kind in {"close_vs_ma", "return_threshold", "rsi_threshold", "atr_threshold", "bollinger"}:
             low = 1 if self.kind == "return_threshold" else 2
             if self.window is None or not low <= self.window <= 250:
                 raise ValueError(f"{self.kind} window must be between {low} and 250")
@@ -516,6 +520,16 @@ class DailySignalRule:
                 raise ValueError(
                     "moving-average rules require 2 <= short_window < long_window <= 250"
                 )
+        if self.kind in {"rsi_threshold", "atr_threshold", "return_threshold"}:
+            import math
+            if self.threshold is None or not math.isfinite(self.threshold):
+                raise ValueError("指标阈值必须为有限数值")
+            if self.kind == "rsi_threshold" and not 0 <= self.threshold <= 100:
+                raise ValueError("RSI 阈值必须在 0～100 之间")
+            if self.kind == "atr_threshold" and self.threshold < 0:
+                raise ValueError("ATR 阈值不能为负，单位与信号价格相同")
+            if self.kind == "return_threshold" and not -10 <= self.threshold <= 10:
+                raise ValueError("涨跌幅阈值必须在 -10～10 之间")
         if self.kind == "return_threshold" and self.threshold is None:
             raise ValueError("return_threshold requires a threshold")
 

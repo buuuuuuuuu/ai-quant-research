@@ -408,7 +408,7 @@ function renderRun(run) {
   const metrics = run.metrics || {};
   $("#results").hidden = false;
   $("#result-subtitle").textContent = `${run.spec.factor} · ${run.spec.start_date} 至 ${run.spec.end_date} · ${run.spec.rebalance === "monthly" ? "月度" : "季度"}调仓`;
-  const metricItems = [["累计收益",formatPct(metrics.total_return),metrics.total_return],["基准收益",formatPct(metrics.benchmark_total_return),metrics.benchmark_total_return],["超额收益",formatPct(metrics.excess_return),metrics.excess_return],["年化收益",formatPct(metrics.annualized_return),metrics.annualized_return],["最大回撤",formatPct(metrics.max_drawdown),-metrics.max_drawdown],["夏普比率",Number(metrics.sharpe_ratio || 0).toFixed(2),metrics.sharpe_ratio]];
+  const metricItems = [["累计收益",formatPct(metrics.total_return),metrics.total_return],["基准收益",formatPct(metrics.benchmark_total_return),metrics.benchmark_total_return],["超额收益",formatPct(metrics.excess_return),metrics.excess_return],["年化收益",formatPct(metrics.annualized_return),metrics.annualized_return],["最大回撤",formatPct(metrics.max_drawdown),-metrics.max_drawdown],["夏普比率",metrics.sharpe_ratio == null ? "未记录" : Number(metrics.sharpe_ratio).toFixed(2),metrics.sharpe_ratio]];
   $("#result-metrics").innerHTML = metricItems.map(([label,value,direction]) => `<article><span>${label}</span><strong class="${Number(direction) < 0 ? "negative" : "positive"}">${value}</strong></article>`).join("");
   const downloadLabels = {"backtest_result.xlsx":"下载 Excel","daily_nav.csv":"净值 CSV","trades.csv":"交易 CSV","positions.csv":"持仓 CSV","factor_selections.csv":"因子 CSV"};
   $("#result-actions").innerHTML = `<a href="${run.report_url}" target="_blank" rel="noreferrer">打开完整报告</a>` + Object.entries(downloadLabels).map(([file,label]) => `<a href="/api/v1/backtest-runs/${encodeURIComponent(run.run_id)}/downloads/${encodeURIComponent(file)}">${label}</a>`).join("");
@@ -463,6 +463,9 @@ function renderLabRun(run) {
   $("#lab-ic-table").innerHTML = labTable([["factor","因子"],["periods","截面数"],["mean_ic","平均 IC","num"],["mean_rank_ic","平均 Rank IC","num"],["ic_ir","IC IR","num"],["positive_ic_ratio","正向比例","pct"]], run.ic_summary || []);
   $("#lab-strategy-table").innerHTML = labTable([["strategy","策略"],["total_return","总收益","pct"],["excess_return","超额收益","pct"],["max_drawdown","最大回撤","pct"],["sharpe_ratio","夏普","num"],["selected_by_validation","验证入选"]], run.strategies || []);
   $("#lab-validation-table").innerHTML = labTable([["segment","分段"],["start_date","开始"],["end_date","结束"],["total_return","收益","pct"],["excess_return","超额","pct"],["sharpe_ratio","夏普","num"]], run.validation || []);
+  let horizon = document.getElementById("lab-horizon-table");
+  if (!horizon) { horizon = document.createElement("section"); horizon.id = "lab-horizon-table"; horizon.className = "table-scroll"; document.getElementById("lab-results").append(horizon); }
+  horizon.innerHTML = "<h3>多周期因子分析</h3><p>下一交易日开盘起算；尾部不足保留缺失。收益差未扣交易成本，不用于参数选择。</p>" + labTable([["factor","因子"],["horizon","交易日周期"],["sample_count","样本数"],["mean_rank_ic","Rank IC","num"],["top_minus_bottom","高组减低组","pct"],["mean_top_turnover","顶组换手率","pct"]],run.factor_horizons || []);
   drawIcChart(run.series || []);
 }
 

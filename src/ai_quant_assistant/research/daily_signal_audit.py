@@ -354,7 +354,11 @@ def build_indicator_series(
     rows: list[pd.DataFrame] = []
     columns = ["signal_close", *(f"ma_{window}" for window in sorted(windows))]
     for symbol, frame in features.items():
+        import re
+
+        from ai_quant_assistant.research.technical_indicators import INDICATOR_PATTERN
         available = [column for column in columns if column in frame]
+        available += [key for key in frame if re.fullmatch(INDICATOR_PATTERN, key)]
         selected = frame.reindex(research_days)[available].copy()
         selected.insert(0, "date", research_days)
         selected.insert(0, "symbol", symbol)

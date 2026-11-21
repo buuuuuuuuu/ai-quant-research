@@ -12,12 +12,15 @@
 
 检查了 `pyproject.toml`、`uv.lock`、仓库源文件中的第三方归属标记、浏览器静态资源及 Python 3.12/Linux 安装环境中的 distribution metadata/许可文件。仓库未包含 vendored Python 库或大型前端依赖；未发现源文件中声明的其他整项目许可证。本审查不证明所有历史贡献的权利来源，也不是覆盖所有平台二进制的法律认证。
 
-[机器可读清单](docs/dependency-license-inventory.json) 列出 65 条锁定依赖记录（包括不同 Python 条件下的 NumPy 版本），记录版本、元数据许可声明及可用许可文件 SHA-256。安装环境以 `uv sync --extra dev --frozen` 为准。未安装的平台条件分支单独标注，不能当作已检查其二进制。
+[机器可读清单](docs/dependency-license-inventory.json) 列出 109 条锁定依赖记录（包括不同 Python 条件下的 NumPy 版本），记录版本、元数据许可声明及可用许可文件 SHA-256。安装环境以 `uv sync --extra dev --frozen` 为准。未安装的平台条件分支单独标注，不能当作已检查其二进制。
 
 ## 直接运行依赖
 
 | 组件 | 锁定版本 | 上游许可 / 核对位置 |
 |---|---|---|
+| QuantStats | 0.0.77 | Apache-2.0 / [上游](https://github.com/ranaroussi/quantstats) |
+| TA-Lib Python | 0.6.8 | BSD-2-Clause / [上游](https://github.com/TA-Lib/ta-lib-python)。预编译 wheel 包含 TA-Lib C 组件，发行时保留上游许可通知。 |
+| Alphalens Reloaded | 0.4.6 | Apache-2.0 / [上游](https://github.com/stefan-jansen/alphalens-reloaded) |
 | AkShare | 1.18.91 | MIT；distribution LICENSE / [上游](https://github.com/akfamily/akshare) |
 | curl-cffi | 0.16.0 | MIT；含原生组件，打包时保留其组件通知 / [上游](https://github.com/lexiforest/curl_cffi) |
 | DuckDB | 1.5.5 | MIT / [上游](https://github.com/duckdb/duckdb) |

@@ -1,0 +1,10 @@
+{% if analytics %}
+<section aria-label="统一绩效分析"><h2>收益与风险分析</h2>
+<p>绩效口径 {{ analytics.methodology.version }} · 每年252个交易日 · 无风险利率0 · 首日仅作净值基准。无波动或样本不足的比率显示未记录；盈利日占比不代表交易胜率。</p>
+<div class="table-scroll" style="max-width:100%;overflow-x:auto"><table><thead><tr><th>夏普</th><th>Sortino</th><th>Calmar</th><th>盈利日占比（非零收益日）</th></tr></thead><tbody><tr>
+{% for key in ['sharpe_ratio','sortino_ratio','calmar_ratio','daily_win_rate'] %}<td>{{ '未记录' if metrics.get(key) is none else ('%.2f%%'|format(metrics[key] * 100) if key == 'daily_win_rate' else '%.4f'|format(metrics[key])) }}</td>{% endfor %}
+</tr></tbody></table></div>
+<h3>63个交易日滚动夏普</h3><div class="report-chart" id="report-rolling-risk"></div>
+<script type="application/json" id="performance-chart-data">{{ analytics.rolling|tojson }}</script>
+<details><summary>月度收益（最近120个月，完整记录见CSV）</summary><div style="max-width:100%;overflow-x:auto"><table><thead><tr><th>月份</th><th>策略收益</th><th>基准收益</th></tr></thead><tbody>{% for row in analytics.monthly %}<tr><td>{{ row.month }}</td><td>{{ '未记录' if row.strategy_return is none else '%.2f%%'|format(row.strategy_return * 100) }}</td><td>{{ '未记录' if row.benchmark_return is none else '%.2f%%'|format(row.benchmark_return * 100) }}</td></tr>{% endfor %}</tbody></table></div></details>
+</section>{% endif %}

@@ -45,8 +45,9 @@ def price_series(indicators, signals, orders):
     first_signal = str(signals.iloc[0].get("symbol")) if not signals.empty else None
     symbol = first_signal if first_signal in symbols else symbols[0]
     frame = indicators.loc[indicators["symbol"].astype(str).eq(symbol)]
-    keys = [key for key in frame if re.fullmatch(r"signal_close|ma_\d+", key)]
-    rows = chart_rows(frame, keys)
+    keys = [key for key in frame if re.fullmatch(r"signal_close|ma_\d+|bb_(?:upper|middle|lower)_\d+", key)]
+    indicator_keys = [key for key in frame if re.fullmatch(r"rsi_\d+|atr_\d+|macd|macd_signal|macd_hist", key)]
+    rows = chart_rows(frame, [*keys, *indicator_keys])
     markers = []
 
     def events(table, date_key, label, color, shape):
@@ -76,7 +77,7 @@ def price_series(indicators, signals, orders):
     lines = [
         {
             "key": key,
-            "label": "信号收盘价" if key == "signal_close" else f"MA({key[3:]})",
+            "label": "信号收盘价" if key == "signal_close" else key.replace("bb_upper_", "布林上轨 ").replace("bb_middle_", "布林中轨 ").replace("bb_lower_", "布林下轨 ") if key.startswith("bb_") else f"MA({key[3:]})",
             "color": colors[i % len(colors)],
         }
         for i, key in enumerate(keys)

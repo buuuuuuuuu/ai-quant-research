@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 
 class BacktestTaskManager:
+    _research_slot = Lock()
+
     def __init__(
         self,
         service: FactorBacktestService | FactorLabService,
@@ -126,11 +128,6 @@ class BacktestTaskManager:
     ) -> None:
         owner = uuid4().hex if self.task_type == "daily_signal" else None
         started = False
-        if not owner:
-            self._update(
-                task_id, status="running", progress=1, message="任务已启动",
-                started_at=datetime.now(UTC).isoformat(),
-            )
 
         def progress(value: int, message: str) -> None:
             if owner:
@@ -139,7 +136,10 @@ class BacktestTaskManager:
                 self._update(task_id, progress=value, message=message)
 
         try:
-            with self.operation_lock.hold():
+            with self._research_slot, self.operation_lock.hold():
+                if not owner:
+                    self._update(task_id, status="running", progress=1, message="任务已启动",
+                                 started_at=datetime.now(UTC).isoformat())
                 if owner:
                     if not self.repository.start(task_id, owner_id=owner, message="正在准备回测数据"):
                         return

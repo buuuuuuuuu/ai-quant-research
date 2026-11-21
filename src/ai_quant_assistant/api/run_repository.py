@@ -12,6 +12,9 @@ import pandas as pd
 
 RUN_ID_RE = re.compile(r"^factor-backtest-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 DOWNLOAD_FILES = {
+    "monthly_returns.csv": "text/csv",
+    "rolling_risk.csv": "text/csv",
+    "performance_methodology.json": "application/json",
     "daily_nav.csv": "text/csv",
     "trades.csv": "text/csv",
     "positions.csv": "text/csv",
@@ -26,6 +29,9 @@ LAB_DOWNLOAD_FILES = {
     **{
         f"{item}.csv": "text/csv"
         for item in (
+            "factor_horizons",
+            "factor_horizon_ic",
+            "factor_horizon_groups",
             "strategies",
             "segments",
             "cross_sections",
@@ -45,6 +51,9 @@ LAB_DOWNLOAD_FILES = {
 }
 SIGNAL_RUN_ID_RE = re.compile(r"^daily-signal-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 SIGNAL_DOWNLOAD_FILES = {
+    "monthly_returns.csv": "text/csv",
+    "rolling_risk.csv": "text/csv",
+    "performance_methodology.json": "application/json",
     **{
         f"{item}.csv": "text/csv"
         for item in (
@@ -134,6 +143,8 @@ class BacktestRunRepository:
         return {
             **payload,
             "series": self._records(directory / "daily_nav.csv", downsample=True),
+            "monthly_returns": self._records(directory / "monthly_returns.csv", limit=120),
+            "rolling_risk": self._records(directory / "rolling_risk.csv", downsample=True),
             "trades": self._records(directory / "trades.csv"),
             "positions": self._records(directory / "positions.csv"),
             "selections": self._records(directory / "factor_selections.csv"),
@@ -238,6 +249,8 @@ class DailySignalRunRepository(BacktestRunRepository):
         return {
             **self.manifest(run_id),
             "series": self._records(directory / "daily_nav.csv", downsample=True),
+            "monthly_returns": self._records(directory / "monthly_returns.csv", limit=120),
+            "rolling_risk": self._records(directory / "rolling_risk.csv", downsample=True),
             "signals": self._records(directory / "signals.csv"),
             "orders": self._records(directory / "orders.csv"),
             "positions": self._records(directory / "positions.csv"),
@@ -393,7 +406,7 @@ class DailySignalRunRepository(BacktestRunRepository):
             if row.get(key) not in (None, "", "nan")
         }
         date_index = frame["date"].astype(str).str[:10].tolist()
-        line_keys = [key for key in frame if key == "signal_close" or re.fullmatch(r"ma_\d+", key)]
+        line_keys = [key for key in frame if key == "signal_close" or re.fullmatch(r"ma_\d+|bb_(?:upper|middle|lower)_\d+", key)]
         numeric = frame[line_keys].apply(pd.to_numeric, errors="coerce") if line_keys else pd.DataFrame()
         price_values = numeric.to_numpy().ravel() if not numeric.empty else []
         finite_values = [float(value) for value in price_values if pd.notna(value) and math.isfinite(value)]
@@ -402,7 +415,7 @@ class DailySignalRunRepository(BacktestRunRepository):
             .astype(str)
             .str[:10]
             .tolist()
-            for key in line_keys
+            for key in [*line_keys, *[k for k in frame if re.fullmatch(r"rsi_\d+|atr_\d+|macd|macd_signal|macd_hist", k)]]
         }
         if len(frame) > limit:
             dates = frame["date"].astype(str).str[:10]

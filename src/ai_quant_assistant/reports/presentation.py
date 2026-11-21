@@ -21,6 +21,10 @@ ENUM_LABELS = {
     "close_vs_ma": "收盘价与均线",
     "ma_compare": "双均线状态",
     "ma_cross": "双均线交叉",
+    "rsi_threshold": "RSI 阈值",
+    "atr_threshold": "ATR 阈值",
+    "macd_cross": "MACD 交叉（12/26/9）",
+    "bollinger": "布林带突破",
     "return_threshold": "区间涨跌幅阈值",
     "buy": "买入",
     "sell": "卖出",
@@ -102,6 +106,16 @@ FIELD_LABELS = {
     "annualized_volatility": "年化波动率",
     "max_drawdown": "最大回撤",
     "sharpe_ratio": "夏普比率",
+    "factor_horizons": "多周期因子分析",
+    "horizon": "交易日周期",
+    "top_minus_bottom": "高组减低组收益",
+    "mean_top_turnover": "顶组换手率",
+    "strategy_return": "策略收益",
+    "month": "月份",
+    "sortino_ratio": "Sortino 比率",
+    "calmar_ratio": "Calmar 比率",
+    "daily_win_rate": "盈利日占比（非零收益日）",
+    "performance_methodology": "绩效计算口径",
     "total_transaction_cost": "交易总成本",
     "trade_count": "交易数",
     "segment": "样本分段",
@@ -255,9 +269,9 @@ TERM_CATALOG = {
         "label": "夏普比率",
         "short": "用收益相对波动衡量风险调整后的表现。",
         "professional": "夏普比率（Sharpe Ratio）",
-        "calculation": "沿用引擎的年化收益 ÷ 年化波动率口径。",
+        "calculation": "quantstats-v1：日收益均值 ÷ 日收益样本标准差 × √252，无风险利率为0。历史运行按其保存的原口径。",
         "example": "仅适合在相同口径和相近区间下辅助比较。",
-        "limitations": "当前口径未另扣无风险利率，零波动时由引擎按原规则处理。",
+        "limitations": "新运行在零波动或样本不足时不计算比率；历史报告不重新计算。",
         "code": "sharpe_ratio",
     },
     "slippage": {
@@ -418,6 +432,13 @@ def rule_label(rule):
             f"MA({rule.get('short_window')}) {ENUM_LABELS.get(operator, operator)} "
             f"MA({rule.get('long_window')})"
         )
+    elif kind in {"rsi_threshold", "atr_threshold"}:
+        name = "RSI" if kind == "rsi_threshold" else "ATR"
+        return f"{name}({rule.get('window')}) {ENUM_LABELS.get(operator, operator)} {rule.get('threshold')}"
+    elif kind == "macd_cross":
+        return f"MACD(12,26,9) DIF {ENUM_LABELS.get(operator, operator)} DEA"
+    elif kind == "bollinger":
+        return f"收盘价 {ENUM_LABELS.get(operator, operator)} 布林{'上' if operator == 'above' else '下'}轨（SMA{rule.get('window')}，2倍标准差）"
     elif kind == "return_threshold":
         threshold = rule.get("threshold")
         readable = f"{threshold * 100:.2f}%" if isinstance(threshold, (int, float)) else threshold

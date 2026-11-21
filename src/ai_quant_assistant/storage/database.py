@@ -742,6 +742,8 @@ class LocalDatabase:
             "date",
             "signal_open",
             "signal_close",
+            "signal_high",
+            "signal_low",
             "execution_open",
             "execution_close",
             "previous_execution_close",
@@ -761,6 +763,7 @@ class LocalDatabase:
                 )
                 SELECT security.symbol,bar.trade_date AS date,
                        bar.open AS signal_open,bar.close AS signal_close,
+                       bar.high AS signal_high,bar.low AS signal_low,
                        raw.open AS execution_open,raw.close AS execution_close,
                        raw.previous_close AS previous_execution_close,bar.source_batch_id
                 FROM published_daily_bar bar

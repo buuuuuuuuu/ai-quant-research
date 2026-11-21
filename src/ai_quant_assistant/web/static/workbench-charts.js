@@ -188,5 +188,49 @@ window.WorkbenchCharts = (() => {
     return draw(host, rows, "date", navLines, {title: "策略与基准净值走势", slider, onSelect});
   }
 
-  return {clear, draw, drawNav};
+  function drawIndicators(host, rows, onSelect) {
+    clear(host);
+    const keys = [...new Set(rows.flatMap(row => Object.keys(row)))].filter(key => /^(rsi_\d+|atr_\d+|macd)$/.test(key));
+    if (!keys.length) {
+      host.textContent = "本次运行未保存 RSI、ATR 或 MACD 指标。";
+      return;
+    }
+    const label = document.createElement("label");
+    label.textContent = "技术指标副图 ";
+    const select = document.createElement("select");
+    const name = key => key.toUpperCase().replace("_", " ");
+    for (const key of keys) {
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = name(key);
+      select.append(option);
+    }
+    select.value = keys[0];
+    label.append(select);
+    const plot = document.createElement("div");
+    plot.id = host.id + "-plot";
+    plot.className = "workbench-time-chart report-chart";
+    host.append(label, plot);
+    const number = new Intl.NumberFormat("zh-CN", {maximumFractionDigits: 4});
+    const format = value => number.format(Math.abs(value) < 0.00005 ? 0 : value);
+    let chart;
+    function render() {
+      const key = select.value;
+      const lines = key === "macd" ? [
+        {key: "macd", label: "DIF", color: "#24523b", format},
+        {key: "macd_signal", label: "DEA", color: "#a16b19", format},
+        {key: "macd_hist", label: "DIF−DEA", color: "#356f9a", histogram: true, format},
+      ] : [{key, label: name(key), color: "#24523b", format}];
+      chart = draw(plot, rows, "date", lines, {
+        title: "技术指标副图", onSelect, skipUnsampled: true, axisFormatter: format,
+      });
+    }
+    select.addEventListener("change", render);
+    render();
+    const control = {remove: () => clear(plot), select: day => chart?.select(day)};
+    active.set(host, control);
+    return control;
+  }
+
+  return {clear, draw, drawNav, drawIndicators};
 })();

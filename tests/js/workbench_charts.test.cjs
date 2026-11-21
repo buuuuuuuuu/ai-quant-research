@@ -87,3 +87,11 @@ test("intraday comparisons align by clock and external selection does not trigge
   chart.click({time:series[0].points[1].time});
   assert.deepEqual(selected, ["13:00"]);
 });
+
+test("technical subchart separates RSI from price and clears its canvas", () => {
+  const {host, ui, chart, series} = harness(); host.id="technical";
+  ui.drawIndicators(host,[{date:"2024-01-01",signal_close:100,rsi_14:45},{date:"2024-01-02",signal_close:110,rsi_14:55}]);
+  const select=host.children[0].children[0]; select.value="rsi_14"; select.events.change();
+  assert.deepEqual(JSON.parse(JSON.stringify(series.at(-1).points.map(row=>row.value))),[45,55]);
+  ui.clear(host); assert.equal(chart.removed,true);
+});

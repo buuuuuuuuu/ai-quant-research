@@ -323,7 +323,8 @@ class ResearchReadiness:
                     for key in ("window", "short_window", "long_window")
                     if (value := rule.get(key)) is not None
                 )
-            required = max(windows, default=2) + 1
+            from ai_quant_assistant.research.technical_indicators import required_observations
+            required = required_observations([*params["buy_rules"], *params["sell_rules"]], windows)
             warmup_required = required
             with self.database.connect(read_only=True) as connection:
                 history = connection.execute(

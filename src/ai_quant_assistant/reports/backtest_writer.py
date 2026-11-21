@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 from ai_quant_assistant.reports.chart_assets import NAV_KEYS, assets, chart_rows
 from ai_quant_assistant.reports.presentation import display_money, install_filters
+from ai_quant_assistant.research.performance import report_context
 
 
 class FactorBacktestReportWriter:
@@ -92,6 +93,7 @@ class FactorBacktestReportWriter:
                                     else '#,##0.00;[Red]-#,##0.00;0.00'
                                 )
         html = self.environment.get_template("factor_backtest.html.j2").render(
+            analytics=report_context(nav),
             spec=spec,
             metrics=metrics,
             diagnostics=diagnostics,

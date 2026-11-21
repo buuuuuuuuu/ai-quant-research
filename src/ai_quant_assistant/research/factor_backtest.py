@@ -15,6 +15,11 @@ import pandas as pd
 from ai_quant_assistant.domain.models import FactorBacktestSpec
 from ai_quant_assistant.providers.normalization import FINANCIAL_METRICS
 from ai_quant_assistant.reports.backtest_writer import FactorBacktestReportWriter
+from ai_quant_assistant.research.performance import (
+    methodology,
+    performance_metrics,
+    save_performance,
+)
 from ai_quant_assistant.storage.database import LocalDatabase
 from ai_quant_assistant.storage.snapshots import write_json
 from ai_quant_assistant.storage.universe import UniverseRepository
@@ -218,35 +223,10 @@ class FactorBacktestService:
         return one_price_up, one_price_down
 
     @staticmethod
-    def _performance(nav: pd.DataFrame) -> dict[str, float]:
+    def _performance(nav: pd.DataFrame) -> dict[str, float | None]:
         if nav.empty:
             return {}
-        daily_returns = nav["portfolio_nav"].pct_change().fillna(0.0)
-        benchmark_returns = nav["benchmark_nav"].pct_change().fillna(0.0)
-        periods = max(len(nav) - 1, 1)
-        annual_factor = 252.0 / periods
-        final_nav = float(nav["portfolio_nav"].iloc[-1])
-        final_benchmark = float(nav["benchmark_nav"].iloc[-1])
-        volatility = float(daily_returns.std(ddof=1) * np.sqrt(252)) if len(nav) > 2 else 0.0
-        benchmark_volatility = (
-            float(benchmark_returns.std(ddof=1) * np.sqrt(252)) if len(nav) > 2 else 0.0
-        )
-        annual_return = final_nav**annual_factor - 1.0 if final_nav > 0 else -1.0
-        benchmark_annual_return = (
-            final_benchmark**annual_factor - 1.0 if final_benchmark > 0 else -1.0
-        )
-        return {
-            "total_return": final_nav - 1.0,
-            "benchmark_total_return": final_benchmark - 1.0,
-            "excess_return": final_nav - final_benchmark,
-            "annualized_return": annual_return,
-            "benchmark_annualized_return": benchmark_annual_return,
-            "annualized_volatility": volatility,
-            "benchmark_annualized_volatility": benchmark_volatility,
-            "sharpe_ratio": annual_return / volatility if volatility > 0 else 0.0,
-            "max_drawdown": abs(float(nav["drawdown"].min())),
-            "final_value": float(nav["portfolio_value"].iloc[-1]),
-        }
+        return performance_metrics(nav)
 
     def run(
         self,
@@ -568,6 +548,7 @@ class FactorBacktestService:
             }
         )
         diagnostics = {
+            "performance_methodology": methodology(),
             "point_in_time_rule": "published_at strictly before signal-day 15:00",
             "factor_combination": [item.to_dict() for item in spec.factors],
             "missing_factor_policy": spec.missing_policy,
@@ -606,6 +587,7 @@ class FactorBacktestService:
             selections=selections,
             diagnostics=diagnostics,
         )
+        artifacts.update(save_performance(run_dir, nav))
         completed_at = datetime.now(UTC)
         payload = {
             "run_id": run_id,

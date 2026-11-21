@@ -283,12 +283,12 @@ class CandidateFactorRequest(BaseModel):
 
 
 class DailySignalRuleRequest(BaseModel):
-    kind: Literal["close_vs_ma", "ma_compare", "ma_cross", "return_threshold"]
+    kind: Literal["close_vs_ma", "ma_compare", "ma_cross", "return_threshold", "rsi_threshold", "atr_threshold", "macd_cross", "bollinger"]
     operator: Literal["above", "below", "cross_above", "cross_below"]
     window: int | None = Field(default=None, ge=1, le=250)
     short_window: int | None = Field(default=None, ge=2, le=250)
     long_window: int | None = Field(default=None, ge=2, le=250)
-    threshold: float | None = Field(default=None, ge=-10, le=10)
+    threshold: float | None = Field(default=None, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def validate_rule(self) -> DailySignalRuleRequest:

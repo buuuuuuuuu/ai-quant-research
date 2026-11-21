@@ -1566,3 +1566,10 @@ test("blocked check exposes a local problem shortcut without submitting", async 
   h.element("center-jump-issue").listeners.click();
   assert.equal(h.calls.length, 2);
 });
+
+test("new indicator descriptions retain units and MACD warmup", () => {
+  assert.match(ui.ruleText({kind:"rsi_threshold",operator:"below",window:14,threshold:30}), /RSI\(14\).*30.*0～100/);
+  assert.match(ui.ruleText({kind:"atr_threshold",operator:"above",window:14,threshold:2}), /价格单位/);
+  assert.match(ui.ruleText({kind:"macd_cross",operator:"cross_above"}), /12,26,9|12\/26\/9/);
+  assert.match(ui.ruleText({kind:"bollinger",operator:"above",window:20}), /上轨.*20/);
+});
